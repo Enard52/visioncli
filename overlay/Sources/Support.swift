@@ -1,0 +1,258 @@
+import AppKit
+import Foundation
+
+// MARK: - Paths & log
+
+let home = FileManager.default.homeDirectoryForCurrentUser
+let supportDir = home.appendingPathComponent("Library/Application Support/visioncli")
+let logURL = home.appendingPathComponent("Library/Logs/visioncli.log")
+
+func log(_ message: String) {
+    let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)\n"
+    CrashReporter.breadcrumb(String(line.dropLast()))
+    guard let data = line.data(using: .utf8) else { return }
+    if let h = try? FileHandle(forWritingTo: logURL) {
+        h.seekToEndOfFile()
+        h.write(data)
+        try? h.close()
+    } else {
+        try? data.write(to: logURL)
+    }
+}
+
+/// Run a command synchronously and return (status, stdout, stderr). Call off the main thread for anything slow.
+@discardableResult
+func shell(_ exe: String, _ args: [String], cwd: String? = nil, stdin: Data? = nil, env: [String: String]? = nil) -> (Int32, String, String) {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: exe)
+    p.arguments = args
+    if let cwd { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    if let env { p.environment = env }
+    let out = Pipe(), err = Pipe(), inp = Pipe()
+    p.standardOutput = out
+    p.standardError = err
+    p.standardInput = stdin == nil ? FileHandle.nullDevice : inp
+    do { try p.run() } catch { return (-1, "", error.localizedDescription) }
+    if let stdin {
+        inp.fileHandleForWriting.write(stdin)
+        try? inp.fileHandleForWriting.close()
+    }
+    let o = out.fileHandleForReading.readDataToEndOfFile()
+    let e = err.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    return (p.terminationStatus, String(decoding: o, as: UTF8.self), String(decoding: e, as: UTF8.self))
+}
+
+// MARK: - Launch config
+
+struct Config: Codable {
+    var cwd = home.path            // fallback project when the window under the pointer doesn't map to one
+    var claude = "claude"
+    var path = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    var node: String?
+    var server: String?
+    var model: String?
+    var locale: String?
+
+    static let saved = supportDir.appendingPathComponent("overlay.json")
+
+    /// True on the very first launch (no saved settings): the downloaded app configures itself.
+    private(set) static var isFirstRun = false
+
+    /// The MCP server shipped inside the app (release builds), used when not launched via `visioncli voice`.
+    static var bundledServer: String? {
+        Bundle.main.resourceURL.map { $0.appendingPathComponent("server/dist/index.js").path }
+            .flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }
+    }
+
+    /// Where Node, claude, uv and whisper usually live; apps opened from Finder get a minimal PATH.
+    static var commonPath: String {
+        var dirs = ["\(home.path)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home.path)/.volta/bin",
+                    "\(home.path)/.asdf/shims", "\(home.path)/.bun/bin", "\(home.path)/.claude/local"]
+        // nvm / fnm installs: newest version first
+        for base in ["\(home.path)/.nvm/versions/node", "\(home.path)/.local/share/fnm/node-versions"] {
+            let versions = ((try? FileManager.default.contentsOfDirectory(atPath: base)) ?? []).sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+            dirs += versions.map { base.hasSuffix("fnm/node-versions") ? "\(base)/\($0)/installation/bin" : "\(base)/\($0)/bin" }
+        }
+        return (dirs + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]).joined(separator: ":")
+    }
+
+    static func find(_ name: String, path: String) -> String? {
+        path.split(separator: ":").map { "\($0)/\(name)" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Launch arguments win and are remembered, because macOS relaunches the app without any
+    /// (e.g. "Quit & Reopen" after granting Screen Recording, or start at login).
+    static func load() -> Config {
+        let args = Array(CommandLine.arguments.dropFirst())
+        var c = Config()
+        if args.contains("--cwd") {
+            var it = args.makeIterator()
+            while let arg = it.next() {
+                switch arg {
+                case "--cwd": c.cwd = it.next() ?? c.cwd
+                case "--claude": c.claude = it.next() ?? c.claude
+                case "--path": c.path = it.next() ?? c.path
+                case "--node": c.node = it.next()
+                case "--server": c.server = it.next()
+                case "--model": c.model = it.next()
+                case "--locale": c.locale = it.next()
+                default: break
+                }
+            }
+            try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
+            try? JSONEncoder().encode(c).write(to: saved)
+        } else if let data = try? Data(contentsOf: saved), let stored = try? JSONDecoder().decode(Config.self, from: data) {
+            c = stored
+        } else {
+            isFirstRun = true
+        }
+        // Self-configure anything missing (e.g. the app was downloaded and opened from Finder).
+        if !c.path.contains(".local/bin") { c.path = c.path + ":" + commonPath }
+        if c.server == nil || !FileManager.default.fileExists(atPath: c.server!) { c.server = bundledServer ?? c.server }
+        if c.node == nil || !FileManager.default.isExecutableFile(atPath: c.node!) { c.node = find("node", path: c.path) }
+        if !c.claude.hasPrefix("/") || !FileManager.default.isExecutableFile(atPath: c.claude) { c.claude = Config.findClaude(path: c.path) ?? c.claude }
+        if isFirstRun {
+            try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
+            try? JSONEncoder().encode(c).write(to: saved)
+        }
+        log("launch: default project \(c.cwd), claude \(c.claude)")
+        return c
+    }
+
+    static func findClaude(path: String) -> String? {
+        let dirs = path.split(separator: ":").map(String.init) + ["\(home.path)/.local/bin", "\(home.path)/.claude/local", "/opt/homebrew/bin", "/usr/local/bin"]
+        return dirs.map { "\($0)/claude" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Run the visioncli node CLI (share, destinations, …).
+    func visioncli(_ args: [String], stdin: Data? = nil) -> (Int32, String, String) {
+        guard let node, let server else { return (-1, "", "Node.js wasn't found. Install it (https://nodejs.org) and reopen VisionCLI.") }
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = path
+        return shell(node, [server] + args, stdin: stdin, env: env)
+    }
+}
+
+// MARK: - User settings (menu toggles)
+
+enum Settings {
+    private static let d = UserDefaults.standard
+
+    static var speak: Bool {
+        get { d.bool(forKey: "speak") }
+        set { d.set(newValue, forKey: "speak") }
+    }
+
+    /// "sonnet" (fast, default) or "opus" (deeper). A --model launch flag overrides.
+    static var model: String {
+        get { d.string(forKey: "model") ?? "sonnet" }
+        set { d.set(newValue, forKey: "model") }
+    }
+
+    /// "whisper" (local whisper.cpp, default when installed) or "apple".
+    static var sttEngine: String {
+        get { d.string(forKey: "stt") ?? "whisper" }
+        set { d.set(newValue, forKey: "stt") }
+    }
+
+    static var whisperModel: String {
+        get { d.string(forKey: "whisperModel") ?? "small.en" }
+        set { d.set(newValue, forKey: "whisperModel") }
+    }
+
+    /// "kokoro" (local neural voice, default when installed) or "system".
+    static var ttsEngine: String {
+        get { d.string(forKey: "tts") ?? "kokoro" }
+        set { d.set(newValue, forKey: "tts") }
+    }
+
+    /// Speaking speed multiplier for answers (1 = normal); default 2× as requested.
+    static var speechSpeed: Double {
+        get { d.object(forKey: "speechSpeed") as? Double ?? 2.0 }
+        set { d.set(newValue, forKey: "speechSpeed") }
+    }
+
+    static var kokoroVoice: String {
+        get { d.string(forKey: "kokoroVoice") ?? "af_heart" }
+        set { d.set(newValue, forKey: "kokoroVoice") }
+    }
+
+    /// Extra words for Whisper to spell right (one per line or comma-separated).
+    static let vocabularyFile = supportDir.appendingPathComponent("vocabulary.txt")
+
+    /// Terminal mode: voice questions go to a real interactive `claude` in iTerm/Terminal that you can also type into.
+    static var terminalMode: Bool {
+        get { d.object(forKey: "terminalMode") as? Bool ?? true }
+        set { d.set(newValue, forKey: "terminalMode") }
+    }
+
+    /// Instant browser commands routed by Jev (TypeSafe System One) before asking Claude.
+    static var quickCommands: Bool {
+        get { d.object(forKey: "quickCommands") as? Bool ?? true }
+        set { d.set(newValue, forKey: "quickCommands") }
+    }
+
+    /// A project chosen in the menu; nil = Auto (follow the window under the pointer).
+    static var pinnedProject: String? {
+        get { d.string(forKey: "pinnedProject") }
+        set { d.set(newValue, forKey: "pinnedProject") }
+    }
+
+    /// Open the live activity terminal on the first question after launch.
+    static var autoActivity: Bool {
+        get { d.object(forKey: "autoActivity") as? Bool ?? true }
+        set { d.set(newValue, forKey: "autoActivity") }
+    }
+
+    /// VisionCLI's own microphone / speaker (CoreAudio device UID); nil = follow the Mac's default.
+    static var inputDeviceUID: String? {
+        get { d.string(forKey: "inputDevice") }
+        set { d.set(newValue, forKey: "inputDevice") }
+    }
+
+    static var outputDeviceUID: String? {
+        get { d.string(forKey: "outputDevice") }
+        set { d.set(newValue, forKey: "outputDevice") }
+    }
+
+    static var voiceName: String? {
+        get { d.string(forKey: "voice") }
+        set { d.set(newValue, forKey: "voice") }
+    }
+}
+
+// MARK: - Start at login + restart after crash
+
+/// A per-user launchd agent for VisionCLI. KeepAlive (only after a *crash*: SuccessfulExit = false) makes launchd
+/// relaunch the app within ~10s if it dies; quitting normally exits 0 and it stays quit. RunAtLoad = start at login.
+/// (SMAppService refuses apps without a Developer ID signature, which a locally built VisionCLI never has.)
+/// `visioncli voice` writes the same agent and (re)starts the app through launchctl.
+enum LoginItem {
+    static let label = "dev.visioncli.overlay"
+    static let plist = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
+
+    private static var current: [String: Any] {
+        guard let data = try? Data(contentsOf: plist),
+              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return [:] }
+        return dict
+    }
+
+    static var isEnabled: Bool { current["RunAtLoad"] as? Bool == true }
+
+    static func set(_ on: Bool) throws {
+        let agent: [String: Any] = [
+            "Label": label,
+            "ProgramArguments": [Bundle.main.executablePath ?? "/Applications/VisionCLI.app/Contents/MacOS/VisionCLI"],
+            "RunAtLoad": on,
+            "KeepAlive": ["SuccessfulExit": false],
+            "ThrottleInterval": 10,
+            "ProcessType": "Interactive",
+            "LimitLoadToSessionType": "Aqua",
+            "StandardErrorPath": home.appendingPathComponent("Library/Logs/visioncli-stderr.log").path,
+        ]
+        try FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: agent, format: .xml, options: 0).write(to: plist)
+        log("start at login: \(on)")
+    }
+}

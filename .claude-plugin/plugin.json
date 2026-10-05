@@ -1,0 +1,11 @@
+{
+  "name": "visioncli",
+  "version": "0.4.0",
+  "description": "Let Claude see your screen: ask about the file, error or UI you're looking at without pasting screenshots.",
+  "mcpServers": {
+    "visioncli": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/index.js"]
+    }
+  }
+}

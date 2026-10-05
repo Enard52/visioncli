@@ -1,0 +1,7 @@
+node_modules/
+dist/
+overlay/build/
+release/
+*.log
+.DS_Store
+.claude/settings.local.json

@@ -1,0 +1,130 @@
+import { execFile } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+
+const run = promisify(execFile);
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const BUILT_APP = join(root, "overlay", "build", "VisionCLI.app");
+const INSTALLED_APP = "/Applications/VisionCLI.app"; // the build script installs here
+const appPath = () => (existsSync(join(INSTALLED_APP, "Contents", "MacOS", "VisionCLI")) ? INSTALLED_APP : BUILT_APP);
+const LABEL = "dev.visioncli.overlay";
+const AGENT = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
+const SUPPORT = join(homedir(), "Library", "Application Support", "visioncli");
+
+const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** launchd agent: restarts VisionCLI after a crash (not after a normal quit); RunAtLoad = start at login. */
+function writeAgent(exe: string) {
+  let runAtLoad = false;
+  try {
+    runAtLoad = /<key>RunAtLoad<\/key>\s*<true\/>/.test(readFileSync(AGENT, "utf8"));
+  } catch {}
+  mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
+  writeFileSync(
+    AGENT,
+    `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${LABEL}</string>
+  <key>ProgramArguments</key><array><string>${xml(exe)}</string></array>
+  <key>RunAtLoad</key><${runAtLoad}/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>StandardErrorPath</key><string>${xml(join(homedir(), "Library", "Logs", "visioncli-stderr.log"))}</string>
+</dict>
+</plist>
+`,
+  );
+}
+
+async function which(cmd: string) {
+  try {
+    return (await run("/usr/bin/which", [cmd])).stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Build (if needed) and launch the voice overlay for a project. Replaces any running instance. */
+export async function startVoice(cwd: string): Promise<string> {
+  if (process.platform !== "darwin") throw new Error("Voice mode is only supported on macOS.");
+
+  if (!existsSync(join(appPath(), "Contents", "MacOS", "VisionCLI"))) {
+    await run(join(root, "scripts", "build-overlay.sh"), { cwd: root });
+  }
+  const APP = appPath();
+
+  const claude = process.env.VISIONCLI_CLAUDE ?? (await which("claude"));
+  if (!claude) throw new Error("Couldn't find the `claude` CLI on PATH. Set VISIONCLI_CLAUDE to its full path.");
+
+  // The overlay runs `claude` with only this server attached (node + script below), so it starts fast and
+  // doesn't depend on how visioncli was installed. `--cwd` is the fallback project when it can't tell
+  // the project from the window under the pointer.
+  // Settings the app reads at launch (it's started by launchd without arguments).
+  const config: Record<string, string> = {
+    cwd: resolve(cwd),
+    claude,
+    path: process.env.PATH ?? "",
+    node: process.execPath,
+    server: join(root, "dist", "index.js"),
+  };
+  if (process.env.VISIONCLI_MODEL) config.model = process.env.VISIONCLI_MODEL;
+  if (process.env.VISIONCLI_LOCALE) config.locale = process.env.VISIONCLI_LOCALE;
+  mkdirSync(SUPPORT, { recursive: true });
+  writeFileSync(join(SUPPORT, "overlay.json"), JSON.stringify(config));
+
+  // The app runs under launchd without your shell's environment: keep the TypeSafe key (for Jev quick
+  // commands) in integrations.json, readable only by you.
+  if (process.env.TYPESAFE_API_KEY) {
+    const file = join(SUPPORT, "integrations.json");
+    let cfg: Record<string, any> = {};
+    try { cfg = JSON.parse(readFileSync(file, "utf8")); } catch {}
+    if (cfg.typesafe?.apiKey !== process.env.TYPESAFE_API_KEY) {
+      cfg.typesafe = { ...(cfg.typesafe ?? {}), apiKey: process.env.TYPESAFE_API_KEY };
+      writeFileSync(file, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+      chmodSync(file, 0o600);
+    }
+  }
+
+  // Stop any running instance (launchd-managed or not), then start it under launchd so a crash gets
+  // an automatic restart. Launched this way the app is still its own process for macOS permissions.
+  const domain = `gui/${process.getuid?.() ?? 501}`;
+  await run("/bin/launchctl", ["bootout", `${domain}/${LABEL}`]).catch(() => {});
+  await run("/usr/bin/pkill", ["-x", "VisionCLI"]).catch(() => {});
+  await new Promise((r) => setTimeout(r, 600));
+  writeAgent(join(APP, "Contents", "MacOS", "VisionCLI"));
+  await run("/bin/launchctl", ["bootstrap", domain, AGENT]).catch(() => {});
+  await run("/bin/launchctl", ["kickstart", "-k", `${domain}/${LABEL}`]);
+
+  return (
+    `Voice mode is on (default project ${resolve(cwd)}; it follows the project of the window under your pointer). Hold Option+Space, ask your question, then let go. ` +
+    `The answer appears above your mouse pointer (Esc dismisses it). The eye icon in the menu bar has Quit. ` +
+    `The first time, macOS asks for Microphone and Speech Recognition access. VisionCLI also needs ` +
+    `Screen Recording permission (System Settings → Privacy & Security).`
+  );
+}
+
+/** Register visioncli as a user-scope MCP server in Claude Code (and build the voice overlay on macOS). */
+export async function install(): Promise<string> {
+  const claude = process.env.VISIONCLI_CLAUDE ?? (await which("claude"));
+  if (!claude) throw new Error("Couldn't find the `claude` CLI on PATH.");
+  const script = join(root, "dist", "index.js");
+  // Installed via `npx visioncli install`: the npx cache path is temporary, so register through npx instead.
+  const server = script.includes("/_npx/") ? ["npx", "-y", "visioncli@latest"] : [process.execPath, script];
+  await run(claude, ["mcp", "remove", "visioncli", "-s", "user"]).catch(() => {});
+  await run(claude, ["mcp", "add", "visioncli", "--scope", "user", "--", ...server]);
+  const lines = [`Registered the visioncli MCP server for all projects (${server.join(" ")}).`];
+  if (process.platform === "darwin") {
+    if (!existsSync(join(appPath(), "Contents", "MacOS", "VisionCLI"))) await run(join(root, "scripts", "build-overlay.sh"), { cwd: root });
+    lines.push("Voice overlay built. Start it with: visioncli voice  (or ask Claude to \"start voice mode\").");
+    lines.push("Grant Screen Recording to your terminal (and to VisionCLI for voice mode) in System Settings → Privacy & Security.");
+  }
+  lines.push("Restart Claude Code to load it.");
+  return lines.join("\n");
+}

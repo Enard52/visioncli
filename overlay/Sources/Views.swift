@@ -1,0 +1,324 @@
+import AppKit
+import SwiftUI
+
+enum Phase { case hidden, listening, thinking, answering, done, error, approval }
+
+final class OverlayState: ObservableObject {
+    @Published var phase: Phase = .hidden
+    @Published var question = ""
+    @Published var status = ""
+    @Published var raw = ""            // answer as streamed, with markers
+    @Published var level: CGFloat = 0
+    @Published var below = false        // bubble flipped under the pointer (no room above)
+    @Published var pinned = false
+    @Published var project = ""
+    @Published var regionSelected = false
+    @Published var permission: PermissionRequest?
+    @Published var toast = ""
+    @Published var destinations: [String] = ["file"]
+    @Published var speaking = false
+
+    var answer: String { Markup.display(raw) }
+}
+
+/// Things the bubble's buttons can do (implemented by the app delegate).
+protocol BubbleActions: AnyObject {
+    func copyAnswer()
+    func toggleSpeak()
+    func share(to destination: String)
+    func showHistory()
+    func dismiss()
+    func togglePin()
+    func approve(_ allow: Bool, always: Bool)
+    func openLink(_ url: URL)
+}
+
+// MARK: - Pieces
+
+let bubbleFill = Color(red: 0.09, green: 0.09, blue: 0.11).opacity(0.95)
+let bubbleStroke = Color.white.opacity(0.12)
+let accent = AngularGradient(colors: [.cyan, .blue, .purple, .pink, .cyan], center: .center)
+
+struct Spinner: View {
+    var size: CGFloat = 22
+    @State private var spin = false
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.white.opacity(0.1), lineWidth: 2.5)
+            Circle()
+                .trim(from: 0, to: 0.72)
+                .stroke(accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(spin ? 360 : 0))
+                .animation(.linear(duration: 0.85).repeatForever(autoreverses: false), value: spin)
+            Image(systemName: "eye.fill")
+                .font(.system(size: size * 0.36, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+        }
+        .frame(width: size, height: size)
+        .onAppear { spin = true }
+    }
+}
+
+struct LevelBars: View {
+    var level: CGFloat
+    private let weights: [CGFloat] = [0.5, 0.8, 1, 0.75, 0.45]
+    var body: some View {
+        HStack(spacing: 2.5) {
+            ForEach(weights.indices, id: \.self) { i in
+                Capsule()
+                    .fill(LinearGradient(colors: [.cyan, .purple], startPoint: .bottom, endPoint: .top))
+                    .frame(width: 3, height: 4 + 16 * min(1, level * weights[i]))
+            }
+        }
+        .frame(height: 20)
+        .animation(.easeOut(duration: 0.08), value: level)
+    }
+}
+
+/// Small pill that rides next to the cursor while listening / thinking.
+struct Pill<Leading: View>: View {
+    let leading: Leading
+    let text: String
+    let placeholder: String
+    var badge: String? = nil
+    var body: some View {
+        HStack(spacing: 9) {
+            leading
+            VStack(alignment: .leading, spacing: 2) {
+                Text(text.isEmpty ? placeholder : text)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(text.isEmpty ? .white.opacity(0.55) : .white)
+                    .lineLimit(2)
+                    .truncationMode(.head)
+                    .frame(maxWidth: 300, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let badge, !badge.isEmpty {
+                    Text(badge).font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(bubbleFill))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(bubbleStroke))
+        .fixedSize()
+    }
+}
+
+struct Tail: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.midX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+struct IconButton: View {
+    let symbol: String
+    let help: String
+    var active = false
+    let action: () -> Void
+    @State private var hover = false
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(active ? .cyan : .white.opacity(hover ? 0.95 : 0.6))
+                .frame(width: 24, height: 22)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hover ? 0.1 : 0)))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .onHover { hover = $0 }
+    }
+}
+
+// MARK: - Answer bubble
+
+struct AnswerBubble: View {
+    @ObservedObject var s: OverlayState
+    weak var actions: BubbleActions?
+
+    var rendered: AttributedString {
+        let opts = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        var a = (try? AttributedString(markdown: Markup.linked(s.answer), options: opts)) ?? AttributedString(s.answer)
+        for run in a.runs where run.link != nil {
+            a[run.range].foregroundColor = .cyan
+            a[run.range].underlineStyle = .single
+        }
+        return a
+    }
+
+    var header: some View {
+        HStack(spacing: 7) {
+            if s.phase == .answering { Spinner(size: 13) } else {
+                Image(systemName: s.phase == .error ? "exclamationmark.triangle.fill" : "eye.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(s.phase == .error ? .orange : .cyan)
+            }
+            Text(s.question)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+            if !s.project.isEmpty {
+                Text(s.project)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(Color.white.opacity(0.08)))
+            }
+        }
+    }
+
+    var answerText: some View {
+        Text(rendered)
+            .font(.system(size: 13.5))
+            .foregroundStyle(.white.opacity(0.95))
+            .lineSpacing(2.5)
+            .tint(.cyan)
+            .frame(width: 420, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    var toolbar: some View {
+        HStack(spacing: 2) {
+            IconButton(symbol: "doc.on.doc", help: "Copy answer") { actions?.copyAnswer() }
+            IconButton(symbol: s.speaking ? "speaker.wave.2.fill" : "speaker.wave.2", help: "Read aloud", active: s.speaking) { actions?.toggleSpeak() }
+            Menu {
+                ForEach(s.destinations, id: \.self) { d in
+                    Button(d == "file" ? "Save as Markdown report" : "Send to \(d.capitalized)") { actions?.share(to: d) }
+                }
+            } label: {
+                Image(systemName: "square.and.arrow.up").font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.6))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(width: 24, height: 22)
+            .help("Share")
+            IconButton(symbol: "clock.arrow.circlepath", help: "History") { actions?.showHistory() }
+            Spacer()
+            if !s.toast.isEmpty {
+                Text(s.toast).font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+            }
+            IconButton(symbol: "pin.slash", help: "Unpin (⌥P)") { actions?.togglePin() }
+            IconButton(symbol: "xmark", help: "Close (esc)") { actions?.dismiss() }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                header
+                if s.pinned {
+                    ScrollView { answerText.textSelection(.enabled) }
+                        .frame(maxHeight: 460)
+                        .environment(\.openURL, OpenURLAction { url in actions?.openLink(url); return .handled })
+                    Divider().overlay(Color.white.opacity(0.08))
+                    toolbar
+                } else {
+                    answerText
+                        .frame(maxHeight: 380, alignment: .top)
+                        .clipped()
+                    if s.phase == .done || s.phase == .error {
+                        Text(s.toast.isEmpty ? "esc dismiss · ⌥P pin to scroll & click files · ⌥O open file · ⌥space follow-up" : s.toast)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.32))
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(bubbleFill))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(s.pinned ? Color.cyan.opacity(0.35) : bubbleStroke))
+            if !s.below && !s.pinned {
+                Tail().fill(bubbleFill).frame(width: 16, height: 8)
+            }
+        }
+        .fixedSize()
+    }
+}
+
+// MARK: - Approval card
+
+struct ApprovalCard: View {
+    @ObservedObject var s: OverlayState
+    weak var actions: BubbleActions?
+
+    var body: some View {
+        if let req = s.permission {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 7) {
+                    Image(systemName: "hand.raised.fill").font(.system(size: 11)).foregroundStyle(.yellow)
+                    Text(req.title).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                    Spacer()
+                    if !s.project.isEmpty { Text(s.project).font(.system(size: 10)).foregroundStyle(.white.opacity(0.4)) }
+                }
+                if let file = req.file {
+                    Text(file).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.white.opacity(0.45)).lineLimit(1).truncationMode(.head)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(req.detail.enumerated()), id: \.offset) { _, line in
+                        Text((line.1 == .added ? "+ " : line.1 == .removed ? "- " : "  ") + line.0)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(line.1 == .added ? Color.green : line.1 == .removed ? Color.red.opacity(0.9) : Color.white.opacity(0.8))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.35)))
+                HStack(spacing: 8) {
+                    Button { actions?.approve(true, always: false) } label: {
+                        Text("Allow  ⌥↩").font(.system(size: 12, weight: .semibold)).padding(.horizontal, 12).padding(.vertical, 5)
+                            .background(Capsule().fill(Color.cyan.opacity(0.85))).foregroundStyle(.black)
+                    }.buttonStyle(.plain)
+                    Button { actions?.approve(true, always: true) } label: {
+                        Text("Allow all this session").font(.system(size: 12)).padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Capsule().stroke(Color.white.opacity(0.25))).foregroundStyle(.white.opacity(0.85))
+                    }.buttonStyle(.plain)
+                    Spacer()
+                    Button { actions?.approve(false, always: false) } label: {
+                        Text("Deny  esc").font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                    }.buttonStyle(.plain)
+                }
+            }
+            .padding(14)
+            .frame(width: 460)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(bubbleFill))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.yellow.opacity(0.35)))
+            .fixedSize()
+        }
+    }
+}
+
+// MARK: - Root
+
+struct OverlayView: View {
+    @ObservedObject var s: OverlayState
+    weak var actions: BubbleActions?
+
+    var body: some View {
+        Group {
+            switch s.phase {
+            case .hidden:
+                Color.clear.frame(width: 1, height: 1)
+            case .listening:
+                Pill(leading: LevelBars(level: s.level), text: s.question,
+                     placeholder: s.status.isEmpty ? "Listening…" : s.status,
+                     badge: s.regionSelected ? "◻︎ area selected" : nil)
+            case .thinking:
+                Pill(leading: Spinner(), text: s.status, placeholder: "Thinking…", badge: s.project.isEmpty ? nil : s.project)
+            case .answering, .done, .error:
+                AnswerBubble(s: s, actions: actions)
+            case .approval:
+                ApprovalCard(s: s, actions: actions)
+            }
+        }
+        .padding(6) // room for anti-aliased edges and shadow
+    }
+}
