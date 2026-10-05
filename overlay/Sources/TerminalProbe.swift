@@ -9,7 +9,7 @@ enum Assistant: String, CaseIterable {
     var appName: String {
         switch self {
         case .claude: return "Claude Code"
-        case .antigravity: return "Gemini (Antigravity CLI)"
+        case .antigravity: return "Gemini (Antigravity)"
         case .gemini: return "Gemini CLI"
         }
     }

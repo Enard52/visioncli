@@ -115,7 +115,7 @@ export async function startVoice(cwd: string): Promise<string> {
   );
 }
 
-/** Register visioncli as a user-scope MCP server in Claude Code and Gemini CLI (and build the voice overlay on macOS). */
+/** Register visioncli as a user-scope MCP server in Claude Code and Antigravity CLI (and build the voice overlay on macOS). */
 export async function install(): Promise<string> {
   const claude = process.env.VISIONCLI_CLAUDE ?? (await which("claude"));
   if (!claude) throw new Error("Couldn't find the `claude` CLI on PATH.");
@@ -140,17 +140,15 @@ export async function install(): Promise<string> {
       "browser_tabs", "browser_read", "browser_elements", "browser_open", "browser_switch_tab", "browser_navigate", "browser_scroll"]) {
       if (!allow.includes(`mcp(visioncli/${t})`)) allow.push(`mcp(visioncli/${t})`);
     }
+    // Read-only commands Gemini may run without asking (headless agy can't prompt).
+    for (const c of ["grep", "rg", "ls", "cat", "head", "tail", "find", "wc", "pwd", "file", "stat", "tree",
+      "git status", "git log", "git diff", "git show", "git branch", "git blame"]) {
+      if (!allow.includes(`command(${c})`)) allow.push(`command(${c})`);
+    }
     settings.permissions = { ...(settings.permissions ?? {}), allow };
     mkdirSync(dirname(settingsFile), { recursive: true });
     writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n");
     lines.push("Registered it with Antigravity CLI (agy) as well.");
-  }
-  // Gemini CLI too, if installed. Trusted so its read-only tools also work in headless mode (no confirmation prompts).
-  const gemini = await which("gemini");
-  if (gemini) {
-    await run(gemini, ["mcp", "remove", "-s", "user", "visioncli"]).catch(() => {});
-    await run(gemini, ["mcp", "add", "-s", "user", "--trust", "visioncli", ...server]);
-    lines.push("Registered it with Gemini CLI as well.");
   }
   if (process.platform === "darwin") {
     if (!existsSync(join(appPath(), "Contents", "MacOS", "VisionCLI"))) await run(join(root, "scripts", "build-overlay.sh"), { cwd: root });

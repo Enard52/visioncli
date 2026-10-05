@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Two assistants:** Claude Code or Gemini (Antigravity). Gemini CLI is no longer offered (it doesn't work on personal Google accounts); anyone who had it selected moves to Antigravity.
+- **Model menu for Gemini:** every model your `agy` account offers (Gemini 3.8/3.7/3.6 Flash, 3.1 Pro, …), or agy's default. Claude keeps Sonnet / Opus.
+- **Effort menu** (Default, Low, Medium, High, Extra High, Max) for both Claude and Gemini, in bubble and terminal mode (`--effort`).
+- **Gemini can run commands in Bubble Only mode.** Read-only commands (grep, rg, ls, cat, find, git status/log/diff…) run without asking. Any other command shows the approval card, as with Claude: Allow runs it and Gemini continues, Allow all keeps it for the session (removed on New Conversation or quit), Deny makes Gemini answer without it.
+
 ## 0.6.0
 
 - **Mermaid diagrams in the answer bubble.** For flows, relationships, data models or architecture, the answer can include a ```mermaid diagram (flowchart, sequence, ER…). It's rendered as a picture in the bubble with the bundled Mermaid (works offline), sized to fit, with a "Drawing diagram…" placeholder while it streams; the read-aloud voice skips the code.

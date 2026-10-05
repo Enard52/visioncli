@@ -175,6 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
         updateStatusTitle()
         refreshCandidates()
+        AgyModels.refresh(cfg: cfg)
         if Config.isFirstRun { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showWelcome() } }
         Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.refreshCandidates() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
@@ -942,6 +943,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     func approve(_ allow: Bool, always: Bool) {
         guard let req = state.permission, let s = current else { return }
         if always { alwaysAllow[s.cwd, default: []].insert(req.tool) }
+        (s as? AgySession)?.keepRule = always
         s.respond(to: req, allow: allow)
         activity.permission(req.title, allowed: allow)
         log("permission \(req.tool): \(allow ? "allowed" : "denied")")
@@ -1025,7 +1027,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         menu.addItem(.separator())
 
         submenu("Assistant: \(Settings.assistant.appName)", in: menu) { m in
-            for a in Assistant.allCases {
+            for a in [Assistant.claude, .antigravity] {
                 let installed: Bool
                 switch a {
                 case .claude: installed = FileManager.default.isExecutableFile(atPath: cfg.claude)
@@ -1036,7 +1038,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                      on: Settings.assistant == a, value: a.rawValue)
             }
             m.addItem(.separator())
-            item("A terminal running claude, agy or gemini is used as-is when you point at it.", nil, in: m)
+            item("A terminal running claude or agy is used as-is when you point at it.", nil, in: m)
         }
 
         // How answers are delivered
@@ -1053,12 +1055,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             }
         }
 
-        if Settings.assistant == .claude { submenu("Model", in: menu) { m in
-            let model = cfg.model ?? Settings.model
-            item("Fast (Sonnet)", #selector(useSonnet), in: m, on: model == "sonnet")
-            item("Deeper (Opus)", #selector(useOpus), in: m, on: model == "opus")
-            if cfg.model != nil { item("(set by VISIONCLI_MODEL)", nil, in: m) }
-        } }
+        submenu("Model", in: menu) { m in
+            if Settings.assistant == .antigravity {
+                item("Default (from your agy settings)", #selector(chooseAgyModel(_:)), in: m, on: Settings.agyModel == nil)
+                m.addItem(.separator())
+                let models = AgyModels.cached
+                if models.isEmpty { item("Loading models from agy…", nil, in: m) }
+                for model in models {
+                    item(model.name, #selector(chooseAgyModel(_:)), in: m, on: Settings.agyModel == model.id, value: model.id)
+                }
+            } else {
+                let model = cfg.model ?? Settings.model
+                item("Fast (Sonnet)", #selector(useSonnet), in: m, on: model == "sonnet")
+                item("Deeper (Opus)", #selector(useOpus), in: m, on: model == "opus")
+                if cfg.model != nil { item("(set by VISIONCLI_MODEL)", nil, in: m) }
+            }
+        }
+
+        submenu("Effort: \(MenuLabels.effort(Settings.effort))", in: menu) { m in
+            for level in [nil, "low", "medium", "high", "xhigh", "max"] as [String?] {
+                item(MenuLabels.effort(level) + (level == nil ? " (the CLI's own setting)" : ""), #selector(chooseEffort(_:)), in: m,
+                     on: Settings.effort == level, value: level)
+            }
+            m.addItem(.separator())
+            item("Applies to Claude and Gemini; higher is slower but more thorough.", nil, in: m)
+        }
 
         submenu("Voice & Audio", in: menu) { m in
             if let status = installer?.status { item("⏳ " + status, nil, in: m); m.addItem(.separator()) }
@@ -1109,7 +1130,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         submenu("Settings", in: menu) { m in
             item("Set Up Claude Code (MCP tools)…", #selector(setupClaudeCode), in: m)
             item("Set Up Antigravity CLI (MCP tools)…", cfg.agy == nil ? nil : #selector(setupAgy), in: m)
-            item("Set Up Gemini CLI (MCP tools)…", cfg.gemini == nil ? nil : #selector(setupGemini), in: m)
             item("Start at Login", #selector(toggleLogin), in: m, on: LoginItem.isEnabled)
             item("Fix Permissions…", #selector(fixPermissions), in: m)
             item("Check for Updates… (v\(Updater.currentVersion))", #selector(checkForUpdates), in: m)
@@ -1315,6 +1335,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         alert.runModal()
     }
 
+    @objc func chooseEffort(_ sender: NSMenuItem) {
+        Settings.effort = sender.representedObject as? String
+        log("effort: \(Settings.effort ?? "default")")
+    }
+
+    @objc func chooseAgyModel(_ sender: NSMenuItem) {
+        Settings.agyModel = sender.representedObject as? String
+        log("agy model: \(Settings.agyModel ?? "default")")
+    }
+
     @objc func chooseAssistant(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let a = Assistant(rawValue: raw) else { return }
         Settings.assistant = a
@@ -1379,16 +1409,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         macOS will ask for Microphone, Speech Recognition and Screen Recording access. VisionCLI needs all three.
         To use the tools by typing in Claude Code, also give your terminal app (iTerm, Terminal…) Screen Recording access.
 
-        Set up your AI CLI now so VisionCLI's tools work in every project? (Works with Claude Code, Gemini via Antigravity CLI, and Gemini CLI; pick which one answers voice questions in 👁 → Assistant.)
+        Set up your AI CLI now so VisionCLI's tools work in every project? (Works with Claude Code and Gemini through Antigravity; pick which one answers voice questions in 👁 → Assistant.)
         """
-        let hasClaude = FileManager.default.isExecutableFile(atPath: cfg.claude), hasAgy = cfg.agy != nil, hasGemini = cfg.gemini != nil
-        alert.addButton(withTitle: "Set Up \([hasClaude ? "Claude Code" : nil, hasAgy ? "Antigravity" : nil, hasGemini ? "Gemini CLI" : nil].compactMap { $0 }.joined(separator: " + ").ifEmpty("Claude Code"))")
+        let hasClaude = FileManager.default.isExecutableFile(atPath: cfg.claude), hasAgy = cfg.agy != nil
+        alert.addButton(withTitle: "Set Up \([hasClaude ? "Claude Code" : nil, hasAgy ? "Antigravity" : nil].compactMap { $0 }.joined(separator: " + ").ifEmpty("Claude Code"))")
         alert.addButton(withTitle: "Later")
         if alert.runModal() == .alertFirstButtonReturn {
-            if hasClaude || (!hasAgy && !hasGemini) { setupClaudeCode() }
+            if hasClaude || !hasAgy { setupClaudeCode() }
             if hasAgy { setupAgy() }
-            if hasGemini { setupGemini() }
-            if !hasClaude { Settings.assistant = hasAgy ? .antigravity : .gemini }
+            if !hasClaude && hasAgy { Settings.assistant = .antigravity }
         }
     }
 
@@ -1458,6 +1487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         NSPasteboard.general.setString(last, forType: .string)
     }
     @objc func newConversation() {
+        AgySetup.clearSessionRules()
         sessions.values.forEach { $0.reset() }
         terminals.values.forEach { $0.reset() }
         alwaysAllow = [:]
@@ -1497,6 +1527,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     @objc func openCrashLog() { NSWorkspace.shared.open(CrashReporter.logURL) }
 
     @objc func quit() {
+        AgySetup.clearSessionRules()
         CrashReporter.markCleanExit()
         sessions.values.forEach { $0.stop() }
         whisper?.stop()
@@ -1510,3 +1541,16 @@ let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
+
+enum MenuLabels {
+    static func effort(_ level: String?) -> String {
+        switch level {
+        case "low": return "Low (fastest)"
+        case "medium": return "Medium"
+        case "high": return "High"
+        case "xhigh": return "Extra High"
+        case "max": return "Max (slowest)"
+        default: return "Default"
+        }
+    }
+}

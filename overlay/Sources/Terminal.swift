@@ -168,12 +168,14 @@ final class TerminalSession {
         if assistant == .claude {
             command = """
             \(quote(cfg.claude)) --append-system-prompt "$(cat \(quote(promptFile.path)))" \\
-              --allowedTools \(autoAllowedTools.joined(separator: " ")) \\
+              --allowedTools \(autoAllowedTools.joined(separator: " ")) \(Settings.effort.map { "--effort \($0)" } ?? "") \\
               \(resume ? "--resume" : "--session-id") \(sessionId)
             """
         } else if assistant == .antigravity {
             // agy can't take a system prompt or a preset conversation id; questions carry short instructions.
             command = "\(quote(cfg.agy ?? "agy"))" + (resume ? " --conversation \(sessionId)" : "")
+                + (Settings.agyModel.map { " --model \(quote($0))" } ?? "")
+                + (Settings.effort.map { " --effort \($0)" } ?? "")
         } else {
             // Gemini has no --append-system-prompt; each voice question carries its own short instructions.
             let env = cfg.geminiEnvironment()

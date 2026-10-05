@@ -229,10 +229,26 @@ enum Settings {
         set { d.set(newValue, forKey: "autoUpdate") }
     }
 
-    /// Which CLI answers voice questions.
+    /// Which CLI answers voice questions: Claude Code or Gemini through Antigravity.
+    /// (Gemini CLI is no longer offered; anyone who had it selected moves to Antigravity.)
     static var assistant: Assistant {
-        get { Assistant(rawValue: d.string(forKey: "assistant") ?? "") ?? .claude }
+        get {
+            let a = Assistant(rawValue: d.string(forKey: "assistant") ?? "") ?? .claude
+            return a == .gemini ? .antigravity : a
+        }
         set { d.set(newValue.rawValue, forKey: "assistant") }
+    }
+
+    /// Reasoning effort for Claude and agy (`--effort low|medium|high|xhigh|max`); nil = the CLI's default.
+    static var effort: String? {
+        get { d.string(forKey: "effort") }
+        set { d.set(newValue, forKey: "effort") }
+    }
+
+    /// agy model id (from `agy models`); nil = whatever agy itself is set to.
+    static var agyModel: String? {
+        get { d.string(forKey: "agyModel") }
+        set { d.set(newValue, forKey: "agyModel") }
     }
 
     /// Instant browser commands routed by Jev (TypeSafe System One) before asking Claude.

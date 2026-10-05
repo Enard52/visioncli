@@ -41,10 +41,10 @@ struct PermissionRequest {
     var title: String {
         let name = file.map { ($0 as NSString).lastPathComponent } ?? ""
         switch tool {
-        case "Edit", "MultiEdit": return "Claude wants to edit \(name)"
-        case "Write": return FileManager.default.fileExists(atPath: file ?? "") ? "Claude wants to overwrite \(name)" : "Claude wants to create \(name)"
-        case "Bash": return "Claude wants to run a command"
-        default: return "Claude wants to use \(tool.replacingOccurrences(of: "mcp__visioncli__", with: ""))"
+        case "Edit", "MultiEdit": return "\(Settings.assistant.name) wants to edit \(name)"
+        case "Write": return FileManager.default.fileExists(atPath: file ?? "") ? "\(Settings.assistant.name) wants to overwrite \(name)" : "\(Settings.assistant.name) wants to create \(name)"
+        case "Bash": return "\(Settings.assistant.name) wants to run a command"
+        default: return "\(Settings.assistant.name) wants to use \(tool.replacingOccurrences(of: "mcp__visioncli__", with: ""))"
         }
     }
 
@@ -105,6 +105,7 @@ final class ClaudeSession: AssistantSession {
     }
     private(set) var busy = false
     private var model: String
+    private var effort: String? = Settings.effort
 
     var onStatus: (String) -> Void = { _ in }
     var onToolStart: () -> Void = {}
@@ -132,7 +133,7 @@ final class ClaudeSession: AssistantSession {
     func send(text: String, shots: [Shot]) {
         if busy { restart() } // a new question interrupts the old one; --resume keeps the conversation
         let wanted = cfg.model ?? Settings.model
-        if wanted != model { model = wanted; restart() }
+        if wanted != model || Settings.effort != effort { model = wanted; effort = Settings.effort; restart() }
         if !isRunning { start() }
         var content: [[String: Any]] = shots.map {
             ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": $0.jpeg.base64EncodedString()]]
@@ -174,6 +175,7 @@ final class ClaudeSession: AssistantSession {
             "--permission-prompt-tool", "stdio", "--permission-mode", "default",
             "--append-system-prompt", voiceSystemPrompt,
             "--model", model,
+        ] + (effort.map { ["--effort", $0] } ?? []) + [
             // Lean session: only the built-in tools voice mode uses (about half the input tokens of the full set),
             // and no plugin hooks (their per-session output also defeats prompt caching).
             "--tools", "Read,Grep,Glob,Edit,Write,Bash",
