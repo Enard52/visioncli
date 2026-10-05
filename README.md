@@ -4,7 +4,7 @@
 
 <p align="center">
 Let Claude see your screen. Ask about the file, error, UI, database table or web page you're looking at,<br>
-by typing in <b>Claude Code or Gemini CLI</b> or <b>by voice</b>, with the answer floating above your mouse pointer.
+by typing in <b>Claude Code or Gemini</b> (Antigravity / Gemini CLI) or <b>by voice</b>, with the answer floating above your mouse pointer.
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@ by typing in <b>Claude Code or Gemini CLI</b> or <b>by voice</b>, with the answe
 ### Requirements
 
 - macOS 13 or later (Apple Silicon or Intel)
-- [Claude Code](https://claude.com/claude-code) (`claude`) **and/or** [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`), installed and signed in
+- At least one AI CLI, installed and signed in: [Claude Code](https://claude.com/claude-code) (`claude`), [Antigravity CLI](https://antigravity.google) (`agy`, Gemini on a Google account), or [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`)
 - [Node.js](https://nodejs.org) 18 or later
 
 ### 1. Download the app
@@ -38,7 +38,7 @@ by typing in <b>Claude Code or Gemini CLI</b> or <b>by voice</b>, with the answe
 
 ### 2. First launch
 
-The 👁 icon appears in the menu bar and a welcome screen offers to set up the CLIs it finds. That registers VisionCLI's tools for every project: `claude mcp add visioncli --scope user …` for Claude Code, and `gemini mcp add -s user --trust visioncli …` for Gemini CLI. You can also do it later from 👁 → Settings → *Set Up Claude Code* / *Set Up Gemini CLI*.
+The 👁 icon appears in the menu bar and a welcome screen offers to set up the CLIs it finds. That registers VisionCLI's tools for every project: `claude mcp add visioncli --scope user …` for Claude Code, the global MCP config for Antigravity CLI, and `gemini mcp add -s user --trust visioncli …` for Gemini CLI. You can also do it later from 👁 → Settings → *Set Up …*.
 
 macOS will ask for three permissions. VisionCLI needs all of them:
 
@@ -60,19 +60,28 @@ If something doesn't work, check System Settings → Privacy & Security, and �
 | **TypeSafe Jev** | Instant browser commands | add your key via 👁 → Settings → *API Keys*, or set `TYPESAFE_API_KEY` |
 | **Browser control** | Click, scroll and read pages | in Chrome or Brave: **View → Developer → Allow JavaScript from Apple Events** |
 
-## Gemini CLI
+## Gemini (Antigravity CLI or Gemini CLI)
 
-VisionCLI works with Gemini CLI as well as Claude Code:
+VisionCLI works with Gemini as well as Claude, using your own sign-in, the same way it uses your `claude` login:
 
-- **Typing in `gemini`:** after *Set Up Gemini CLI*, the visioncli tools (look, browser, database, device screenshots…) are available in every Gemini CLI project.
-- **Voice with Gemini:** choose 👁 → **Assistant → Gemini CLI**.
-  - *Gemini Terminal* mode types your question into the `gemini` running for the project (or opens one), attaches screenshots as `@file`, and shows the answer in both the terminal and the bubble.
-  - *Bubble Only* mode runs `gemini -p … -o stream-json`, resuming the same session each time.
-- **Pointing at a terminal** that runs `claude` or `gemini` uses that CLI, whatever the Assistant setting.
+| | Use when |
+|---|---|
+| **Antigravity CLI** (`agy`) | You sign in with a personal Google account. Google now serves personal accounts through Antigravity. |
+| **Gemini CLI** (`gemini`) | Your Gemini CLI sign-in still works (paid Code Assist / work account), or you add an API key. |
 
-**Sign-in:** VisionCLI runs `gemini` with whatever sign-in your Gemini CLI already has, exactly like it uses your `claude` login. If `gemini` works when you run it in a terminal, it works in VisionCLI. Google no longer accepts Gemini CLI on the free *personal* Code Assist tier ("…no longer supported for Gemini Code Assist for individuals"). If you see that, sign in again with `/auth` in `gemini` using an account that has access. Optionally, add `"gemini": {"apiKey": "..."}` in 👁 → Settings → *API Keys* to make VisionCLI's runs use an API key instead.
+- **Set up:** 👁 → Settings → *Set Up Antigravity CLI* / *Set Up Gemini CLI* (or `visioncli install`, which registers every CLI it finds).
+  - Antigravity: adds visioncli to `~/.gemini/config/mcp_config.json` and allows its read-only/navigation tools in `~/.gemini/antigravity-cli/settings.json`.
+  - Gemini CLI: `gemini mcp add -s user --trust visioncli …`.
+- **Typing:** in `agy` or `gemini`, the visioncli tools (look, browser, database, device screenshots…) are available in every workspace.
+- **Voice:** choose 👁 → **Assistant → Gemini (Antigravity CLI)** or **Gemini CLI**.
+  - *Terminal* mode types your question into the `agy`/`gemini` running for the project (or opens one) and shows the answer in the terminal and the bubble.
+  - *Bubble Only* mode runs it headless (`agy -p … --output-format stream-json`, or `gemini -p … -o stream-json`) and continues the same conversation each time.
+- **Pointing at a terminal** that runs `claude`, `agy` or `gemini` uses that CLI, whatever the Assistant setting.
 
-**Limits:** in Bubble Only mode Gemini can't ask for approval, so it can only read (code, screen, browser, database); for edits and commands use Gemini Terminal mode. Highlight boxes, history, speech and Jev work the same with either assistant.
+**Notes:**
+- In Bubble Only mode the CLI can't ask for approval, so it only reads (code, screen, browser, database). Use terminal mode for edits and commands.
+- Headless `agy` takes ~15s to start per question; terminal mode keeps it running and answers faster.
+- Gemini CLI on a free *personal* Google sign-in now fails with "…no longer supported for Gemini Code Assist for individuals". Use Antigravity instead, or add `"gemini": {"apiKey": "..."}` in 👁 → Settings → *API Keys*.
 
 ## Use it
 
@@ -89,7 +98,7 @@ VisionCLI works with Gemini CLI as well as Claude Code:
 
 **Which project?** By default VisionCLI follows the window under your mouse. PhpStorm `myshop – payments` maps to `~/PhpstormProjects/myshop`, and a terminal running `claude` maps to its folder. With several projects open, pick one in **👁 → Project**. The menu bar shows the current project, with 📌 when you've chosen one.
 
-**Which session?** In **Terminal** mode (the default), voice questions are typed into the `claude` (or `gemini`, see [Gemini CLI](#gemini-cli)) already running for that project in iTerm, or a new one is opened. You can type there too; it's one conversation, and answers show in both the terminal and the bubble. **Bubble Only** mode uses a hidden, leaner session instead. Switch in 👁 → *Answer In*.
+**Which session?** In **Terminal** mode (the default), voice questions are typed into the `claude` (or `agy`/`gemini`, see [Gemini](#gemini-antigravity-cli-or-gemini-cli)) already running for that project in iTerm, or a new one is opened. You can type there too; it's one conversation, and answers show in both the terminal and the bubble. **Bubble Only** mode uses a hidden, leaner session instead. Switch in 👁 → *Answer In*.
 
 ### In Claude Code (typing)
 
@@ -116,7 +125,7 @@ Slash commands: `/mcp__visioncli__see <question>`, `/mcp__visioncli__point <ques
 
 ## Menu
 
-**👁 Project** (Auto, or pick from running `claude`/`gemini` sessions, open editors and recent projects) · **Assistant** (Claude Code or Gemini CLI) · **Answer In** (terminal, or bubble only) · **Model** (Sonnet or Opus, for Claude) · **Voice & Audio** (speak answers, speed up to 2×, voice, speech recognition, microphone, speaker) · History · Copy Last Answer · New Conversation · **Settings** (Set Up Claude Code / Gemini CLI, Start at Login, instant browser commands, AI cursor, API keys, logs).
+**👁 Project** (Auto, or pick from running `claude`/`agy`/`gemini` sessions, open editors and recent projects) · **Assistant** (Claude Code, Gemini via Antigravity, or Gemini CLI) · **Answer In** (terminal, or bubble only) · **Model** (Sonnet or Opus, for Claude) · **Voice & Audio** (speak answers, speed up to 2×, voice, speech recognition, microphone, speaker) · History · Copy Last Answer · New Conversation · **Settings** (Set Up Claude Code / Antigravity / Gemini CLI, Start at Login, instant browser commands, AI cursor, API keys, logs).
 
 ## API keys
 
@@ -145,7 +154,7 @@ Slash commands: `/mcp__visioncli__see <question>`, `/mcp__visioncli__point <ques
 ```bash
 git clone https://github.com/thethirdsourcers/visioncli.git && cd visioncli
 npm install                       # builds the MCP server (dist/)
-node dist/index.js install        # register with Claude Code (and Gemini CLI, if installed) for all projects
+node dist/index.js install        # register with Claude Code, Antigravity CLI and Gemini CLI (whichever are installed)
 npm run build                     # build VisionCLI.app and install it into /Applications
 node dist/index.js voice          # start voice mode (under launchd: restarts after a crash)
 ```
@@ -162,7 +171,8 @@ node dist/index.js voice          # start voice mode (under launchd: restarts af
 | "VisionCLI can't be opened" | Right-click → Open, or `xattr -dr com.apple.quarantine /Applications/VisionCLI.app` |
 | Claude sees only the wallpaper | Voice: enable Screen Recording for VisionCLI. Typing in Claude Code: enable it for your terminal app. Then quit and reopen that app. |
 | Tools missing in Claude Code / Gemini CLI | 👁 → Settings → *Set Up Claude Code* / *Set Up Gemini CLI* (again after moving the app or switching Node versions), then restart `claude` / `gemini` |
-| Gemini: "no longer supported for Code Assist for individuals" | Your `gemini` sign-in was refused by Google. Run `gemini` → `/auth` with an account that has access (or add an API key in *API Keys*) |
+| Gemini CLI: "no longer supported for Code Assist for individuals" | Google moved personal accounts to Antigravity: choose 👁 → Assistant → *Gemini (Antigravity CLI)* (or add a Gemini API key) |
+| Gemini answers "tried a step that needs your approval" | Bubble Only mode can't approve commands/edits; switch 👁 → Answer In to the terminal |
 | Answers only in the terminal, or none at all | 👁 → Settings → *Open Log*; check `claude` is installed and signed in |
 | Microphone errors | Pick a specific mic in 👁 → Voice & Audio → Microphone |
 | It crashed | It restarts automatically; details are in 👁 → Settings → *Open Crash Log* |

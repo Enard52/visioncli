@@ -49,6 +49,7 @@ struct Config: Codable {
     var cwd = home.path            // fallback project when the window under the pointer doesn't map to one
     var claude = "claude"
     var gemini: String?
+    var agy: String?
     var path = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     var node: String?
     var server: String?
@@ -128,6 +129,7 @@ struct Config: Codable {
         if c.node == nil || !FileManager.default.isExecutableFile(atPath: c.node!) { c.node = findNode(path: c.path) }
         if !c.claude.hasPrefix("/") || !FileManager.default.isExecutableFile(atPath: c.claude) { c.claude = Config.findClaude(path: c.path) ?? c.claude }
         if c.gemini == nil || !FileManager.default.isExecutableFile(atPath: c.gemini!) { c.gemini = find("gemini", path: c.path) }
+        if c.agy == nil || !FileManager.default.isExecutableFile(atPath: c.agy!) { c.agy = find("agy", path: c.path) }
         if isFirstRun {
             try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
             try? JSONEncoder().encode(c).write(to: saved)

@@ -1,13 +1,19 @@
 import AppKit
 import CryptoKit
 
-/// The CLI that answers: Claude Code (`claude`) or Gemini CLI (`gemini`).
+/// The CLI that answers: Claude Code (`claude`), Antigravity CLI (`agy`, Gemini on a Google account), or Gemini CLI.
 enum Assistant: String, CaseIterable {
-    case claude, gemini
+    case claude, antigravity, gemini
 
     var name: String { self == .claude ? "Claude" : "Gemini" }
-    var appName: String { self == .claude ? "Claude Code" : "Gemini CLI" }
-    var binary: String { rawValue }
+    var appName: String {
+        switch self {
+        case .claude: return "Claude Code"
+        case .antigravity: return "Gemini (Antigravity CLI)"
+        case .gemini: return "Gemini CLI"
+        }
+    }
+    var binary: String { self == .antigravity ? "agy" : rawValue }
 
     /// Is this `ps` args line one of this assistant's interactive processes?
     func matches(args: String) -> Bool {
@@ -15,6 +21,7 @@ enum Assistant: String, CaseIterable {
         guard let first = tokens.first else { return false }
         switch self {
         case .claude: return first == "claude"
+        case .antigravity: return first == "agy"
         case .gemini: return first == "gemini" || (first.hasPrefix("node") && tokens.count > 1 && tokens[1] == "gemini")
         }
     }
@@ -123,7 +130,29 @@ enum TerminalProbe {
                 if let header = geminiHeader(f), header["projectHash"] as? String == hash { return header["sessionId"] as? String }
             }
             return nil
+        case .antigravity:
+            return nil // agy conversations aren't indexed by folder; the terminal session finds its transcript by the question text
         }
+    }
+
+    /// agy keeps a JSONL transcript per conversation.
+    static func agyTranscript(_ conversationId: String) -> URL {
+        home.appendingPathComponent(".gemini/antigravity-cli/brain/\(conversationId)/.system_generated/logs/transcript.jsonl")
+    }
+
+    /// The agy conversation whose transcript contains `marker` (the question VisionCLI just typed), written recently.
+    static func agyConversation(containing marker: String, within seconds: TimeInterval = 180) -> String? {
+        let brain = home.appendingPathComponent(".gemini/antigravity-cli/brain")
+        let dirs = (try? FileManager.default.contentsOfDirectory(at: brain, includingPropertiesForKeys: nil)) ?? []
+        let recent = dirs.compactMap { dir -> (String, URL, Date)? in
+            let t = agyTranscript(dir.lastPathComponent)
+            guard let m = mtime(t), Date().timeIntervalSince(m) < seconds else { return nil }
+            return (dir.lastPathComponent, t, m)
+        }.sorted { $0.2 > $1.2 }
+        for (id, t, _) in recent {
+            if let text = try? String(contentsOf: t, encoding: .utf8), text.contains(marker) { return id }
+        }
+        return nil
     }
 
     /// The session file for a session id (Claude: <id>.jsonl; Gemini: session-<date>-<id prefix>.jsonl).
@@ -140,6 +169,9 @@ enum TerminalProbe {
                 }
             }
             return nil
+        case .antigravity:
+            let t = agyTranscript(sessionId)
+            return FileManager.default.fileExists(atPath: t.path) ? t : nil
         }
     }
 

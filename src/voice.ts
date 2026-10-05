@@ -125,6 +125,26 @@ export async function install(): Promise<string> {
   await run(claude, ["mcp", "remove", "visioncli", "-s", "user"]).catch(() => {});
   await run(claude, ["mcp", "add", "visioncli", "--scope", "user", "--", ...server]);
   const lines = [`Registered the visioncli MCP server with Claude Code for all projects (${server.join(" ")}).`];
+  // Antigravity CLI (agy, Gemini on a Google account), if installed: global MCP config + allow rules for headless runs.
+  if (await which("agy") || existsSync(join(homedir(), ".local", "bin", "agy"))) {
+    const mcpFile = join(homedir(), ".gemini", "config", "mcp_config.json");
+    const settingsFile = join(homedir(), ".gemini", "antigravity-cli", "settings.json");
+    const read = (f: string) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return {}; } };
+    const mcp = read(mcpFile);
+    mcp.mcpServers = { ...(mcp.mcpServers ?? {}), visioncli: { command: server[0], args: server.slice(1) } };
+    mkdirSync(dirname(mcpFile), { recursive: true });
+    writeFileSync(mcpFile, JSON.stringify(mcp, null, 2) + "\n");
+    const settings = read(settingsFile);
+    const allow: string[] = settings.permissions?.allow ?? [];
+    for (const t of ["look", "list_windows", "select_region", "clipboard_image", "device_screenshot", "db_schema", "db_query",
+      "browser_tabs", "browser_read", "browser_elements", "browser_open", "browser_switch_tab", "browser_navigate", "browser_scroll"]) {
+      if (!allow.includes(`mcp(visioncli/${t})`)) allow.push(`mcp(visioncli/${t})`);
+    }
+    settings.permissions = { ...(settings.permissions ?? {}), allow };
+    mkdirSync(dirname(settingsFile), { recursive: true });
+    writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + "\n");
+    lines.push("Registered it with Antigravity CLI (agy) as well.");
+  }
   // Gemini CLI too, if installed. Trusted so its read-only tools also work in headless mode (no confirmation prompts).
   const gemini = await which("gemini");
   if (gemini) {

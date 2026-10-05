@@ -19,6 +19,7 @@ final class TerminalSession {
     private var lastTool: String?
     private var lastToolAt = Date()
     private var seenToolIds = Set<String>()
+    private var agyDiscover = false   // agy picks its own conversation id: find it by the question text after typing
 
     var onStatus: (String) -> Void = { _ in }
     var onToolUse: (_ name: String, _ input: [String: Any]) -> Void = { _, _ in }
@@ -58,6 +59,7 @@ final class TerminalSession {
             let encoded = cwd.replacingOccurrences(of: #"[^A-Za-z0-9]"#, with: "-", options: .regularExpression)
             return home.appendingPathComponent(".claude/projects/\(encoded)/\(sessionId).jsonl")
         }
+        if assistant == .antigravity { return TerminalProbe.sessionFile(.antigravity, cwd: cwd, sessionId: sessionId) }
         if let cached = geminiFile, cachedFor == sessionId { return cached }
         geminiFile = TerminalProbe.sessionFile(.gemini, cwd: cwd, sessionId: sessionId)
         cachedFor = sessionId
@@ -99,6 +101,7 @@ final class TerminalSession {
         finalText = ""
         lastTool = nil
         seenToolIds = []
+        agyDiscover = assistant == .antigravity
         startWatching()
         if let id = termId, send(line, to: id) {
             log("terminal: typed voice question into \(usesITerm ? "iTerm" : "Terminal") session")
@@ -121,7 +124,7 @@ final class TerminalSession {
             return
         }
         termId = id
-        waitForPrompt(id, tries: 40) { [weak self] in
+        waitForPrompt(id, tries: assistant == .antigravity ? 90 : 40) { [weak self] in
             guard let self else { return }
             if !self.send(line, to: id) { self.awaiting = nil; self.onDone(nil, "Couldn't type into the terminal session.") }
         }
@@ -168,6 +171,9 @@ final class TerminalSession {
               --allowedTools \(autoAllowedTools.joined(separator: " ")) \\
               \(resume ? "--resume" : "--session-id") \(sessionId)
             """
+        } else if assistant == .antigravity {
+            // agy can't take a system prompt or a preset conversation id; questions carry short instructions.
+            command = "\(quote(cfg.agy ?? "agy"))" + (resume ? " --conversation \(sessionId)" : "")
         } else {
             // Gemini has no --append-system-prompt; each voice question carries its own short instructions.
             let env = cfg.geminiEnvironment()
@@ -248,7 +254,7 @@ final class TerminalSession {
             screen = applescript("tell application \"Terminal\" to return contents of \(id)") ?? ""
         }
         let ready = screen.contains("shortcuts") || screen.contains("? for") || screen.contains("❯") || screen.contains("│ >")
-            || screen.contains("Type your message")
+            || screen.contains("Type your message") || screen.contains("How can I help")
         if ready || tries <= 0 {
             // Let startup output (hooks, banners) settle so typed characters aren't eaten.
             DispatchQueue.main.asyncAfter(deadline: .now() + (ready ? 1.5 : 0)) { then() }
@@ -272,6 +278,17 @@ final class TerminalSession {
     }
 
     private func poll() {
+        if agyDiscover, let marker = awaiting {
+            guard let id = TerminalProbe.agyConversation(containing: marker) else { return }
+            agyDiscover = false
+            if id != sessionId {
+                sessionId = id
+                UserDefaults.standard.set(id, forKey: defaultsKey)
+            }
+            offset = 0 // read the whole transcript; only lines after the question count
+            buffer = Data()
+            log("terminal: following agy conversation \(id)")
+        }
         guard let url = transcriptURL, let h = try? FileHandle(forReadingFrom: url) else { return }
         defer { try? h.close() }
         let size = h.seekToEndOfFile()
@@ -289,6 +306,7 @@ final class TerminalSession {
 
     private func handle(_ obj: [String: Any]) {
         if assistant == .gemini { handleGemini(obj); return }
+        if assistant == .antigravity { handleAgy(obj); return }
         guard let marker = awaiting, obj["isSidechain"] as? Bool != true else { return }
         let message = obj["message"] as? [String: Any] ?? [:]
         switch obj["type"] as? String {
@@ -361,6 +379,36 @@ final class TerminalSession {
         }
     }
 
+    /// agy transcript lines: USER_INPUT (our question), PLANNER_RESPONSE with tool_calls (steps) or content (the answer),
+    /// GENERIC (tool output). The answer is the last DONE PLANNER_RESPONSE without tool calls.
+    private func handleAgy(_ obj: [String: Any]) {
+        guard let marker = awaiting else { return }
+        let content = obj["content"] as? String ?? ""
+        switch obj["type"] as? String {
+        case "USER_INPUT":
+            if content.contains(marker) { seenQuestion = true }
+        case "PLANNER_RESPONSE":
+            guard seenQuestion else { return }
+            let calls = obj["tool_calls"] as? [[String: Any]] ?? []
+            for call in calls {
+                var name = call["name"] as? String ?? ""
+                let args = call["args"] as? [String: Any] ?? [:]
+                if name == "call_mcp_tool", let tool = args["ToolName"] as? String { name = tool }
+                lastTool = name
+                lastToolAt = Date()
+                finishWork?.cancel()
+                finalText = ""
+                onToolUse(name, args)
+            }
+            if calls.isEmpty, obj["status"] as? String == "DONE", !content.isEmpty {
+                finalText = content
+                scheduleFinish(after: 1.5)
+            }
+        default:
+            break
+        }
+    }
+
     private var finishWork: DispatchWorkItem?
 
     private func scheduleFinish(after seconds: Double) {
@@ -382,7 +430,8 @@ final class TerminalSession {
     /// Edits and commands may be waiting for approval in the terminal; say so in the bubble.
     private func checkApprovalWait() {
         guard awaiting != nil, let tool = lastTool,
-              ["Edit", "MultiEdit", "Write", "Bash", "NotebookEdit", "replace", "write_file", "run_shell_command"].contains(tool),
+              ["Edit", "MultiEdit", "Write", "Bash", "NotebookEdit", "replace", "write_file", "run_shell_command",
+               "run_command", "write_to_file", "replace_file_content", "multi_replace_file_content"].contains(tool),
               Date().timeIntervalSince(lastToolAt) > 1.5 else { return }
         onStatus("Running \(tool)… approve in the \(assistant.name) terminal if asked")
         lastTool = nil

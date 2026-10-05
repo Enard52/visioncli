@@ -190,6 +190,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             }
         }
 
+        // Debug: `--ask "question"` runs a question through the normal pipeline (no voice), to test assistants end to end.
+        if let i = CommandLine.arguments.firstIndex(of: "--ask"), i + 1 < CommandLine.arguments.count {
+            let question = CommandLine.arguments[i + 1]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                log("debug ask (\(Settings.assistant.binary), \(Settings.terminalMode ? "terminal" : "bubble")): \(question)")
+                self.state.question = question
+                self.set(.thinking)
+                self.captureAndAsk(question)
+            }
+        }
+
         // `visioncli voice` replaces a running instance with SIGTERM; shut the helper processes down too.
         signal(SIGTERM, SIG_IGN)
         let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
@@ -613,7 +624,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     func session(for project: String) -> AssistantSession {
         let key = "\(Settings.assistant.rawValue):\(project)"
         if let s = sessions[key] { return s }
-        let s: AssistantSession = Settings.assistant == .gemini ? GeminiSession(cwd: project, cfg: cfg) : ClaudeSession(cwd: project, cfg: cfg)
+        let s: AssistantSession
+        switch Settings.assistant {
+        case .claude: s = ClaudeSession(cwd: project, cfg: cfg)
+        case .antigravity: s = AgySession(cwd: project, cfg: cfg)
+        case .gemini: s = GeminiSession(cwd: project, cfg: cfg)
+        }
         s.onStatus = { [weak self, weak s] text in
             guard let self, s === self.current else { return }
             self.state.status = text
@@ -715,6 +731,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             // The CLI running in the tab the user pointed at wins; otherwise the chosen assistant.
             let assistant = terminalContext?.assistant ?? Settings.assistant
             let gemini = assistant == .gemini
+            let briefInstructions = assistant != .claude // no system prompt in gemini/agy interactive mode
             let paths = gemini ? geminiAttachable(saved) : saved.compactMap { $0.file?.path }
             var parts = ["Project: \(currentProject)."]
             for (i, shot) in saved.enumerated() {
@@ -724,7 +741,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 parts.append(p + ".")
             }
             // Gemini can't take a system prompt in its interactive mode, so the voice instructions ride along.
-            if gemini { parts.append("Asked out loud: the reply is also shown in a bubble above the mouse and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line.") }
+            if briefInstructions { parts.append(assistant == .antigravity ? "View the screenshot file(s) first. " : ""); parts.append("Asked out loud: the reply is also shown in a bubble above the mouse and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line.") }
             let t = terminal(for: currentProject, assistant: assistant)
             // Prefer one the user already runs: the tab they pointed at, else any tab for this project.
             if let ctx = terminalContext, ctx.assistant == assistant, let tab = ctx.itermSession {
@@ -759,6 +776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     func finish(result: String?, error: String?) {
+        log("answer: \(error.map { "ERROR " + $0 } ?? (result ?? "").replacingOccurrences(of: "\n", with: " ").prefix(300).description)")
         if let error { activity.error(error) } else { activity.done(cost: lastCost) }
         lastCost = nil
         if let error {
@@ -911,12 +929,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
 
         submenu("Assistant: \(Settings.assistant.appName)", in: menu) { m in
             for a in Assistant.allCases {
-                let installed = a == .claude ? FileManager.default.isExecutableFile(atPath: cfg.claude) : cfg.gemini != nil
+                let installed: Bool
+                switch a {
+                case .claude: installed = FileManager.default.isExecutableFile(atPath: cfg.claude)
+                case .antigravity: installed = cfg.agy != nil
+                case .gemini: installed = cfg.gemini != nil
+                }
                 item(a.appName + (installed ? "" : " (not installed)"), installed ? #selector(chooseAssistant(_:)) : nil, in: m,
                      on: Settings.assistant == a, value: a.rawValue)
             }
             m.addItem(.separator())
-            item("A terminal running claude or gemini is used as-is when you point at it.", nil, in: m)
+            item("A terminal running claude, agy or gemini is used as-is when you point at it.", nil, in: m)
         }
 
         // How answers are delivered
@@ -979,6 +1002,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
 
         submenu("Settings", in: menu) { m in
             item("Set Up Claude Code (MCP tools)…", #selector(setupClaudeCode), in: m)
+            item("Set Up Antigravity CLI (MCP tools)…", cfg.agy == nil ? nil : #selector(setupAgy), in: m)
             item("Set Up Gemini CLI (MCP tools)…", cfg.gemini == nil ? nil : #selector(setupGemini), in: m)
             item("Start at Login", #selector(toggleLogin), in: m, on: LoginItem.isEnabled)
             item("Instant Browser Commands (Jev)", #selector(toggleQuick), in: m, on: Settings.quickCommands)
@@ -1113,6 +1137,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         log("assistant: \(a.appName)")
     }
 
+    /// Register the MCP server with Antigravity CLI for all workspaces: add it to ~/.gemini/config/mcp_config.json and
+    /// allow its read-only/navigation tools (headless agy auto-denies anything not allow-listed).
+    @objc func setupAgy() {
+        let alert = NSAlert()
+        if cfg.agy != nil, let node = cfg.node, let server = cfg.server {
+            do {
+                try AgySetup.install(node: node, server: server)
+                alert.messageText = "Antigravity CLI is set up"
+                alert.informativeText = "visioncli's tools are now available in every agy workspace. Restart any running `agy` sessions. To answer voice questions with Gemini through Antigravity, choose 👁 → Assistant → Gemini (Antigravity CLI)."
+            } catch {
+                alert.messageText = "Couldn't set up Antigravity CLI"
+                alert.informativeText = error.localizedDescription
+            }
+        } else {
+            alert.messageText = "Antigravity CLI wasn't found"
+            alert.informativeText = "Install Antigravity (antigravity.google), sign in with `agy` once, then choose Settings → Set Up Antigravity CLI again."
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
     /// Register the MCP server with Gemini CLI for all projects (`gemini mcp add -s user --trust`). Trusted so its
     /// read-only tools also work in headless (bubble-only) mode, which can't ask for confirmation.
     @objc func setupGemini() {
@@ -1149,15 +1194,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         macOS will ask for Microphone, Speech Recognition and Screen Recording access. VisionCLI needs all three.
         To use the tools by typing in Claude Code, also give your terminal app (iTerm, Terminal…) Screen Recording access.
 
-        Set up your AI CLI now so VisionCLI's tools work in every project? (Works with Claude Code and Gemini CLI; pick which one answers voice questions in 👁 → Assistant.)
+        Set up your AI CLI now so VisionCLI's tools work in every project? (Works with Claude Code, Gemini via Antigravity CLI, and Gemini CLI; pick which one answers voice questions in 👁 → Assistant.)
         """
-        let hasClaude = FileManager.default.isExecutableFile(atPath: cfg.claude), hasGemini = cfg.gemini != nil
-        alert.addButton(withTitle: hasClaude && hasGemini ? "Set Up Both" : hasGemini ? "Set Up Gemini CLI" : "Set Up Claude Code")
+        let hasClaude = FileManager.default.isExecutableFile(atPath: cfg.claude), hasAgy = cfg.agy != nil, hasGemini = cfg.gemini != nil
+        alert.addButton(withTitle: "Set Up \([hasClaude ? "Claude Code" : nil, hasAgy ? "Antigravity" : nil, hasGemini ? "Gemini CLI" : nil].compactMap { $0 }.joined(separator: " + ").ifEmpty("Claude Code"))")
         alert.addButton(withTitle: "Later")
         if alert.runModal() == .alertFirstButtonReturn {
-            if hasClaude || !hasGemini { setupClaudeCode() }
+            if hasClaude || (!hasAgy && !hasGemini) { setupClaudeCode() }
+            if hasAgy { setupAgy() }
             if hasGemini { setupGemini() }
-            if hasGemini && !hasClaude { Settings.assistant = .gemini }
+            if !hasClaude { Settings.assistant = hasAgy ? .antigravity : .gemini }
         }
     }
 
@@ -1213,7 +1259,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     @objc func showClaudeTerminal() { terminal(for: currentProject).bringToFront() }
     @objc func continueInTerminal() {
         guard let s = current, let sid = s.sessionId else { return }
-        if s is GeminiSession, let gemini = cfg.gemini {
+        if s is AgySession, let agy = cfg.agy {
+            TerminalLauncher.run("cd '\(s.cwd.replacingOccurrences(of: "'", with: "'\\''"))' && exec '\(agy)' --conversation \(sid)", name: "continue")
+        } else if s is GeminiSession, let gemini = cfg.gemini {
             TerminalLauncher.run("cd '\(s.cwd.replacingOccurrences(of: "'", with: "'\\''"))' && exec '\(gemini)' --resume \(sid)", name: "continue")
         } else {
             TerminalLauncher.continueSession(project: s.cwd, sessionId: sid, claude: cfg.claude)
