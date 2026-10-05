@@ -43,6 +43,9 @@ final class TaskHUD {
         state.title = title
     }
 
+    /// Height taken in the top-right corner (the answer bubble goes below it).
+    var visibleHeight: CGFloat { panel.map { $0.isVisible ? $0.frame.height + 8 : 0 } ?? 0 }
+
     func hide() {
         hideWork?.cancel()
         panel?.orderOut(nil)

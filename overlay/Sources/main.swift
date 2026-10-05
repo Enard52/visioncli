@@ -389,10 +389,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         case .listening, .thinking:
             origin = CGPoint(x: m.x + 14, y: m.y - 22 - size.height / 2)
         default:
-            origin = CGPoint(x: m.x - size.width / 2, y: m.y + 14)
-            let below = origin.y + size.height > vf.maxY
-            if below { origin.y = m.y - 30 - size.height }
-            if state.below != below { state.below = below }
+            // Answers and approval cards sit in the top-right corner of the pointer's screen (under the task panel
+            // if it's showing); only the listening/thinking loader rides the cursor.
+            origin = CGPoint(x: vf.maxX - size.width - 12, y: vf.maxY - size.height - 12 - taskHUD.visibleHeight)
+            if !state.below { state.below = true } // no tail pointing at the cursor
         }
         origin.x = min(max(origin.x, vf.minX + 4), vf.maxX - size.width - 4)
         origin.y = min(max(origin.y, vf.minY + 4), vf.maxY - size.height - 4)
