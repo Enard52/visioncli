@@ -79,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     let speaker = Speaker()
     var whisper: WhisperEngine?
     var installer: ModelInstaller!
+    let updater = Updater()
     var sigterm: DispatchSourceSignal?
     let activity = ActivityLog()
     var activityShown = false
@@ -144,6 +145,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
 
         startVoiceEngines()
+        updater.onAvailable = { [weak self] release in
+            guard let self else { return }
+            self.state.question = "visioncli"
+            self.flash("VisionCLI \(release.version) is available. Install it from 👁 → Install Update.", seconds: 10)
+        }
+        updater.onError = { [weak self] message in
+            self?.state.question = "visioncli update"
+            self?.flash(message, seconds: 12)
+        }
+        updater.startAutomaticChecks()
         installer = ModelInstaller(cfg: cfg)
         installer.onFinished = { [weak self] kind, error in
             guard let self else { return }
@@ -220,6 +231,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 self.installer.debugDownload([ModelInstaller.kokoroFiles[1]])
                 Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { t in
                     if let s = self.installer.status { log("test-download status: \(s)") } else { t.invalidate() }
+                }
+            }
+        }
+
+        // Debug: `--test-update` checks GitHub and installs a newer release without dialogs.
+        if CommandLine.arguments.contains("--test-update") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                self.updater.check(manual: true) { release in
+                    log("test-update: running \(Updater.currentVersion), latest newer release: \(release?.version ?? "none")")
+                    if release != nil { self.updater.install() }
                 }
             }
         }
@@ -963,6 +984,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             item("Choose Folder…", #selector(chooseProjectFolder), in: m)
         }
         item("Hold ⌥Space to ask · ⌥⇧Space to point at an area", nil, in: menu)
+        if let status = updater.status { item("⏳ " + status, nil, in: menu) }
+        else if let release = updater.available { item("⬆︎ Install Update (\(release.version))…", #selector(installUpdate), in: menu) }
         if !Screen.hasPermission { item("⚠︎ Grant Screen Recording…", #selector(openScreenSettings), in: menu) }
         menu.addItem(.separator())
 
@@ -1053,6 +1076,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             item("Set Up Antigravity CLI (MCP tools)…", cfg.agy == nil ? nil : #selector(setupAgy), in: m)
             item("Set Up Gemini CLI (MCP tools)…", cfg.gemini == nil ? nil : #selector(setupGemini), in: m)
             item("Start at Login", #selector(toggleLogin), in: m, on: LoginItem.isEnabled)
+            item("Check for Updates… (v\(Updater.currentVersion))", #selector(checkForUpdates), in: m)
+            item("Check for Updates Automatically", #selector(toggleAutoUpdate), in: m, on: Settings.autoUpdate)
             item("Instant Browser Commands (Jev)", #selector(toggleQuick), in: m, on: Settings.quickCommands)
             item("Show AI Cursor in Browser", #selector(toggleGhost), in: m, on: !FileManager.default.fileExists(atPath: ghostOffFile.path))
             item("API Keys (TypeSafe for Jev, Gemini)…", #selector(openIntegrations), in: m)
@@ -1147,6 +1172,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             currentProject = url.path
             updateStatusTitle()
         }
+    }
+
+    @objc func toggleAutoUpdate() { Settings.autoUpdate.toggle() }
+
+    @objc func checkForUpdates() {
+        updater.check(manual: true) { [weak self] release in
+            guard let self else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            if let release {
+                alert.messageText = "VisionCLI \(release.version) is available"
+                alert.informativeText = "You have \(Updater.currentVersion). Install now? VisionCLI will restart; your permissions and settings are kept."
+                alert.addButton(withTitle: "Install Update")
+                alert.addButton(withTitle: "Release Notes")
+                alert.addButton(withTitle: "Later")
+                switch alert.runModal() {
+                case .alertFirstButtonReturn: self.updater.install()
+                case .alertSecondButtonReturn: NSWorkspace.shared.open(release.page)
+                default: break
+                }
+            } else {
+                alert.messageText = "VisionCLI is up to date"
+                alert.informativeText = "You have the latest version (\(Updater.currentVersion))."
+                alert.runModal()
+            }
+        }
+    }
+
+    @objc func installUpdate() {
+        guard let release = updater.available else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Install VisionCLI \(release.version)?"
+        alert.informativeText = "VisionCLI will download the update, check its signature, replace itself and restart. Your permissions and settings are kept."
+        alert.addButton(withTitle: "Install")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { updater.install() }
     }
 
     @objc func installWhisper() { installer.installWhisper() }

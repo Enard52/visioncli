@@ -223,6 +223,12 @@ enum Settings {
         set { d.set(newValue, forKey: "terminalMode") }
     }
 
+    /// Look for new releases automatically (launch + every 6 hours).
+    static var autoUpdate: Bool {
+        get { d.object(forKey: "autoUpdate") as? Bool ?? true }
+        set { d.set(newValue, forKey: "autoUpdate") }
+    }
+
     /// Which CLI answers voice questions.
     static var assistant: Assistant {
         get { Assistant(rawValue: d.string(forKey: "assistant") ?? "") ?? .claude }

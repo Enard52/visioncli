@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 command -v swiftc >/dev/null || { echo "swiftc not found: run xcode-select --install"; exit 1; }
 
 RELEASE="${VISIONCLI_RELEASE:-}"
-VERSION="$(node -p "require('./package.json').version" 2>/dev/null || echo 0.0.0)"
+VERSION="${VISIONCLI_VERSION:-$(node -p "require('./package.json').version" 2>/dev/null || echo 0.0.0)}"
 APP=overlay/build/VisionCLI.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -77,14 +77,20 @@ else
   [ "${VISIONCLI_BUNDLE_SERVER:-}" = "1" ] && bundle_server
 fi
 
-# Signing: releases are ad-hoc (no Apple Developer ID). Local builds prefer the stable local identity
-# (scripts/setup-signing.sh) so macOS keeps permissions across rebuilds.
-if [ -z "$RELEASE" ] && security find-certificate -c "VisionCLI Local Signing" >/dev/null 2>&1 && \
-   codesign --force --deep --sign "VisionCLI Local Signing" "$APP" 2>/dev/null; then
-  echo "Signed with VisionCLI Local Signing"
+# Signing: one stable identity for every build ("VisionCLI Release", see scripts/setup-signing.sh / the release
+# workflow), so macOS keeps Screen Recording / Microphone permissions across upgrades. An ad-hoc signature changes
+# with every build, which makes macOS ask again after each update. Falls back to the older local identity, then ad-hoc.
+IDENTITY="${VISIONCLI_SIGN_IDENTITY:-}"
+if [ -z "$IDENTITY" ]; then
+  for name in "VisionCLI Release" "VisionCLI Local Signing"; do
+    if security find-certificate -c "$name" >/dev/null 2>&1; then IDENTITY="$name"; break; fi
+  done
+fi
+if [ -n "$IDENTITY" ] && codesign --force --deep --sign "$IDENTITY" "$APP" 2>/dev/null; then
+  echo "Signed with $IDENTITY"
 else
   codesign --force --deep --sign - "$APP" >/dev/null
-  echo "Ad-hoc signed"
+  echo "Ad-hoc signed (permissions will be asked again after each update)"
 fi
 echo "Built $APP ($VERSION)"
 

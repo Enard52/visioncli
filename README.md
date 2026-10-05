@@ -36,6 +36,10 @@ by typing in <b>Claude Code or Gemini</b> (Antigravity / Gemini CLI) or <b>by vo
    - **Right-click VisionCLI → Open → Open**, or
    - run `xattr -dr com.apple.quarantine /Applications/VisionCLI.app` in Terminal.
 
+### Updates
+
+VisionCLI checks GitHub for new releases at launch and every 6 hours. When one is out, 👁 shows **Install Update**: it downloads the release, checks it's signed with the same certificate, replaces the app and restarts, keeping your permissions and settings. Use 👁 → Settings → *Check for Updates…* to check now, or turn automatic checks off there.
+
 ### 2. First launch
 
 The 👁 icon appears in the menu bar and a welcome screen offers to set up the CLIs it finds. That registers VisionCLI's tools for every project: `claude mcp add visioncli --scope user …` for Claude Code, the global MCP config for Antigravity CLI, and `gemini mcp add -s user --trust visioncli …` for Gemini CLI. You can also do it later from 👁 → Settings → *Set Up …*.
@@ -178,6 +182,7 @@ node dist/index.js voice          # start voice mode (under launchd: restarts af
 | Answers only in the terminal, or none at all | 👁 → Settings → *Open Log*; check `claude` is installed and signed in |
 | Microphone errors | Pick a specific mic in 👁 → Voice & Audio → Microphone |
 | Sound bars move but no text appears | The pill now says why. Usually: allow **Speech Recognition** for VisionCLI (Privacy & Security), or turn on **Keyboard → Dictation**. Installing Whisper also transcribes without Apple's recognizer. |
+| Asked for permissions again after updating | Expected once when moving to 0.5.3 (the first release signed with VisionCLI's permanent certificate). Later updates keep permissions. |
 | It crashed | It restarts automatically; details are in 👁 → Settings → *Open Crash Log* |
 
 ## License
