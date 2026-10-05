@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.4
+
+- Fix: *Install Update* refused updates that were correctly signed (the signature check read an extra line from `codesign`). Verified end to end: a 0.5.2 build updated itself from GitHub, kept the same certificate, and relaunched. **If you have 0.5.3, download 0.5.4 manually once**; automatic updates work from 0.5.4 on.
+
 ## 0.5.3
 
 - **Permissions survive upgrades.** Releases are now signed with VisionCLI's permanent certificate instead of an ad-hoc signature (which changed every build, so macOS asked for Screen Recording / Microphone again after each update). You'll be asked one last time when moving to 0.5.3.

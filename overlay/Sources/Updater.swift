@@ -104,7 +104,9 @@ final class Updater {
         let (verify, _, verifyErr) = shell("/usr/bin/codesign", ["--verify", "--deep", "--strict", newApp.path])
         guard verify == 0 else { return "The update's signature is invalid: \(verifyErr)" }
         let (_, reqOut, reqErr) = shell("/usr/bin/codesign", ["-dr", "-", Bundle.main.bundlePath])
-        let requirement = (reqOut + reqErr).components(separatedBy: "designated => ").last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Just the "designated => …" line (codesign also prints "Executable=…" on stderr).
+        let requirement = (reqOut + "\n" + reqErr).split(separator: "\n").first { $0.hasPrefix("designated => ") }
+            .map { String($0.dropFirst("designated => ".count)).trimmingCharacters(in: .whitespaces) } ?? ""
         if requirement.contains("certificate") {
             let (match, _, _) = shell("/usr/bin/codesign", ["--verify", "-R=\(requirement)", newApp.path])
             guard match == 0 else { return "The update isn't signed by the same certificate as this app; not installing it." }
