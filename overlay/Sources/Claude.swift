@@ -72,8 +72,28 @@ struct PermissionRequest {
 
 enum DiffKind { case added, removed, context }
 
+/// What the app needs from a background assistant session (Claude Code or Gemini CLI).
+protocol AssistantSession: AnyObject {
+    var cwd: String { get }
+    var busy: Bool { get }
+    var sessionId: String? { get }
+    var onStatus: (String) -> Void { get set }
+    var onToolStart: () -> Void { get set }
+    var onDelta: (String) -> Void { get set }
+    var onPermission: (PermissionRequest) -> Void { get set }
+    var onDone: (_ result: String?, _ error: String?) -> Void { get set }
+    var onToolUse: (_ name: String, _ input: [String: Any]) -> Void { get set }
+    var onToolResult: (_ text: String, _ isError: Bool, _ tool: String?) -> Void { get set }
+    var onCost: (Double) -> Void { get set }
+    func warm()
+    func send(text: String, shots: [Shot])
+    func respond(to req: PermissionRequest, allow: Bool)
+    func reset()
+    func stop()
+}
+
 /// One long-lived `claude` process per project, driven over stream-json so follow-ups don't pay startup cost.
-final class ClaudeSession {
+final class ClaudeSession: AssistantSession {
     let cwd: String
     private let cfg: Config
     private var proc: Process?
@@ -300,6 +320,16 @@ final class ClaudeSession {
         case "Edit", "MultiEdit", "Write": return "Editing \(base("file_path"))…"
         case "Bash": return "Running a command…"
         case "ToolSearch": return "Getting ready…"
+        // Gemini CLI tools (and visioncli MCP tools as Gemini names them)
+        case "read_file", "read_many_files": return "Reading \(base("absolute_path").isEmpty ? base("file_path") : base("absolute_path"))…"
+        case "grep_search", "search_file_content": return "Searching for “\((input["pattern"] as? String ?? "").prefix(40))”…"
+        case "glob", "list_directory": return "Finding files…"
+        case "replace", "write_file": return "Editing \(base("file_path"))…"
+        case "run_shell_command": return "Running a command…"
+        case "google_web_search", "web_fetch": return "Searching the web…"
+        case "look": return "Taking another look…"
+        case "db_schema": return "Reading the database schema…"
+        case "db_query": return "Querying the database…"
         default: return "Working…"
         }
     }

@@ -1,10 +1,11 @@
 import AppKit
 
-/// Terminal mode: the conversation lives in a real interactive `claude` running in iTerm2 (or Terminal),
-/// so the user can type to it like `claude -c`. Voice questions are typed into that session for them, and
-/// the bubble follows the session's transcript (~/.claude/projects/<project>/<session>.jsonl).
+/// Terminal mode: the conversation lives in a real interactive `claude` or `gemini` running in iTerm2 (or Terminal),
+/// so the user can type to it like `claude -c`. Voice questions are typed into that session for them, and the bubble
+/// follows the session file (Claude: ~/.claude/projects/<project>/<id>.jsonl; Gemini: ~/.gemini/tmp/<project>/chats/).
 final class TerminalSession {
     let project: String
+    let assistant: Assistant
     private let cfg: Config
     private(set) var sessionId: String
     private var termId: String?          // iTerm session unique id, or Terminal tab reference
@@ -17,6 +18,7 @@ final class TerminalSession {
     private var finalText = ""
     private var lastTool: String?
     private var lastToolAt = Date()
+    private var seenToolIds = Set<String>()
 
     var onStatus: (String) -> Void = { _ in }
     var onToolUse: (_ name: String, _ input: [String: Any]) -> Void = { _, _ in }
@@ -28,25 +30,41 @@ final class TerminalSession {
     Some messages end with a "[Voice question …]" block: the user asked those out loud while looking at their screen, and your reply is also shown in a small bubble above their mouse pointer and may be read aloud. For those, first Read the screenshot file(s) listed in the block (the pointer position is given in image pixels; "this/here/that" means what's under the pointer), then follow the rest of these instructions.
     """ + "\n" + voiceSystemPrompt
 
-    init(project: String, cfg: Config) {
+    init(project: String, cfg: Config, assistant: Assistant) {
         self.project = project
         self.cfg = cfg
+        self.assistant = assistant
         self.usesITerm = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.googlecode.iterm2") != nil
         // Reuse this project's terminal conversation across app restarts.
-        let key = "terminalSession:\(project)"
+        let key = TerminalSession.key(project, assistant)
         if let saved = UserDefaults.standard.string(forKey: key) { sessionId = saved } else {
             sessionId = UUID().uuidString.lowercased()
             UserDefaults.standard.set(sessionId, forKey: key)
         }
     }
 
-    /// Folder claude runs in (its transcripts live under it); usually the project root.
+    private static func key(_ project: String, _ assistant: Assistant) -> String {
+        assistant == .claude ? "terminalSession:\(project)" : "terminalSession:\(assistant.rawValue):\(project)"
+    }
+    private var defaultsKey: String { TerminalSession.key(project, assistant) }
+
+    /// Folder the CLI runs in (its session files are keyed by it); usually the project root.
     var claudeCwd: String?
 
-    var transcript: URL {
-        let encoded = (claudeCwd ?? project).replacingOccurrences(of: #"[^A-Za-z0-9]"#, with: "-", options: .regularExpression)
-        return home.appendingPathComponent(".claude/projects/\(encoded)/\(sessionId).jsonl")
+    /// The session file being followed (nil until the CLI has written it).
+    var transcriptURL: URL? {
+        let cwd = claudeCwd ?? project
+        if assistant == .claude {
+            let encoded = cwd.replacingOccurrences(of: #"[^A-Za-z0-9]"#, with: "-", options: .regularExpression)
+            return home.appendingPathComponent(".claude/projects/\(encoded)/\(sessionId).jsonl")
+        }
+        if let cached = geminiFile, cachedFor == sessionId { return cached }
+        geminiFile = TerminalProbe.sessionFile(.gemini, cwd: cwd, sessionId: sessionId)
+        cachedFor = sessionId
+        return geminiFile
     }
+    private var geminiFile: URL?
+    private var cachedFor = ""
 
     var isBusy: Bool { awaiting != nil }
 
@@ -56,17 +74,17 @@ final class TerminalSession {
         termId = itermSession
         if let sessionId, sessionId != self.sessionId {
             self.sessionId = sessionId
-            UserDefaults.standard.set(sessionId, forKey: "terminalSession:\(project)")
-            offset = (try? FileManager.default.attributesOfItem(atPath: transcript.path)[.size] as? UInt64) ?? 0
+            UserDefaults.standard.set(sessionId, forKey: defaultsKey)
+            offset = transcriptURL.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? UInt64 } ?? 0
             buffer = Data()
         }
-        log("terminal: attached to your claude in iTerm (session \(self.sessionId)) for \(project)")
+        log("terminal: attached to your \(assistant.binary) in iTerm (session \(self.sessionId)) for \(project)")
     }
 
     /// Start a fresh conversation next time (menu: New Conversation).
     func reset() {
         sessionId = UUID().uuidString.lowercased()
-        UserDefaults.standard.set(sessionId, forKey: "terminalSession:\(project)")
+        UserDefaults.standard.set(sessionId, forKey: defaultsKey)
         termId = nil
         offset = 0
     }
@@ -80,22 +98,23 @@ final class TerminalSession {
         seenQuestion = false
         finalText = ""
         lastTool = nil
+        seenToolIds = []
         startWatching()
         if let id = termId, send(line, to: id) {
             log("terminal: typed voice question into \(usesITerm ? "iTerm" : "Terminal") session")
             return
         }
-        // No live tab: use a claude the user already runs for this project before opening a new terminal.
-        if let found = TerminalProbe.findClaude(forProject: project), let tab = found.itermSession {
+        // No live tab: use one the user already runs for this project before opening a new terminal.
+        if let found = TerminalProbe.find(assistant, forProject: project), let tab = found.itermSession {
             claudeCwd = found.cwd
-            attach(itermSession: tab, sessionId: found.claudeSessionId)
+            attach(itermSession: tab, sessionId: found.sessionId)
             if send(line, to: tab) {
-                log("terminal: typed voice question into your existing claude")
+                log("terminal: typed voice question into your existing \(assistant.binary)")
                 return
             }
         }
-        // None running: open one, wait for claude's prompt, then type.
-        onStatus("Opening Claude in the terminal…")
+        // None running: open one, wait for its prompt, then type.
+        onStatus("Opening \(assistant.name) in the terminal…")
         guard let id = open() else {
             awaiting = nil
             onDone(nil, "Couldn't open a terminal. Allow VisionCLI to control \(usesITerm ? "iTerm" : "Terminal") in System Settings → Privacy & Security → Automation.")
@@ -139,24 +158,39 @@ final class TerminalSession {
         try? fm.createDirectory(at: TerminalSession.scriptsDir, withIntermediateDirectories: true)
         let promptFile = TerminalSession.scriptsDir.appendingPathComponent("voice-prompt.txt")
         try? TerminalSession.terminalPrompt.write(to: promptFile, atomically: true, encoding: .utf8)
-        let resume = fm.fileExists(atPath: transcript.path)
+        claudeCwd = nil
+        let resume = transcriptURL.map { fm.fileExists(atPath: $0.path) } ?? false
         let quote = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let command: String
+        if assistant == .claude {
+            command = """
+            \(quote(cfg.claude)) --append-system-prompt "$(cat \(quote(promptFile.path)))" \\
+              --allowedTools \(autoAllowedTools.joined(separator: " ")) \\
+              \(resume ? "--resume" : "--session-id") \(sessionId)
+            """
+        } else {
+            // Gemini has no --append-system-prompt; each voice question carries its own short instructions.
+            let env = cfg.geminiEnvironment()
+            let auth = env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"].map { override in
+                // Read the key at launch so it isn't stored in this script.
+                "export GEMINI_CLI_SYSTEM_SETTINGS_PATH=\(quote(override)); export GEMINI_API_KEY=\"$(\(quote(cfg.node ?? "node")) -e 'try{const c=require(process.argv[1]);process.stdout.write((c.gemini&&c.gemini.apiKey)||process.env.GEMINI_API_KEY||\"\")}catch{process.stdout.write(process.env.GEMINI_API_KEY||\"\")}' \(quote(supportDir.appendingPathComponent("integrations.json").path)))\"\n"
+            } ?? ""
+            command = auth + "\(quote(cfg.gemini ?? "gemini")) \(resume ? "--resume" : "--session-id") \(sessionId)"
+        }
         let script = """
         #!/bin/zsh -l
-        printf '\\e]0;claude · \((project as NSString).lastPathComponent) (visioncli)\\a'
+        printf '\\e]0;\(assistant.binary) · \((project as NSString).lastPathComponent) (visioncli)\\a'
         cd \(quote(project))
-        \(quote(cfg.claude)) --append-system-prompt "$(cat \(quote(promptFile.path)))" \\
-          --allowedTools \(autoAllowedTools.joined(separator: " ")) \\
-          \(resume ? "--resume" : "--session-id") \(sessionId)
-        echo; echo "claude exited. Press Enter to close."; read
+        \(command)
+        echo; echo "\(assistant.binary) exited. Press Enter to close."; read
         """
         let stable = project.utf8.reduce(UInt64(5381)) { ($0 &* 33) &+ UInt64($1) }
-        let file = TerminalSession.scriptsDir.appendingPathComponent("claude-\(stable).sh")
+        let file = TerminalSession.scriptsDir.appendingPathComponent("\(assistant.binary)-\(stable).sh")
         try? script.write(to: file, atomically: true, encoding: .utf8)
         try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
-        offset = (try? fm.attributesOfItem(atPath: transcript.path)[.size] as? UInt64) ?? 0
+        offset = transcriptURL.flatMap { try? fm.attributesOfItem(atPath: $0.path)[.size] as? UInt64 } ?? 0
         buffer = Data()
-        log("terminal: opening claude (\(resume ? "resume" : "new") \(sessionId)) in \(project)")
+        log("terminal: opening \(assistant.binary) (\(resume ? "resume" : "new") \(sessionId)) in \(project)")
         if usesITerm {
             return applescript("""
             tell application "iTerm2"
@@ -214,6 +248,7 @@ final class TerminalSession {
             screen = applescript("tell application \"Terminal\" to return contents of \(id)") ?? ""
         }
         let ready = screen.contains("shortcuts") || screen.contains("? for") || screen.contains("❯") || screen.contains("│ >")
+            || screen.contains("Type your message")
         if ready || tries <= 0 {
             // Let startup output (hooks, banners) settle so typed characters aren't eaten.
             DispatchQueue.main.asyncAfter(deadline: .now() + (ready ? 1.5 : 0)) { then() }
@@ -237,7 +272,7 @@ final class TerminalSession {
     }
 
     private func poll() {
-        guard let h = try? FileHandle(forReadingFrom: transcript) else { return }
+        guard let url = transcriptURL, let h = try? FileHandle(forReadingFrom: url) else { return }
         defer { try? h.close() }
         let size = h.seekToEndOfFile()
         if size < offset { offset = 0 } // file replaced
@@ -253,6 +288,7 @@ final class TerminalSession {
     }
 
     private func handle(_ obj: [String: Any]) {
+        if assistant == .gemini { handleGemini(obj); return }
         guard let marker = awaiting, obj["isSidechain"] as? Bool != true else { return }
         let message = obj["message"] as? [String: Any] ?? [:]
         switch obj["type"] as? String {
@@ -292,6 +328,39 @@ final class TerminalSession {
         }
     }
 
+    /// Gemini session lines: {"type":"user","content":[{"text"}]}, {"type":"gemini","content":"…","toolCalls":[…]}.
+    /// A message is re-written (same id) as it updates; there's no end-of-turn marker, so finish once the reply text
+    /// has been stable for a moment.
+    private func handleGemini(_ obj: [String: Any]) {
+        guard let marker = awaiting else { return }
+        switch obj["type"] as? String {
+        case "user":
+            let parts = obj["content"] as? [[String: Any]] ?? []
+            if parts.contains(where: { ($0["text"] as? String)?.contains(marker) == true }) || (obj["content"] as? String)?.contains(marker) == true {
+                seenQuestion = true
+            }
+        case "gemini":
+            guard seenQuestion else { return }
+            let calls = obj["toolCalls"] as? [[String: Any]] ?? []
+            for call in calls {
+                let id = call["id"] as? String ?? UUID().uuidString
+                guard seenToolIds.insert(id).inserted else { continue }
+                let name = call["name"] as? String ?? ""
+                lastTool = name
+                lastToolAt = Date()
+                finishWork?.cancel()
+                finalText = ""
+                onToolUse(name, call["args"] as? [String: Any] ?? [:])
+            }
+            if calls.isEmpty, let text = obj["content"] as? String, !text.isEmpty {
+                finalText = text
+                scheduleFinish(after: 2.5)
+            }
+        default:
+            break
+        }
+    }
+
     private var finishWork: DispatchWorkItem?
 
     private func scheduleFinish(after seconds: Double) {
@@ -307,14 +376,15 @@ final class TerminalSession {
         guard awaiting != nil else { return }
         awaiting = nil
         let text = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
-        onDone(text.isEmpty ? nil : text, text.isEmpty ? "Claude finished without a text reply; see the terminal." : nil)
+        onDone(text.isEmpty ? nil : text, text.isEmpty ? "\(assistant.name) finished without a text reply; see the terminal." : nil)
     }
 
     /// Edits and commands may be waiting for approval in the terminal; say so in the bubble.
     private func checkApprovalWait() {
-        guard awaiting != nil, let tool = lastTool, ["Edit", "MultiEdit", "Write", "Bash", "NotebookEdit"].contains(tool),
+        guard awaiting != nil, let tool = lastTool,
+              ["Edit", "MultiEdit", "Write", "Bash", "NotebookEdit", "replace", "write_file", "run_shell_command"].contains(tool),
               Date().timeIntervalSince(lastToolAt) > 1.5 else { return }
-        onStatus("Running \(tool)… approve in the Claude terminal if asked")
+        onStatus("Running \(tool)… approve in the \(assistant.name) terminal if asked")
         lastTool = nil
     }
 }

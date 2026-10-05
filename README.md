@@ -4,7 +4,7 @@
 
 <p align="center">
 Let Claude see your screen. Ask about the file, error, UI, database table or web page you're looking at,<br>
-by typing in Claude Code or <b>by voice</b>, with the answer floating above your mouse pointer.
+by typing in <b>Claude Code or Gemini CLI</b> or <b>by voice</b>, with the answer floating above your mouse pointer.
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@ by typing in Claude Code or <b>by voice</b>, with the answer floating above your
 ### Requirements
 
 - macOS 13 or later (Apple Silicon or Intel)
-- [Claude Code](https://claude.com/claude-code) (`claude` CLI), signed in
+- [Claude Code](https://claude.com/claude-code) (`claude` CLI), signed in, **and/or** [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`) with a Gemini API key (see [Gemini CLI](#gemini-cli))
 - [Node.js](https://nodejs.org) 18 or later
 
 ### 1. Download the app
@@ -38,7 +38,7 @@ by typing in Claude Code or <b>by voice</b>, with the answer floating above your
 
 ### 2. First launch
 
-The 👁 icon appears in the menu bar and a welcome screen offers **Set Up Claude Code**. That registers VisionCLI's tools for every Claude Code project (it runs `claude mcp add visioncli --scope user …`). You can also do it later from 👁 → Settings → *Set Up Claude Code*.
+The 👁 icon appears in the menu bar and a welcome screen offers to set up the CLIs it finds. That registers VisionCLI's tools for every project: `claude mcp add visioncli --scope user …` for Claude Code, and `gemini mcp add -s user --trust visioncli …` for Gemini CLI. You can also do it later from 👁 → Settings → *Set Up Claude Code* / *Set Up Gemini CLI*.
 
 macOS will ask for three permissions. VisionCLI needs all of them:
 
@@ -57,8 +57,22 @@ If something doesn't work, check System Settings → Privacy & Security, and �
 |---|---|---|
 | **Whisper** | Better transcription of names and jargon (~0.7s) | `brew install whisper-cpp`, then put a model such as [`ggml-small.en.bin`](https://huggingface.co/ggerganov/whisper.cpp) in `~/Library/Application Support/visioncli/models/` |
 | **Kokoro** | Natural voices for spoken answers | install [`uv`](https://docs.astral.sh/uv/), then put [`kokoro-v1.0.onnx` and `voices-v1.0.bin`](https://github.com/thewh1teagle/kokoro-onnx/releases) in the same `models/` folder |
-| **TypeSafe Jev** | Instant browser commands | add your key via 👁 → Settings → *TypeSafe API Key (Jev)*, or set `TYPESAFE_API_KEY` |
+| **TypeSafe Jev** | Instant browser commands | add your key via 👁 → Settings → *API Keys*, or set `TYPESAFE_API_KEY` |
 | **Browser control** | Click, scroll and read pages | in Chrome or Brave: **View → Developer → Allow JavaScript from Apple Events** |
+
+## Gemini CLI
+
+VisionCLI works with Gemini CLI as well as Claude Code:
+
+- **Typing in `gemini`:** after *Set Up Gemini CLI*, the visioncli tools (look, browser, database, device screenshots…) are available in every Gemini CLI project.
+- **Voice with Gemini:** choose 👁 → **Assistant → Gemini CLI**.
+  - *Gemini Terminal* mode types your question into the `gemini` running for the project (or opens one), attaches screenshots as `@file`, and shows the answer in both the terminal and the bubble.
+  - *Bubble Only* mode runs `gemini -p … -o stream-json`, resuming the same session each time.
+- **Pointing at a terminal** that runs `claude` or `gemini` uses that CLI, whatever the Assistant setting.
+
+**Sign-in:** Google no longer serves Gemini CLI on a *personal Google sign-in* (the free "Code Assist for individuals" tier says to move to Antigravity). Use a **Gemini API key** from [aistudio.google.com/apikey](https://aistudio.google.com/apikey): put it in 👁 → Settings → *API Keys* (`"gemini": {"apiKey": "..."}`) or set `GEMINI_API_KEY` before `visioncli voice`. VisionCLI then runs `gemini` with API-key auth for its own sessions (a per-run settings override), without changing your Gemini settings. Paid Code Assist (Standard/Enterprise) sign-ins keep working as-is.
+
+**Limits:** in Bubble Only mode Gemini can't ask for approval, so it can only read (code, screen, browser, database); for edits and commands use Gemini Terminal mode. Highlight boxes, history, speech and Jev work the same with either assistant.
 
 ## Use it
 
@@ -75,7 +89,7 @@ If something doesn't work, check System Settings → Privacy & Security, and �
 
 **Which project?** By default VisionCLI follows the window under your mouse. PhpStorm `myshop – payments` maps to `~/PhpstormProjects/myshop`, and a terminal running `claude` maps to its folder. With several projects open, pick one in **👁 → Project**. The menu bar shows the current project, with 📌 when you've chosen one.
 
-**Which Claude session?** In **Claude Terminal** mode (the default), voice questions are typed into the `claude` already running for that project in iTerm, or a new one is opened. You can type there too; it's one conversation, and answers show in both the terminal and the bubble. **Bubble Only** mode uses a hidden, leaner session instead. Switch in 👁 → *Answer In*.
+**Which session?** In **Terminal** mode (the default), voice questions are typed into the `claude` (or `gemini`, see [Gemini CLI](#gemini-cli)) already running for that project in iTerm, or a new one is opened. You can type there too; it's one conversation, and answers show in both the terminal and the bubble. **Bubble Only** mode uses a hidden, leaner session instead. Switch in 👁 → *Answer In*.
 
 ### In Claude Code (typing)
 
@@ -102,17 +116,23 @@ Slash commands: `/mcp__visioncli__see <question>`, `/mcp__visioncli__point <ques
 
 ## Menu
 
-**👁 Project** (Auto, or pick from running `claude` sessions, open editors and recent projects) · **Answer In** (Claude terminal, or bubble only) · **Model** (Sonnet or Opus) · **Voice & Audio** (speak answers, speed up to 2×, voice, speech recognition, microphone, speaker) · History · Copy Last Answer · New Conversation · **Settings** (Set Up Claude Code, Start at Login, instant browser commands, AI cursor, TypeSafe key, logs).
+**👁 Project** (Auto, or pick from running `claude`/`gemini` sessions, open editors and recent projects) · **Assistant** (Claude Code or Gemini CLI) · **Answer In** (terminal, or bubble only) · **Model** (Sonnet or Opus, for Claude) · **Voice & Audio** (speak answers, speed up to 2×, voice, speech recognition, microphone, speaker) · History · Copy Last Answer · New Conversation · **Settings** (Set Up Claude Code / Gemini CLI, Start at Login, instant browser commands, AI cursor, API keys, logs).
 
-## TypeSafe key (Jev)
+## API keys
 
-Instant browser commands use a [TypeSafe](https://typesafe.ai) key. 👁 → Settings → *TypeSafe API Key (Jev)* opens `~/Library/Application Support/visioncli/integrations.json` (readable only by you):
+👁 → Settings → *API Keys* opens `~/Library/Application Support/visioncli/integrations.json` (readable only by you):
 
 ```json
-{ "typesafe": { "apiKey": "..." } }
+{
+  "typesafe": { "apiKey": "..." },
+  "gemini": { "apiKey": "..." }
+}
 ```
 
-Or set `TYPESAFE_API_KEY` in your shell before running `visioncli voice`. Without a key, every request goes to Claude.
+- `typesafe`: instant browser commands with [Jev](https://typesafe.ai). Without it, every request goes to the assistant.
+- `gemini`: lets VisionCLI run Gemini CLI with API-key auth.
+
+`TYPESAFE_API_KEY` / `GEMINI_API_KEY` in your shell are copied here by `visioncli voice` if the file has none.
 
 ## Privacy
 
@@ -125,7 +145,7 @@ Or set `TYPESAFE_API_KEY` in your shell before running `visioncli voice`. Withou
 ```bash
 git clone https://github.com/thethirdsourcers/visioncli.git && cd visioncli
 npm install                       # builds the MCP server (dist/)
-node dist/index.js install        # register with Claude Code for all projects
+node dist/index.js install        # register with Claude Code (and Gemini CLI, if installed) for all projects
 npm run build                     # build VisionCLI.app and install it into /Applications
 node dist/index.js voice          # start voice mode (under launchd: restarts after a crash)
 ```
@@ -141,7 +161,8 @@ node dist/index.js voice          # start voice mode (under launchd: restarts af
 |---|---|
 | "VisionCLI can't be opened" | Right-click → Open, or `xattr -dr com.apple.quarantine /Applications/VisionCLI.app` |
 | Claude sees only the wallpaper | Voice: enable Screen Recording for VisionCLI. Typing in Claude Code: enable it for your terminal app. Then quit and reopen that app. |
-| Tools missing in Claude Code | 👁 → Settings → *Set Up Claude Code* (again after moving the app or switching Node versions), then restart `claude` |
+| Tools missing in Claude Code / Gemini CLI | 👁 → Settings → *Set Up Claude Code* / *Set Up Gemini CLI* (again after moving the app or switching Node versions), then restart `claude` / `gemini` |
+| Gemini: "no longer supported…" or "API key not valid" | Add a valid key from aistudio.google.com/apikey in 👁 → Settings → *API Keys* |
 | Answers only in the terminal, or none at all | 👁 → Settings → *Open Log*; check `claude` is installed and signed in |
 | Microphone errors | Pick a specific mic in 👁 → Voice & Audio → Microphone |
 | It crashed | It restarts automatically; details are in 👁 → Settings → *Open Crash Log* |

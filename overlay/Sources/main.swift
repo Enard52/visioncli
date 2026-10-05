@@ -90,16 +90,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     let selector = RegionSelector()
     var statusItem: NSStatusItem!
 
-    var sessions: [String: ClaudeSession] = [:]
+    var sessions: [String: AssistantSession] = [:]   // key: "<assistant>:<project>"
     var terminals: [String: TerminalSession] = [:]
     var currentTerminal: TerminalSession?
     var terminalContext: TerminalContext?
     var existingClaude: (project: String, context: TerminalContext)?
-    var current: ClaudeSession?
+    var current: AssistantSession?
     var currentProject: String {
         didSet { if currentProject != oldValue { updateStatusTitle() } }
     }
-    var candidates: (claude: [String], windows: [String]) = ([], [])
+    var candidates: (running: [(project: String, assistant: Assistant)], windows: [String]) = ([], [])
     var currentShots: [Shot] = []
     var currentWindow: WinInfo?
     var alwaysAllow: [String: Set<String>] = [:] // project → tools approved for the session
@@ -144,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         if Config.isFirstRun { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showWelcome() } }
         Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.refreshCandidates() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-            log("project candidates: claude=\(self.candidates.claude) windows=\(self.candidates.windows)")
+            log("project candidates: running=\(self.candidates.running.map { "\($0.assistant.binary):\($0.project)" }) windows=\(self.candidates.windows)")
         }
         if let recovered {
             log("recovered from a crash")
@@ -180,12 +180,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             DispatchQueue.global().async {
                 for project in [self.cfg.cwd] {
                     let started = Date()
-                    let c = TerminalProbe.findClaude(forProject: project)
-                    log("find claude for \(project): \(c.map { "tab=\($0.itermSession ?? "-") session=\($0.claudeSessionId ?? "-") cwd=\($0.cwd)" } ?? "none") (\(Int(Date().timeIntervalSince(started) * 1000))ms)")
+                    let c = TerminalProbe.find(Settings.assistant, forProject: project)
+                    log("find \(Settings.assistant.binary) for \(project): \(c.map { "tab=\($0.itermSession ?? "-") session=\($0.sessionId ?? "-") cwd=\($0.cwd)" } ?? "none") (\(Int(Date().timeIntervalSince(started) * 1000))ms)")
                 }
                 for app in ["iTerm2", "Terminal"] {
                     let c = TerminalProbe.probe(app: app)
-                    log("probe \(app): \(c.map { "project=\($0.project) cwd=\($0.cwd) claude=\($0.runsClaude) session=\($0.claudeSessionId ?? "-") tab=\($0.itermSession ?? "-")" } ?? "nothing")")
+                    log("probe \(app): \(c.map { "project=\($0.project) cwd=\($0.cwd) assistant=\($0.assistant?.binary ?? "-") session=\($0.sessionId ?? "-") tab=\($0.itermSession ?? "-")" } ?? "nothing")")
                 }
             }
         }
@@ -371,7 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                     self.terminalContext = ctx
                     self.currentProject = ctx.project
                     self.state.project = (ctx.project as NSString).lastPathComponent
-                    log("terminal context: \(ctx.project)\(ctx.runsClaude ? " (claude running, session \(ctx.claudeSessionId ?? "?"))" : "")")
+                    log("terminal context: \(ctx.project)\(ctx.assistant.map { " (\($0.binary) running, session \(ctx.sessionId ?? "?"))" } ?? "")")
                 }
             }
         }
@@ -379,7 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         if Settings.terminalMode {
             let project = currentProject
             DispatchQueue.global().async {
-                let found = TerminalProbe.findClaude(forProject: project)
+                let found = TerminalProbe.find(Settings.assistant, forProject: project)
                 DispatchQueue.main.async { self.existingClaude = found.map { (project, $0) } }
             }
         }
@@ -610,9 +610,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
 
     // MARK: Claude
 
-    func session(for project: String) -> ClaudeSession {
-        if let s = sessions[project] { return s }
-        let s = ClaudeSession(cwd: project, cfg: cfg)
+    func session(for project: String) -> AssistantSession {
+        let key = "\(Settings.assistant.rawValue):\(project)"
+        if let s = sessions[key] { return s }
+        let s: AssistantSession = Settings.assistant == .gemini ? GeminiSession(cwd: project, cfg: cfg) : ClaudeSession(cwd: project, cfg: cfg)
         s.onStatus = { [weak self, weak s] text in
             guard let self, s === self.current else { return }
             self.state.status = text
@@ -655,17 +656,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             self.finish(result: result, error: error)
         }
         // Keep at most a few projects warm.
-        if sessions.count >= 3, let victim = sessions.values.first(where: { $0 !== current && !$0.busy }) {
+        if sessions.count >= 3, let (victimKey, victim) = sessions.first(where: { $0.value !== current && !$0.value.busy }) {
             victim.stop()
-            sessions[victim.cwd] = nil
+            sessions[victimKey] = nil
         }
-        sessions[project] = s
+        sessions[key] = s
         return s
     }
 
-    func terminal(for project: String) -> TerminalSession {
-        if let t = terminals[project] { return t }
-        let t = TerminalSession(project: project, cfg: cfg)
+    func terminal(for project: String, assistant: Assistant = Settings.assistant) -> TerminalSession {
+        let key = "\(assistant.rawValue):\(project)"
+        if let t = terminals[key] { return t }
+        let t = TerminalSession(project: project, cfg: cfg, assistant: assistant)
         t.onStatus = { [weak self, weak t] text in
             guard let self, t === self.currentTerminal else { return }
             self.state.status = text
@@ -683,7 +685,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             guard let self, t === self.currentTerminal else { return }
             self.finish(result: result, error: error)
         }
-        terminals[project] = t
+        terminals[key] = t
         return t
     }
 
@@ -710,27 +712,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         activity.question(question, project: currentProject, shots: saved)
 
         if Settings.terminalMode {
-            // Typed into the real Claude terminal for this project; screenshots are passed as files to Read.
+            // The CLI running in the tab the user pointed at wins; otherwise the chosen assistant.
+            let assistant = terminalContext?.assistant ?? Settings.assistant
+            let gemini = assistant == .gemini
+            let paths = gemini ? geminiAttachable(saved) : saved.compactMap { $0.file?.path }
             var parts = ["Project: \(currentProject)."]
             for (i, shot) in saved.enumerated() {
                 var p = "Screenshot \(i + 1): \(shot.label), \(Int(shot.pixelSize.width))x\(Int(shot.pixelSize.height)) px"
                 if let pt = shot.pointer { p += ", mouse pointer at (\(Int(pt.x)), \(Int(pt.y)))" }
-                if let f = shot.file { p += ", file \(f.path)" }
+                if i < paths.count { p += gemini ? ", @\(paths[i]) " : ", file \(paths[i])" }
                 parts.append(p + ".")
             }
-            let t = terminal(for: currentProject)
-            // Prefer a claude the user already runs: the tab they pointed at, else any tab for this project.
-            if let ctx = terminalContext, ctx.runsClaude, let tab = ctx.itermSession {
+            // Gemini can't take a system prompt in its interactive mode, so the voice instructions ride along.
+            if gemini { parts.append("Asked out loud: the reply is also shown in a bubble above the mouse and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line.") }
+            let t = terminal(for: currentProject, assistant: assistant)
+            // Prefer one the user already runs: the tab they pointed at, else any tab for this project.
+            if let ctx = terminalContext, ctx.assistant == assistant, let tab = ctx.itermSession {
                 t.claudeCwd = ctx.cwd
-                t.attach(itermSession: tab, sessionId: ctx.claudeSessionId)
-            } else if let found = existingClaude, found.project == currentProject, let tab = found.context.itermSession {
+                t.attach(itermSession: tab, sessionId: ctx.sessionId)
+            } else if let found = existingClaude, found.project == currentProject, found.context.assistant == assistant,
+                      let tab = found.context.itermSession {
                 t.claudeCwd = found.context.cwd
-                t.attach(itermSession: tab, sessionId: found.context.claudeSessionId)
+                t.attach(itermSession: tab, sessionId: found.context.sessionId)
             }
             currentTerminal = t
             current = nil
             state.raw = ""
-            state.status = "Sending to Claude in the terminal…"
+            state.status = "Sending to \(assistant.name) in the terminal…"
             if state.phase != .thinking { set(.thinking) }
             t.ask("\(question) [Voice question. \(parts.joined(separator: " "))]")
             return
@@ -888,9 +896,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 item("\((path as NSString).lastPathComponent)   \(note)\(shortPath)", #selector(pickProject(_:)), in: m,
                      on: Settings.pinnedProject == path, value: path)
             }
-            for p in candidates.claude { add(p, note: "⚡ claude running · ") }
+            for r in candidates.running { add(r.project, note: "⚡ \(r.assistant.binary) running · ") }
             for p in candidates.windows { add(p, note: "open · ") }
-            for p in [currentProject] + Array(Set(history.entries.prefix(50).map(\.project))).sorted() + terminals.keys.sorted() + sessions.keys.sorted() {
+            for p in [currentProject] + Array(Set(history.entries.prefix(50).map(\.project))).sorted() + terminals.values.map(\.project).sorted() + sessions.values.map(\.cwd).sorted() {
                 add(p, note: "recent · ")
             }
             if seen.isEmpty { item("No projects found yet", nil, in: m) }
@@ -901,13 +909,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         if !Screen.hasPermission { item("⚠︎ Grant Screen Recording…", #selector(openScreenSettings), in: menu) }
         menu.addItem(.separator())
 
+        submenu("Assistant: \(Settings.assistant.appName)", in: menu) { m in
+            for a in Assistant.allCases {
+                let installed = a == .claude ? FileManager.default.isExecutableFile(atPath: cfg.claude) : cfg.gemini != nil
+                item(a.appName + (installed ? "" : " (not installed)"), installed ? #selector(chooseAssistant(_:)) : nil, in: m,
+                     on: Settings.assistant == a, value: a.rawValue)
+            }
+            m.addItem(.separator())
+            item("A terminal running claude or gemini is used as-is when you point at it.", nil, in: m)
+        }
+
         // How answers are delivered
         submenu("Answer In", in: menu) { m in
-            item("Claude Terminal: type or talk, same conversation", #selector(useTerminalMode), in: m, on: Settings.terminalMode)
+            item("\(Settings.assistant.name) Terminal: type or talk, same conversation", #selector(useTerminalMode), in: m, on: Settings.terminalMode)
             item("Bubble Only: background, leaner", #selector(useBackgroundMode), in: m, on: !Settings.terminalMode)
             m.addItem(.separator())
             if Settings.terminalMode {
-                item("Show Claude Terminal", #selector(showClaudeTerminal), in: m, key: "t")
+                item("Show \(Settings.assistant.name) Terminal", #selector(showClaudeTerminal), in: m, key: "t")
             } else {
                 item("Show Live Activity in Terminal", #selector(showActivityMenu), in: m, key: "t")
                 item("Continue Conversation in Terminal", current?.sessionId == nil ? nil : #selector(continueInTerminal), in: m)
@@ -915,12 +933,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             }
         }
 
-        submenu("Model", in: menu) { m in
+        if Settings.assistant == .claude { submenu("Model", in: menu) { m in
             let model = cfg.model ?? Settings.model
             item("Fast (Sonnet)", #selector(useSonnet), in: m, on: model == "sonnet")
             item("Deeper (Opus)", #selector(useOpus), in: m, on: model == "opus")
             if cfg.model != nil { item("(set by VISIONCLI_MODEL)", nil, in: m) }
-        }
+        } }
 
         submenu("Voice & Audio", in: menu) { m in
             item("Speak Answers", #selector(toggleSpeakSetting), in: m, on: Settings.speak)
@@ -961,10 +979,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
 
         submenu("Settings", in: menu) { m in
             item("Set Up Claude Code (MCP tools)…", #selector(setupClaudeCode), in: m)
+            item("Set Up Gemini CLI (MCP tools)…", cfg.gemini == nil ? nil : #selector(setupGemini), in: m)
             item("Start at Login", #selector(toggleLogin), in: m, on: LoginItem.isEnabled)
             item("Instant Browser Commands (Jev)", #selector(toggleQuick), in: m, on: Settings.quickCommands)
             item("Show AI Cursor in Browser", #selector(toggleGhost), in: m, on: !FileManager.default.fileExists(atPath: ghostOffFile.path))
-            item("TypeSafe API Key (Jev)…", #selector(openIntegrations), in: m)
+            item("API Keys (TypeSafe for Jev, Gemini)…", #selector(openIntegrations), in: m)
             m.addItem(.separator())
             item("Open Log", #selector(openLog), in: m)
             if ((try? FileManager.default.attributesOfItem(atPath: CrashReporter.logURL.path)[.size] as? Int) ?? 0) > 0 {
@@ -1027,12 +1046,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         statusItem?.button?.font = NSFont.menuBarFont(ofSize: 0)
     }
 
-    /// Refresh the Project menu's candidates in the background (running claudes, open editor windows).
+    /// Refresh the Project menu's candidates in the background (running claude/gemini sessions, open editor windows).
     func refreshCandidates() {
         DispatchQueue.global(qos: .utility).async {
-            let claude = TerminalProbe.runningClaudeProjects()
+            let running = TerminalProbe.runningProjects()
             DispatchQueue.main.async {
-                self.candidates = (claude, self.projects.openWindowProjects())
+                self.candidates = (running, self.projects.openWindowProjects())
             }
         }
     }
@@ -1088,6 +1107,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         alert.runModal()
     }
 
+    @objc func chooseAssistant(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let a = Assistant(rawValue: raw) else { return }
+        Settings.assistant = a
+        log("assistant: \(a.appName)")
+    }
+
+    /// Register the MCP server with Gemini CLI for all projects (`gemini mcp add -s user --trust`). Trusted so its
+    /// read-only tools also work in headless (bubble-only) mode, which can't ask for confirmation.
+    @objc func setupGemini() {
+        let alert = NSAlert()
+        if let gemini = cfg.gemini, let node = cfg.node, let server = cfg.server {
+            var env = ProcessInfo.processInfo.environment
+            env["PATH"] = cfg.path
+            shell(gemini, ["mcp", "remove", "-s", "user", "visioncli"], env: env)
+            let (status, out, err) = shell(gemini, ["mcp", "add", "-s", "user", "--trust", "visioncli", node, server], env: env)
+            alert.messageText = status == 0 ? "Gemini CLI is set up" : "Couldn't set up Gemini CLI"
+            alert.informativeText = status == 0
+                ? "visioncli's tools are now available in every Gemini CLI project. Restart any running `gemini` sessions. To answer voice questions with Gemini, choose 👁 → Assistant → Gemini CLI.\n\nFor screenshots when typing in Gemini CLI, give your terminal app Screen Recording access too."
+                : (err.isEmpty ? out : err)
+        } else {
+            alert.messageText = "Gemini CLI wasn't found"
+            alert.informativeText = "Install it with `npm install -g @google/gemini-cli`, sign in once by running `gemini`, then choose Settings → Set Up Gemini CLI again."
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
     /// First launch of a downloaded app: explain the basics and offer the Claude Code setup.
     func showWelcome() {
         NSApp.activate(ignoringOtherApps: true)
@@ -1103,11 +1149,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         macOS will ask for Microphone, Speech Recognition and Screen Recording access. VisionCLI needs all three.
         To use the tools by typing in Claude Code, also give your terminal app (iTerm, Terminal…) Screen Recording access.
 
-        Set up Claude Code now so its tools work in every project?
+        Set up your AI CLI now so VisionCLI's tools work in every project? (Works with Claude Code and Gemini CLI; pick which one answers voice questions in 👁 → Assistant.)
         """
-        alert.addButton(withTitle: "Set Up Claude Code")
+        let hasClaude = FileManager.default.isExecutableFile(atPath: cfg.claude), hasGemini = cfg.gemini != nil
+        alert.addButton(withTitle: hasClaude && hasGemini ? "Set Up Both" : hasGemini ? "Set Up Gemini CLI" : "Set Up Claude Code")
         alert.addButton(withTitle: "Later")
-        if alert.runModal() == .alertFirstButtonReturn { setupClaudeCode() }
+        if alert.runModal() == .alertFirstButtonReturn {
+            if hasClaude || !hasGemini { setupClaudeCode() }
+            if hasGemini { setupGemini() }
+            if hasGemini && !hasClaude { Settings.assistant = .gemini }
+        }
     }
 
     @objc func toggleSpeakSetting() {
@@ -1162,7 +1213,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     @objc func showClaudeTerminal() { terminal(for: currentProject).bringToFront() }
     @objc func continueInTerminal() {
         guard let s = current, let sid = s.sessionId else { return }
-        TerminalLauncher.continueSession(project: s.cwd, sessionId: sid, claude: cfg.claude)
+        if s is GeminiSession, let gemini = cfg.gemini {
+            TerminalLauncher.run("cd '\(s.cwd.replacingOccurrences(of: "'", with: "'\\''"))' && exec '\(gemini)' --resume \(sid)", name: "continue")
+        } else {
+            TerminalLauncher.continueSession(project: s.cwd, sessionId: sid, claude: cfg.claude)
+        }
     }
     @objc func copyAnswerMenu() {
         let last = history.entries.first.map { Markup.display($0.answer) } ?? state.answer
@@ -1180,12 +1235,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
     @objc func openLog() { NSWorkspace.shared.open(logURL) }
 
-    /// integrations.json holds only the TypeSafe key (Jev instant browser commands).
+    /// integrations.json holds API keys: TypeSafe (Jev instant browser commands) and Gemini (Gemini CLI via API key).
     @objc func openIntegrations() {
         let file = supportDir.appendingPathComponent("integrations.json")
         if !FileManager.default.fileExists(atPath: file.path) {
             try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
-            try? "{\n  \"typesafe\": { \"apiKey\": \"\" }\n}\n".write(to: file, atomically: true, encoding: .utf8)
+            try? "{\n  \"typesafe\": { \"apiKey\": \"\" },\n  \"gemini\": { \"apiKey\": \"\" }\n}\n".write(to: file, atomically: true, encoding: .utf8)
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         }
         NSWorkspace.shared.open(file)

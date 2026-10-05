@@ -81,12 +81,17 @@ export async function startVoice(cwd: string): Promise<string> {
 
   // The app runs under launchd without your shell's environment: keep the TypeSafe key (for Jev quick
   // commands) in integrations.json, readable only by you.
-  if (process.env.TYPESAFE_API_KEY) {
+  // Same for a Gemini API key (Gemini CLI no longer works on personal Google sign-in).
+  const keys: Record<string, string | undefined> = { typesafe: process.env.TYPESAFE_API_KEY, gemini: process.env.GEMINI_API_KEY };
+  if (Object.values(keys).some(Boolean)) {
     const file = join(SUPPORT, "integrations.json");
     let cfg: Record<string, any> = {};
     try { cfg = JSON.parse(readFileSync(file, "utf8")); } catch {}
-    if (cfg.typesafe?.apiKey !== process.env.TYPESAFE_API_KEY) {
-      cfg.typesafe = { ...(cfg.typesafe ?? {}), apiKey: process.env.TYPESAFE_API_KEY };
+    let changed = false;
+    for (const [name, key] of Object.entries(keys)) {
+      if (key && !cfg[name]?.apiKey) { cfg[name] = { ...(cfg[name] ?? {}), apiKey: key }; changed = true; }
+    }
+    if (changed) {
       writeFileSync(file, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
       chmodSync(file, 0o600);
     }
@@ -110,7 +115,7 @@ export async function startVoice(cwd: string): Promise<string> {
   );
 }
 
-/** Register visioncli as a user-scope MCP server in Claude Code (and build the voice overlay on macOS). */
+/** Register visioncli as a user-scope MCP server in Claude Code and Gemini CLI (and build the voice overlay on macOS). */
 export async function install(): Promise<string> {
   const claude = process.env.VISIONCLI_CLAUDE ?? (await which("claude"));
   if (!claude) throw new Error("Couldn't find the `claude` CLI on PATH.");
@@ -119,7 +124,14 @@ export async function install(): Promise<string> {
   const server = script.includes("/_npx/") ? ["npx", "-y", "visioncli@latest"] : [process.execPath, script];
   await run(claude, ["mcp", "remove", "visioncli", "-s", "user"]).catch(() => {});
   await run(claude, ["mcp", "add", "visioncli", "--scope", "user", "--", ...server]);
-  const lines = [`Registered the visioncli MCP server for all projects (${server.join(" ")}).`];
+  const lines = [`Registered the visioncli MCP server with Claude Code for all projects (${server.join(" ")}).`];
+  // Gemini CLI too, if installed. Trusted so its read-only tools also work in headless mode (no confirmation prompts).
+  const gemini = await which("gemini");
+  if (gemini) {
+    await run(gemini, ["mcp", "remove", "-s", "user", "visioncli"]).catch(() => {});
+    await run(gemini, ["mcp", "add", "-s", "user", "--trust", "visioncli", ...server]);
+    lines.push("Registered it with Gemini CLI as well.");
+  }
   if (process.platform === "darwin") {
     if (!existsSync(join(appPath(), "Contents", "MacOS", "VisionCLI"))) await run(join(root, "scripts", "build-overlay.sh"), { cwd: root });
     lines.push("Voice overlay built. Start it with: visioncli voice  (or ask Claude to \"start voice mode\").");

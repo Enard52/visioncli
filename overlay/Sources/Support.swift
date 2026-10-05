@@ -48,6 +48,7 @@ func shell(_ exe: String, _ args: [String], cwd: String? = nil, stdin: Data? = n
 struct Config: Codable {
     var cwd = home.path            // fallback project when the window under the pointer doesn't map to one
     var claude = "claude"
+    var gemini: String?
     var path = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     var node: String?
     var server: String?
@@ -126,6 +127,7 @@ struct Config: Codable {
         if c.server == nil || !FileManager.default.fileExists(atPath: c.server!) { c.server = bundledServer ?? c.server }
         if c.node == nil || !FileManager.default.isExecutableFile(atPath: c.node!) { c.node = findNode(path: c.path) }
         if !c.claude.hasPrefix("/") || !FileManager.default.isExecutableFile(atPath: c.claude) { c.claude = Config.findClaude(path: c.path) ?? c.claude }
+        if c.gemini == nil || !FileManager.default.isExecutableFile(atPath: c.gemini!) { c.gemini = find("gemini", path: c.path) }
         if isFirstRun {
             try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
             try? JSONEncoder().encode(c).write(to: saved)
@@ -137,6 +139,24 @@ struct Config: Codable {
     static func findClaude(path: String) -> String? {
         let dirs = path.split(separator: ":").map(String.init) + ["\(home.path)/.local/bin", "\(home.path)/.claude/local", "/opt/homebrew/bin", "/usr/local/bin"]
         return dirs.map { "\($0)/claude" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Environment for `gemini` processes. With a Gemini API key (integrations.json "gemini.apiKey" or GEMINI_API_KEY),
+    /// VisionCLI's own runs use API-key auth via a system-settings override, leaving the user's Gemini settings alone.
+    /// (Google no longer serves Gemini CLI on personal Google sign-in; an API key or a paid Code Assist plan is needed.)
+    func geminiEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = path
+        let file = supportDir.appendingPathComponent("integrations.json")
+        let stored = (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            .flatMap { ($0["gemini"] as? [String: Any])?["apiKey"] as? String }
+        if let key = (stored?.isEmpty == false ? stored : nil) ?? env["GEMINI_API_KEY"], !key.isEmpty {
+            env["GEMINI_API_KEY"] = key
+            let override = supportDir.appendingPathComponent("gemini-system-settings.json")
+            try? #"{"security":{"auth":{"selectedType":"gemini-api-key"}}}"#.write(to: override, atomically: true, encoding: .utf8)
+            env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = override.path
+        }
+        return env
     }
 
     /// Run the visioncli node CLI (quick, warm, …).
@@ -199,6 +219,12 @@ enum Settings {
     static var terminalMode: Bool {
         get { d.object(forKey: "terminalMode") as? Bool ?? true }
         set { d.set(newValue, forKey: "terminalMode") }
+    }
+
+    /// Which CLI answers voice questions.
+    static var assistant: Assistant {
+        get { Assistant(rawValue: d.string(forKey: "assistant") ?? "") ?? .claude }
+        set { d.set(newValue.rawValue, forKey: "assistant") }
     }
 
     /// Instant browser commands routed by Jev (TypeSafe System One) before asking Claude.
