@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
+
+- **Computer control: VisionCLI can use your Mac.** Claude or Gemini can click, double/right-click, drag, scroll, type, press shortcuts, open apps and URLs, in any app, from voice or from the terminal. It reads each app's real buttons, fields and menus through Accessibility (`ui_elements`) so it clicks "Save" by id instead of guessing pixels; pixel positions on a screenshot work too. Keys and typing go to the app it's working in, never by accident to your terminal.
+  - **Approvals:** 👁 → Computer Control → *Ask Before Each Action* (default), *Allow All Actions*, or *Off*. Password fields, System Settings, Keychain and password managers always ask.
+  - **Task panel** (top-right) lists each step with ✓/✗, plus **Pause** and **Stop**. **Esc** stops the assistant from touching the computer until your next question.
+  - Needs the Accessibility permission (👁 → Computer Control → Grant Accessibility Permission…).
+- **Recipes:** saved routines (*Explain this screen*, *Fix this error*, *Run the tests*, *Review my changes*, *Explain the last crash*, *Run on the simulator*, *Write a commit message*) in 👁 → Recipes, or say the name ("run the tests"). Edit or add your own in `recipes.json`.
+- **Crash watcher:** when one of your apps (Mac or iOS Simulator) crashes, VisionCLI offers to explain it, and your next question includes the crash report's path.
+- **Browser dropdowns and toggles work.** Clicks now send the full pointer sequence (custom React/Radix/MUI widgets respond), new `browser_select` picks options in native and custom dropdowns, and `browser_elements` shows toggles' on/off state and dropdowns' options. Fixed stale element ids after listing a page twice.
+- **Drawings are shown on the screenshot inside the bubble**, not on your real screen.
 
 - **Two assistants:** Claude Code or Gemini (Antigravity). Gemini CLI is no longer offered (it doesn't work on personal Google accounts); anyone who had it selected moves to Antigravity.
 - **Model menu for Gemini:** every model your `agy` account offers (Gemini 3.8/3.7/3.6 Flash, 3.1 Pro, …), or agy's default. Claude keeps Sonnet / Opus.

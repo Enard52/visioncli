@@ -16,6 +16,8 @@ final class OverlayState: ObservableObject {
     @Published var permission: PermissionRequest?
     @Published var toast = ""
     @Published var speaking = false
+    /// Screenshots with the answer's drawings on them, shown in the bubble.
+    @Published var annotated: [AnnotatedShot] = []
 
     var answer: String { Markup.display(raw) }
 }
@@ -192,6 +194,7 @@ struct AnswerBubble: View {
                     PendingDiagram()
                 }
             }
+            ForEach(s.annotated) { shot in AnnotatedShotView(shot: shot) }
         }
     }
 

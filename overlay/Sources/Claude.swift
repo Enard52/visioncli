@@ -9,11 +9,12 @@ Screenshots of what they are looking at are attached to each question, with the 
 - For questions about database tables or data, use mcp__visioncli__db_schema and mcp__visioncli__db_query (read-only), together with the models and migrations in the code.
 - For the iOS Simulator or an Android emulator, mcp__visioncli__device_screenshot gives a sharper image. Grep for the visible strings to find the view's code.
 - If you need a fresh look (for example "now look at this"), call mcp__visioncli__look with under_cursor: true.
-- To explain visually, draw on the user's screen with markers (pixel coordinates in that attached image; IMAGE is 1-based; never mention the markers themselves): [[box:IMAGE:x1,y1,x2,y2:label]] outlines an area, [[circle:IMAGE:x1,y1,x2,y2:label]] circles it, [[arrow:IMAGE:x1,y1,x2,y2:label]] points from (x1,y1) to (x2,y2), [[step:IMAGE:x,y:N:label]] places a numbered step N (use 1, 2, 3… to walk through a flow). They animate in the order you write them.
+- To explain visually, draw on the screenshot with markers (pixel coordinates in that attached image; IMAGE is 1-based; never mention the markers themselves). The annotated screenshot is shown in the bubble under your answer. Put all markers together on the LAST line of your reply so the text stays readable: [[box:IMAGE:x1,y1,x2,y2:label]] outlines an area, [[circle:IMAGE:x1,y1,x2,y2:label]] circles it, [[arrow:IMAGE:x1,y1,x2,y2:label]] points from (x1,y1) to (x2,y2), [[step:IMAGE:x,y:N:label]] places a numbered step N (use 1, 2, 3… to walk through a flow). They animate in the order you write them.
 - For flows, relationships, data models or architecture, you may add one small ```mermaid diagram (flowchart, sequence or erDiagram, at most ~12 nodes). It is rendered as a picture in the bubble; keep the text around it short.
 - If the user asks you to change code, make the edit with Edit/Write. The user approves each change from the bubble, so keep edits small and focused.
 - To run tests, builds, artisan/npm/git commands etc., use Bash. The user approves each command from the bubble, so run one focused command at a time and summarize the output briefly.
-- For web pages in Brave/Chrome, prefer the mcp__visioncli__browser_* tools over screenshots: browser_read for the page text, browser_elements then browser_click/browser_type to act, browser_tabs/browser_open/browser_switch_tab/browser_navigate to move around. Clicks and typing ask the user first.
+- For web pages in Brave/Chrome, prefer the mcp__visioncli__browser_* tools over screenshots: browser_read for the page text, browser_elements then browser_click/browser_type (browser_select for dropdowns; toggles show on/off) to act, browser_tabs/browser_open/browser_switch_tab/browser_navigate to move around. Clicks and typing ask the user first.
+- You can use the whole computer, any app, like the user would: mcp__visioncli__ui_elements lists the front app's buttons, fields and menus with ids, then mcp__visioncli__click / mcp__visioncli__type_text by element id (most reliable). Or click at pixel x/y in an attached image (pass image: N) or in the last look. Also press_keys ("cmd+s", "enter"), scroll, drag, open_app, open_url. Do multi-step tasks one step at a time and check the result (look_after: true) before the next step. The user approves actions in the bubble; if they decline or press Esc, stop and ask. In browsers, prefer browser_* tools (browser_select for dropdowns).
 - If you can't tell what they mean, call mcp__visioncli__select_region so they can drag a box around it. If they say they copied a screenshot, use mcp__visioncli__clipboard_image.
 - Reply in plain conversational text, under about 100 words unless they ask for detail. No headings or tables, and code snippets of 3 lines at most.
 - The question came from speech-to-text, so technical words may be misheard; infer what they meant.
@@ -29,16 +30,22 @@ let autoAllowedTools = [
     "mcp__visioncli__browser_tabs", "mcp__visioncli__browser_read", "mcp__visioncli__browser_elements",
     "mcp__visioncli__browser_open", "mcp__visioncli__browser_switch_tab", "mcp__visioncli__browser_navigate",
     "mcp__visioncli__browser_scroll",
+    // Computer control: VisionCLI shows its own approval card for each action (or none in "Allow all" mode).
+    "mcp__visioncli__ui_elements", "mcp__visioncli__click", "mcp__visioncli__type_text", "mcp__visioncli__press_keys",
+    "mcp__visioncli__scroll", "mcp__visioncli__drag", "mcp__visioncli__open_app", "mcp__visioncli__open_url",
 ]
 
 struct PermissionRequest {
     let id: String
     let tool: String
     let input: [String: Any]
+    var customTitle: String? = nil              // computer-control actions describe themselves
+    var customDetail: [(String, DiffKind)]? = nil
 
     var file: String? { (input["file_path"] as? String) ?? (input["notebook_path"] as? String) }
 
     var title: String {
+        if let customTitle { return customTitle }
         let name = file.map { ($0 as NSString).lastPathComponent } ?? ""
         switch tool {
         case "Edit", "MultiEdit": return "\(Settings.assistant.name) wants to edit \(name)"
@@ -56,6 +63,7 @@ struct PermissionRequest {
             if all.count > max { out.append(("… \(all.count - max) more lines", .context)) }
             return out
         }
+        if let customDetail { return customDetail }
         switch tool {
         case "Edit":
             return lines(input["old_string"] as? String, .removed, max: 6) + lines(input["new_string"] as? String, .added, max: 8)
@@ -317,6 +325,9 @@ final class ClaudeSession: AssistantSession {
         case "mcp__visioncli__device_screenshot": return "Looking at the simulator…"
         case "mcp__visioncli__db_schema": return "Reading the database schema…"
         case "mcp__visioncli__db_query": return "Querying the database…"
+        case "mcp__visioncli__ui_elements": return "Reading the app's controls…"
+        case "mcp__visioncli__click", "mcp__visioncli__type_text", "mcp__visioncli__press_keys", "mcp__visioncli__scroll",
+             "mcp__visioncli__drag", "mcp__visioncli__open_app", "mcp__visioncli__open_url": return "Using your computer…"
         case "Read": return "Reading \(base("file_path"))…"
         case "Grep": return "Searching for “\((input["pattern"] as? String ?? "").prefix(40))”…"
         case "Glob": return "Finding files…"

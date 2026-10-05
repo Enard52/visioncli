@@ -137,7 +137,8 @@ export async function install(): Promise<string> {
     const settings = read(settingsFile);
     const allow: string[] = settings.permissions?.allow ?? [];
     for (const t of ["look", "list_windows", "select_region", "clipboard_image", "device_screenshot", "db_schema", "db_query",
-      "browser_tabs", "browser_read", "browser_elements", "browser_open", "browser_switch_tab", "browser_navigate", "browser_scroll"]) {
+      "browser_tabs", "browser_read", "browser_elements", "browser_open", "browser_switch_tab", "browser_navigate", "browser_scroll",
+      "ui_elements", "click", "type_text", "press_keys", "scroll", "drag", "open_app", "open_url"]) {
       if (!allow.includes(`mcp(visioncli/${t})`)) allow.push(`mcp(visioncli/${t})`);
     }
     // Read-only commands Gemini may run without asking (headless agy can't prompt).

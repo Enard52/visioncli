@@ -105,6 +105,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     var currentShots: [Shot] = []
     var currentWindow: WinInfo?
     var alwaysAllow: [String: Set<String>] = [:] // project → tools approved for the session
+    // Computer control (see Control.swift)
+    let controlServer = ControlServer()
+    let uiElements = UIElements()
+    var controlStopped: Date?          // Esc pressed during a task: refuse actions until the next question
+    var controlAllowUntil: Date?       // "Allow all" on an action card: no more cards for a while
+    var controlLastAction = Date.distantPast
+    var pendingControl: ((Bool) -> Void)?
+    var controlQueue: [() -> Void] = [] // actions waiting for an approval card to free up
+    var controlTarget: NSRunningApplication? // the app the assistant is working in (keys/typing go there)
+    let taskHUD = TaskHUD()
+    var pausedActions: [(Bool) -> Void] = [] // held while the task is paused; false = cancelled
+    let crashWatcher = CrashWatcher()
 
     var startShot: Shot?
     var region: CGRect?
@@ -145,6 +157,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
 
         startVoiceEngines()
+        startComputerControl()
+        startCrashWatcher()
         updater.onAvailable = { [weak self] release in
             guard let self else { return }
             self.state.question = "visioncli"
@@ -239,9 +253,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         // Debug: `--demo-answer` shows a sample answer with a mermaid diagram and screen drawings (rendering check).
         if CommandLine.arguments.contains("--demo-answer") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                // Draw relative to the whole main screen (deterministic, wherever the pointer is).
-                let main = NSScreen.screens[0].frame
-                self.currentShots = [Shot(jpeg: Data(), pixelSize: main.size, screenRect: CGRect(origin: .zero, size: main.size), label: "main screen")]
+                if let w = Screen.windowUnderPointer(), let shot = try? Screen.capture(window: w) { self.currentShots = [shot] }
+                else if let shot = try? Screen.capture(rect: CGRect(origin: .zero, size: NSScreen.screens[0].frame.size)) { self.currentShots = [shot] }
+                log("demo: \(self.currentShots.first?.label ?? "no screenshot")")
                 let W = Int(self.currentShots.first?.pixelSize.width ?? 1200), H = Int(self.currentShots.first?.pixelSize.height ?? 800)
                 self.state.question = "How are orders and payments related?"
                 self.state.project = "demo"
@@ -434,6 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         state.toast = ""
         state.level = 0
         state.regionSelected = false
+        state.annotated = []
         startShot = nil
         region = nil
         do {
@@ -799,6 +814,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     func ask(_ question: String, shots: [Shot]) {
+        taskHUD.reset(title: question.count > 40 ? String(question.prefix(40)) + "…" : question)
+        var question = question
+        if let recipe = Recipes.match(question) { question = "\(recipe.name): \(recipe.prompt)" }
+        if let crash = crashWatcher.recent {
+            let mins = max(1, Int(Date().timeIntervalSince(crash.date) / 60))
+            question += "\n(If relevant: \(crash.app) crashed \(mins) min ago; crash report at \(crash.file.path).)"
+        }
         // A terminal the user pointed at wins; otherwise the window the pointer ended on decides the project.
         if let pinned = Settings.pinnedProject { currentProject = pinned }
         else if let ctx = terminalContext { currentProject = ctx.project }
@@ -806,6 +828,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         state.project = (currentProject as NSString).lastPathComponent
         let saved = history.save(shots)
         currentShots = saved
+        writeShotMap(saved)
+        controlStopped = nil // a new question re-enables computer control after an Esc stop
         currentWindow = saved.last?.window ?? currentWindow
 
         var context = ["Project: \(currentProject)."]
@@ -834,7 +858,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 parts.append(p + ".")
             }
             // Gemini can't take a system prompt in its interactive mode, so the voice instructions ride along.
-            if briefInstructions { parts.append(assistant == .antigravity ? "View the screenshot file(s) first. " : ""); parts.append("Asked out loud: the reply is also shown in a bubble above the mouse and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line; for flows or relationships you may add one small ```mermaid diagram.") }
+            if briefInstructions { parts.append(assistant == .antigravity ? "View the screenshot file(s) first. " : ""); parts.append("Asked out loud: the reply is also shown in a bubble above the mouse and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line; for flows or relationships you may add one small ```mermaid diagram; put any [[box/arrow/circle/step]] drawing markers on the last line.") }
             let t = terminal(for: currentProject, assistant: assistant)
             // Prefer one the user already runs: the tab they pointed at, else any tab for this project.
             if let ctx = terminalContext, ctx.assistant == assistant, let tab = ctx.itermSession {
@@ -882,15 +906,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         set(.done)
         speaker.feed(Diagrams.speakable(state.answer), final: true)
 
-        // Draw any boxes Claude pointed at.
-        let drawings = Markup.marks(in: state.raw).compactMap { mark -> DrawItem? in
-            guard !currentShots.isEmpty else { return nil }
-            let shot = currentShots[min(max(mark.image, 1), currentShots.count) - 1]
-            return DrawItem(kind: mark.kind, a: shot.screenPoint(forImagePoint: mark.a), b: shot.screenPoint(forImagePoint: mark.b), label: mark.label)
-        }
-        if !drawings.isEmpty {
-            log("drawing \(drawings.count): " + drawings.map { "\($0.kind) \(Int($0.a.x)),\(Int($0.a.y))→\(Int($0.b.x)),\(Int($0.b.y))" }.joined(separator: "; "))
-            highlight.draw(drawings, for: 20)
+        // Drawings go on the screenshot inside the bubble, never on the real screen.
+        let marks = Markup.marks(in: state.raw)
+        if !marks.isEmpty, !currentShots.isEmpty {
+            var byShot: [Int: [DrawItem]] = [:]
+            for mark in marks {
+                let index = min(max(mark.image, 1), currentShots.count) - 1
+                byShot[index, default: []].append(DrawItem(kind: mark.kind, a: mark.a, b: mark.b, label: mark.label))
+            }
+            state.annotated = byShot.keys.sorted().compactMap { index in
+                let shot = currentShots[index]
+                guard let image = NSImage(data: shot.jpeg) else { return nil }
+                return AnnotatedShot(image: image, size: shot.pixelSize, items: byShot[index] ?? [])
+            }
+            log("drawing \(marks.count) mark(s) on \(state.annotated.count) screenshot(s) in the bubble")
         }
 
         history.add(HistoryEntry(date: Date(), project: currentProject, question: state.question, answer: state.raw,
@@ -917,6 +946,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     func showHistory() { historyWindow.show(store: history) }
 
     func dismiss() {
+        if controlActive {
+            stopComputerControl()
+            if let s = current, s.busy { s.stop() }
+            return
+        }
         if state.phase == .approval { approve(false, always: false); return }
         if selector.isActive { selector.cancel() }
         keyPoll?.invalidate()
@@ -941,6 +975,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     func approve(_ allow: Bool, always: Bool) {
+        if let done = pendingControl { pendingControl = nil; finishControlApproval(allow, always: always, done: done); return }
         guard let req = state.permission, let s = current else { return }
         if always { alwaysAllow[s.cwd, default: []].insert(req.tool) }
         (s as? AgySession)?.keepRule = always
@@ -1079,6 +1114,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             }
             m.addItem(.separator())
             item("Applies to Claude and Gemini; higher is slower but more thorough.", nil, in: m)
+        }
+
+        submenu("Recipes", in: menu) { m in
+            for r in Recipes.load() { item(r.name, #selector(runRecipe(_:)), in: m, value: r.prompt).toolTip = r.prompt }
+            m.addItem(.separator())
+            item("Edit Recipes…", #selector(editRecipes), in: m)
+            item("Or say \"run the tests\", \"review my changes\"… by name", nil, in: m)
+        }
+
+        let controlNames = ["ask": "Ask Before Each Action", "auto": "Allow All Actions", "off": "Off"]
+        submenu("Computer Control: \(controlNames[Settings.computerControl] ?? "Ask")", in: menu) { m in
+            for mode in ["ask", "auto", "off"] {
+                item(controlNames[mode]!, #selector(chooseComputerControl(_:)), in: m, on: Settings.computerControl == mode, value: mode)
+            }
+            m.addItem(.separator())
+            if Computer.isTrusted { item("✓ Accessibility permission granted", nil, in: m) }
+            else { item("Grant Accessibility Permission…", #selector(grantAccessibility), in: m) }
+            item("Passwords, payments and System Settings always ask. Esc stops it.", nil, in: m)
+            m.addItem(.separator())
+            item("Watch for App Crashes", #selector(toggleWatchCrashes), in: m, on: Settings.watchCrashes)
         }
 
         submenu("Voice & Audio", in: menu) { m in
@@ -1462,6 +1517,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     @objc func toggleAutoActivity() { Settings.autoActivity.toggle() }
     @objc func toggleQuick() { Settings.quickCommands.toggle() }
 
+
     /// The node browser layer checks this file before animating its ghost cursor.
     let ghostOffFile = supportDir.appendingPathComponent("ghost-off")
     @objc func toggleGhost() {
@@ -1522,7 +1578,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) { CrashReporter.markCleanExit() }
+    @objc func chooseComputerControl(_ sender: NSMenuItem) {
+        guard let mode = sender.representedObject as? String else { return }
+        Settings.computerControl = mode
+        controlAllowUntil = nil
+        if mode != "off", !Computer.isTrusted { Computer.requestTrust() }
+    }
+
+    @objc func runRecipe(_ sender: NSMenuItem) {
+        guard let prompt = sender.representedObject as? String else { return }
+        let name = sender.title
+        var shots: [Shot] = []
+        if let w = Screen.windowUnderPointer(), let shot = try? Screen.capture(window: w) { shots = [shot] }
+        state.question = name
+        state.raw = ""
+        state.status = "Starting “\(name)”…"
+        set(.thinking)
+        ask("\(name): \(prompt)", shots: shots)
+    }
+
+    @objc func editRecipes() {
+        _ = Recipes.load() // writes the defaults the first time
+        NSWorkspace.shared.open(Recipes.file)
+    }
+
+    @objc func toggleWatchCrashes() {
+        Settings.watchCrashes.toggle()
+        if Settings.watchCrashes { crashWatcher.start() } else { crashWatcher.stop() }
+    }
+
+    @objc func grantAccessibility() {
+        if !Computer.requestTrust() {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) { controlServer.stop(); CrashReporter.markCleanExit() }
 
     @objc func openCrashLog() { NSWorkspace.shared.open(CrashReporter.logURL) }
 

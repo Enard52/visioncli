@@ -195,7 +195,9 @@ enum AgySetup {
     static let settings = home.appendingPathComponent(".gemini/antigravity-cli/settings.json")
     static let allowedTools = ["look", "list_windows", "select_region", "clipboard_image", "device_screenshot", "db_schema", "db_query",
                                "browser_tabs", "browser_read", "browser_elements", "browser_open", "browser_switch_tab",
-                               "browser_navigate", "browser_scroll"]
+                               "browser_navigate", "browser_scroll",
+                               // Computer control: VisionCLI's own approval card gates these.
+                               "ui_elements", "click", "type_text", "press_keys", "scroll", "drag", "open_app", "open_url"]
 
     /// Read-only commands Gemini may run without asking (headless agy can't ask).
     static let safeCommands = ["grep", "rg", "ls", "cat", "head", "tail", "find", "wc", "pwd", "file", "stat", "tree",

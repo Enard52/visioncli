@@ -16,7 +16,10 @@ by typing in <b>Claude Code or Gemini</b> (Antigravity / Gemini CLI) or <b>by vo
 - **"What is this file for?"** Claude looks at the window under your mouse, finds the real file in your project and answers with `file:line` references.
 - **Hold ⌥ Space and ask out loud.** A loader rides on your cursor, and the answer appears in a bubble above it, read aloud.
 - **Works with your Claude Code session.** It types into the `claude` already running for that project, or opens one, so you can type and talk in the same conversation.
-- **Points and draws.** Answers draw on your real screen to explain (glowing boxes, circles, arrows and numbered steps that animate like a pen), and can include **Mermaid diagrams** rendered right in the bubble.
+- **Uses your computer.** "Open Xcode and run the app", "fill this form", "switch the dropdown to Production": it clicks, types, presses shortcuts and opens apps, one checked step at a time, reading each app's real buttons and fields through Accessibility. You approve each action (or allow all), passwords and System Settings always ask, a task panel shows every step with Pause/Stop, and **Esc stops it instantly**.
+- **Recipes.** Saved routines like *Run the tests*, *Review my changes*, *Explain the last crash*, *Run on the simulator*. Pick from the menu or say the name. Edit your own in `recipes.json`.
+- **Notices crashes.** When your app (Mac or Simulator) crashes, VisionCLI offers to explain it, and the next question already knows which crash report to read.
+- **Draws to explain.** Answers mark up a screenshot inside the bubble (boxes, circles, arrows, numbered steps) and can include **Mermaid diagrams** rendered right in the bubble.
 - **Fast browser control.** "Open the Stripe tab", "click sign in", "pause the video" run in under a second (via TypeSafe Jev), with a visible AI cursor.
 - **Knows your data.** Read-only database questions ("how are payments and orders related?") using your project's `.env`.
 
@@ -125,13 +128,14 @@ Slash commands: `/mcp__visioncli__see <question>`, `/mcp__visioncli__point <ques
 | `list_windows`, `select_region`, `clipboard_image` | Pick a window, drag a box, or use the clipboard image |
 | `device_screenshot` | Clean iOS Simulator (needs Xcode) or Android (`adb`) screenshot |
 | `db_schema`, `db_query` | Tables, columns, foreign keys; single read-only SELECT/SHOW/DESCRIBE/EXPLAIN/WITH queries in a read-only transaction (MySQL, Postgres, SQLite from `.env`) |
-| `browser_tabs`, `browser_open`, `browser_switch_tab`, `browser_navigate`, `browser_read`, `browser_elements`, `browser_click`, `browser_type`, `browser_scroll` | Fast Chrome/Brave control via AppleScript |
+| `browser_tabs`, `browser_open`, `browser_switch_tab`, `browser_navigate`, `browser_read`, `browser_elements`, `browser_click`, `browser_type`, `browser_select`, `browser_scroll` | Fast Chrome/Brave control via AppleScript (dropdowns, toggles with on/off state, custom React/Radix widgets) |
+| `ui_elements`, `click`, `type_text`, `press_keys`, `scroll`, `drag`, `open_app`, `open_url` | Use any app: Accessibility element list with ids, real mouse/keyboard, by element id or screenshot pixels. Performed by VisionCLI.app (needs Accessibility permission), approved in the bubble |
 | `start_voice` | Start the voice overlay |
 </details>
 
 ## Menu
 
-**👁 Project** (Auto, or pick from running `claude`/`agy`/`gemini` sessions, open editors and recent projects) · **Assistant** (Claude Code, Gemini via Antigravity, or Gemini CLI) · **Answer In** (terminal, or bubble only) · **Model** (Sonnet or Opus, for Claude) · **Voice & Audio** (speak answers, speed up to 2×, voice, speech recognition, microphone, speaker) · History · Copy Last Answer · New Conversation · **Settings** (Set Up Claude Code / Antigravity / Gemini CLI, Start at Login, instant browser commands, AI cursor, API keys, logs).
+**👁 Project** (Auto, or pick from running `claude`/`agy`/`gemini` sessions, open editors and recent projects) · **Assistant** (Claude Code, Gemini via Antigravity, or Gemini CLI) · **Answer In** (terminal, or bubble only) · **Model** (Sonnet or Opus, for Claude) · **Recipes** · **Computer Control** (ask before each action, allow all, or off; Accessibility permission; watch for app crashes) · **Voice & Audio** (speak answers, speed up to 2×, voice, speech recognition, microphone, speaker) · History · Copy Last Answer · New Conversation · **Settings** (Set Up Claude Code / Antigravity / Gemini CLI, Start at Login, instant browser commands, AI cursor, API keys, logs).
 
 ## API keys
 
@@ -153,6 +157,7 @@ Slash commands: `/mcp__visioncli__see <question>`, `/mcp__visioncli__point <ques
 
 - Screenshots and questions go to Claude through your own Claude Code login.
 - With Jev enabled, quick commands send your spoken words, open tab titles and URLs, and visible link/button text to api.typesafe.ai. Turn it off in Settings.
+- Computer control runs locally: the MCP server talks to VisionCLI.app over 127.0.0.1 with a per-launch secret token (in a file only you can read). Nothing is clicked or typed unless an assistant asks and you allow it (or chose *Allow All Actions*).
 - Whisper and Kokoro run locally. History is stored in `~/Library/Application Support/visioncli/`.
 
 ## Build from source

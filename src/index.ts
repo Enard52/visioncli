@@ -17,6 +17,7 @@ import {
   pointerLocation,
 } from "./capture.js";
 import * as browser from "./browser.js";
+import * as computer from "./control.js";
 import { describeConnection, query, schema } from "./db.js";
 import { quick, warm } from "./quick.js";
 import { install, startVoice } from "./voice.js";
@@ -33,8 +34,12 @@ Use it whenever the user refers to something they are looking at: "this file", "
   in code by grepping for visible strings.
 - For database questions ("how are payments and orders related"), use \`db_schema\` / \`db_query\` (read-only, uses the
   project's .env) together with the models/migrations in the code.
+- Using the computer (any app): \`ui_elements\` lists the front app's controls with ids → \`click\` / \`type_text\` by id;
+  or \`look\` then \`click\` at pixel x/y in that screenshot. \`press_keys\` for Enter/shortcuts, \`scroll\`, \`drag\`, \`open_app\`,
+  \`open_url\`. Work step by step and verify with \`look_after: true\` or \`look\`. The user approves actions in a bubble; if they
+  decline or press Esc, stop and ask.
 - Browser (Brave/Chrome): \`browser_tabs\`, \`browser_open\`, \`browser_switch_tab\`, \`browser_navigate\`, \`browser_read\`,
-  \`browser_elements\` → \`browser_click\` / \`browser_type\` (by element id), \`browser_scroll\`. Prefer these over screenshots for
+  \`browser_elements\` → \`browser_click\` / \`browser_type\` / \`browser_select\` (dropdowns) by element id, \`browser_scroll\`. Prefer these over screenshots for
   web pages: they're fast and exact.`;
 
 const server = new McpServer({ name: "visioncli", version: "0.3.0" }, { instructions: INSTRUCTIONS });
@@ -81,10 +86,13 @@ server.registerTool(
     try {
       if (target === "screen" || process.platform !== "darwin") {
         const img = await captureScreen(display);
+        const b = process.platform === "darwin" ? await computer.displayBounds(display ?? 1) : null;
+        if (b && img.width) computer.rememberLook({ ...b, imageWidth: img.width, imageHeight: img.height ?? img.width });
         return imageResult(img, `Captured display ${display ?? 1}.`);
       }
       const w = await findWindow({ app, windowId: window_id, underCursor: under_cursor });
       const img = await captureWindow(w);
+      if (img.width) computer.rememberLook({ ...w.bounds, imageWidth: img.width, imageHeight: img.height ?? img.width });
       const p = pointerInImage(w, await pointerLocation(), img);
       const pointer = p ? ` The mouse pointer is at (${p.x}, ${p.y}) in this image.` : "";
       return imageResult(img, `Captured ${describe(w)}.${pointer}`);
@@ -290,11 +298,17 @@ server.registerTool(
   "browser_elements",
   {
     title: "List clickable elements",
-    description: "Visible links, buttons and form fields on the active page with ids (e1, e2, …) for browser_click / browser_type.",
+    description: "Visible links, buttons, fields, dropdowns (with options) and toggles (with on/off state) on the active page, with ids (e1, e2, …) for browser_click / browser_type / browser_select.",
     inputSchema: {},
     annotations: { readOnlyHint: true },
   },
-  wrap(async () => (await browser.elements()).map((e) => `${e.id}\t${e.kind}\t${e.text}${e.href ? `\t${e.href}` : ""}`).join("\n") || "(none)"),
+  wrap(async () =>
+    (await browser.elements())
+      .map((e) =>
+        [e.id, e.kind, e.text, e.state && `[${e.state}]`, e.expanded !== undefined && (e.expanded ? "[open]" : "[closed]"),
+          e.value !== undefined && `value: ${e.value}`, e.options && `options: ${e.options.join(" | ")}`, e.href]
+          .filter(Boolean).join("\t"))
+      .join("\n") || "(none)"),
 );
 
 server.registerTool(
@@ -321,6 +335,18 @@ server.registerTool(
 );
 
 server.registerTool(
+  "browser_select",
+  {
+    title: "Choose a dropdown option",
+    description:
+      "Pick an option in a dropdown (native <select> or custom combobox/menu) by its visible text. Use this instead of browser_click for dropdowns. " +
+      "Toggles/switches/checkboxes: use browser_click (browser_elements shows their on/off state).",
+    inputSchema: { target: z.string().describe("Dropdown id from browser_elements"), option: z.string().describe("Option text") },
+  },
+  wrap(async ({ target, option }) => browser.select(target, option)),
+);
+
+server.registerTool(
   "browser_scroll",
   {
     title: "Scroll the page",
@@ -331,6 +357,166 @@ server.registerTool(
     await browser.scroll(where);
     return `Scrolled ${where}`;
   }),
+);
+
+// ---- Computer control (performed by VisionCLI.app; the user approves actions unless they chose "Allow all") ----
+
+const coords = {
+  image: z.number().int().min(1).optional().describe("x/y are pixels in this attached voice-question image (1-based)"),
+  screen: z.boolean().default(false).describe("x/y are screen points (e.g. from ui_elements) rather than screenshot pixels"),
+};
+const lookAfter = z.boolean().default(false).describe("Return a fresh screenshot of the front window after the action, to check the result");
+
+function act(fn: (args: any) => Promise<string>) {
+  return async (args: any) => {
+    try {
+      const text = await fn(args);
+      if (args.look_after) {
+        await new Promise((r) => setTimeout(r, 400));
+        const w = await findWindow({});
+        const img = await captureWindow(w);
+        if (img.width) computer.rememberLook({ ...w.bounds, imageWidth: img.width, imageHeight: img.height ?? img.width });
+        return imageResult(img, `${text}\\nNow showing ${describe(w)}.`);
+      }
+      return { content: [{ type: "text" as const, text }] };
+    } catch (err) {
+      return errorResult(err);
+    }
+  };
+}
+
+const done = (r: any) => `Done: ${r.done}. Front app: ${r.frontApp}.`;
+
+server.registerTool(
+  "ui_elements",
+  {
+    title: "List UI elements",
+    description:
+      "List the buttons, fields, menus, links, tabs and text of the front app's focused window (or a named app) via Accessibility, " +
+      "each with an id and its center in screen points. Use the id with click/type_text: it's far more reliable than pixel guessing.",
+    inputSchema: { app: z.string().optional().describe("App name; default is the front app") },
+    annotations: { readOnlyHint: true },
+  },
+  async ({ app }) => {
+    try {
+      const r = await computer.send({ action: "elements", app });
+      if (!r.elements.length) return { content: [{ type: "text" as const, text: `No accessible elements found in ${r.app || "the front app"}. Use look and click by coordinates instead.` }] };
+      const lines = r.elements.map((e: any) => `[${e.id}] ${e.role}${e.label ? ` "${e.label}"` : ""} @${e.x},${e.y}`);
+      return { content: [{ type: "text" as const, text: `${r.app}:\\n${lines.join("\\n")}` }] };
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
+);
+
+server.registerTool(
+  "click",
+  {
+    title: "Click",
+    description:
+      "Click on the screen: by `element` id from ui_elements (preferred), or at x/y pixels in the last screenshot (from look, or `image` N of the voice question). " +
+      "Supports right-click and double-click.",
+    inputSchema: {
+      element: z.number().int().optional(),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      ...coords,
+      button: z.enum(["left", "right"]).default("left"),
+      count: z.number().int().min(1).max(3).default(1).describe("2 = double-click"),
+      look_after: lookAfter,
+    },
+  },
+  act(async ({ element, x, y, image, screen, button, count }) => {
+    if (element === undefined && (x === undefined || y === undefined)) throw new Error("Give an element id or x and y.");
+    const p = element === undefined ? computer.toScreen(x, y, { image, screen }) : {};
+    return done(await computer.send({ action: "click", element, ...p, button, count }));
+  }),
+);
+
+server.registerTool(
+  "type_text",
+  {
+    title: "Type text",
+    description:
+      "Type text with the keyboard into the focused field, or into `element` (clicked first). `replace: true` sets the field's whole value instead of typing. " +
+      "Use press_keys for Enter, Tab, shortcuts.",
+    inputSchema: {
+      text: z.string(),
+      element: z.number().int().optional(),
+      replace: z.boolean().default(false),
+      app: z.string().optional().describe("App to type into (brought to the front first); default: the app you last worked in"),
+      look_after: lookAfter,
+    },
+  },
+  act(async ({ text, element, replace, app }) => done(await computer.send({ action: "type", text, element, replace, app }))),
+);
+
+server.registerTool(
+  "press_keys",
+  {
+    title: "Press keys",
+    description: 'Press a key or shortcut, e.g. "enter", "cmd+s", "cmd+shift+p", "tab", "esc", "down". Several separated by spaces run in order: "cmd+a delete".',
+    inputSchema: {
+      keys: z.string(),
+      app: z.string().optional().describe("App to send the keys to (brought to the front first); default: the app you last worked in"),
+      look_after: lookAfter,
+    },
+  },
+  act(async ({ keys, app }) => done(await computer.send({ action: "key", keys, app }))),
+);
+
+server.registerTool(
+  "scroll",
+  {
+    title: "Scroll",
+    description: "Scroll at x/y (default: where the mouse is). dy negative = down, positive = up (lines); dx for sideways.",
+    inputSchema: {
+      x: z.number().optional(),
+      y: z.number().optional(),
+      ...coords,
+      dy: z.number().int().default(-5),
+      dx: z.number().int().default(0),
+      look_after: lookAfter,
+    },
+  },
+  act(async ({ x, y, image, screen, dx, dy }) => {
+    const p = x !== undefined && y !== undefined ? computer.toScreen(x, y, { image, screen }) : {};
+    return done(await computer.send({ action: "scroll", ...p, dx, dy }));
+  }),
+);
+
+server.registerTool(
+  "drag",
+  {
+    title: "Drag",
+    description: "Drag with the left mouse button from (x1,y1) to (x2,y2): move files, select text, resize, reorder.",
+    inputSchema: { x1: z.number(), y1: z.number(), x2: z.number(), y2: z.number(), ...coords, look_after: lookAfter },
+  },
+  act(async ({ x1, y1, x2, y2, image, screen }) => {
+    const a = computer.toScreen(x1, y1, { image, screen });
+    const b = computer.toScreen(x2, y2, { image, screen });
+    return done(await computer.send({ action: "drag", x1: a.x, y1: a.y, x2: b.x, y2: b.y }));
+  }),
+);
+
+server.registerTool(
+  "open_app",
+  {
+    title: "Open or switch to an app",
+    description: 'Open an app, or bring it to the front if it\'s running, e.g. "Xcode", "Slack", "Simulator", "Android Studio", "Figma".',
+    inputSchema: { name: z.string(), look_after: lookAfter },
+  },
+  act(async ({ name }) => done(await computer.send({ action: "focus_app", name }))),
+);
+
+server.registerTool(
+  "open_url",
+  {
+    title: "Open a URL",
+    description: "Open a link or file URL with its default app (browser, Figma, Slack deep links, vscode://, etc.).",
+    inputSchema: { url: z.string(), look_after: lookAfter },
+  },
+  act(async ({ url }) => done(await computer.send({ action: "open_url", url }))),
 );
 
 server.registerTool(
@@ -405,6 +591,7 @@ if (cmd) {
     else if (cmd === "install") console.log(await install());
     else if (cmd === "quick") console.log(JSON.stringify(await quick(rest.join(" "))));
     else if (cmd === "warm") console.log(await warm());
+    else if (cmd === "computer") console.log(JSON.stringify(await computer.send(JSON.parse(rest.join(" ") || '{"action":"status"}')), null, 2));
     else if (cmd === "browser") {
       // Debug helper: visioncli browser tabs|elements|read|click <t>|open <url>|scroll <dir>|nav <action>
       const [sub, ...a] = rest;
@@ -413,6 +600,7 @@ if (cmd) {
         sub === "elements" ? await browser.elements() :
         sub === "read" ? await browser.read(2000) :
         sub === "click" ? await browser.click(a.join(" ")) :
+        sub === "select" ? await browser.select(a[0], a.slice(1).join(" ")) :
         sub === "open" ? await browser.open(a[0]) :
         sub === "scroll" ? await browser.scroll(a[0] as "down") :
         sub === "nav" ? await browser.navigate(a[0] as "back") : `unknown: ${sub}`;

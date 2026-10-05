@@ -245,6 +245,18 @@ enum Settings {
         set { d.set(newValue, forKey: "effort") }
     }
 
+    /// Notice app crashes (Mac and Simulator apps) and offer to explain them.
+    static var watchCrashes: Bool {
+        get { d.object(forKey: "watchCrashes") as? Bool ?? true }
+        set { d.set(newValue, forKey: "watchCrashes") }
+    }
+
+    /// Computer control: "ask" (approve each action), "auto" (no approval except sensitive spots) or "off".
+    static var computerControl: String {
+        get { d.string(forKey: "computerControl") ?? "ask" }
+        set { d.set(newValue, forKey: "computerControl") }
+    }
+
     /// agy model id (from `agy models`); nil = whatever agy itself is set to.
     static var agyModel: String? {
         get { d.string(forKey: "agyModel") }

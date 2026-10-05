@@ -122,3 +122,38 @@ struct PendingDiagram: View {
         .frame(width: 420, height: 40, alignment: .leading)
     }
 }
+
+/// A screenshot with the answer's drawings (boxes, circles, arrows, steps) on it, shown inside the bubble.
+struct AnnotatedShot: Identifiable {
+    let id = UUID()
+    let image: NSImage
+    let size: CGSize        // image pixels
+    let items: [DrawItem]   // image-pixel coordinates, top-left origin
+}
+
+struct AnnotatedShotView: View {
+    let shot: AnnotatedShot
+    private let width: CGFloat = 420
+
+    var body: some View {
+        let scale = width / max(shot.size.width, 1)
+        let height = shot.size.height * scale
+        ZStack(alignment: .topLeading) {
+            Image(nsImage: shot.image)
+                .resizable()
+                .frame(width: width, height: height)
+                .opacity(0.9)
+            ForEach(shot.items.indices, id: \.self) { i in
+                let item = shot.items[i]
+                DrawingView(item: DrawItem(kind: item.kind,
+                                           a: CGPoint(x: item.a.x * scale, y: item.a.y * scale),
+                                           b: CGPoint(x: item.b.x * scale, y: item.b.y * scale),
+                                           label: item.label),
+                            delay: Double(i) * 0.35)
+            }
+        }
+        .frame(width: width, height: height, alignment: .topLeading)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.white.opacity(0.12)))
+    }
+}
