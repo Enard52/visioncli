@@ -1,6 +1,6 @@
 {
   "name": "visioncli",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "Let Claude Code see your screen: ask about the file, error, UI, table or web page you are looking at, by typing or by voice, with answers above your mouse.",
   "main": "dist/index.js",
   "scripts": {
@@ -42,6 +42,7 @@
     "overlay/Sources",
     "overlay/Resources/AppIcon.icns",
     "overlay/Resources/kokoro_server.py",
+    "overlay/Resources/mermaid.min.js",
     "scripts",
     "docs/logo.png",
     ".claude-plugin",

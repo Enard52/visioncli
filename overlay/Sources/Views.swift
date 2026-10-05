@@ -140,9 +140,9 @@ struct AnswerBubble: View {
     @ObservedObject var s: OverlayState
     weak var actions: BubbleActions?
 
-    var rendered: AttributedString {
+    func rendered(_ text: String) -> AttributedString {
         let opts = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        var a = (try? AttributedString(markdown: Markup.linked(s.answer), options: opts)) ?? AttributedString(s.answer)
+        var a = (try? AttributedString(markdown: Markup.linked(text), options: opts)) ?? AttributedString(text)
         for run in a.runs where run.link != nil {
             a[run.range].foregroundColor = .cyan
             a[run.range].underlineStyle = .single
@@ -173,14 +173,26 @@ struct AnswerBubble: View {
         }
     }
 
+    /// Text and rendered mermaid diagrams, in order.
     var answerText: some View {
-        Text(rendered)
-            .font(.system(size: 13.5))
-            .foregroundStyle(.white.opacity(0.95))
-            .lineSpacing(2.5)
-            .tint(.cyan)
-            .frame(width: 420, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(Diagrams.segments(s.answer).enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .text(let t):
+                    Text(rendered(t))
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .lineSpacing(2.5)
+                        .tint(.cyan)
+                        .frame(width: 420, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                case .mermaid(let code):
+                    DiagramBlock(code: code)
+                case .pendingDiagram:
+                    PendingDiagram()
+                }
+            }
+        }
     }
 
     var toolbar: some View {
@@ -209,7 +221,7 @@ struct AnswerBubble: View {
                     toolbar
                 } else {
                     answerText
-                        .frame(maxHeight: 380, alignment: .top)
+                        .frame(maxHeight: 560, alignment: .top)
                         .clipped()
                     if s.phase == .done || s.phase == .error {
                         Text(s.toast.isEmpty ? "esc dismiss · ⌥P pin to scroll & click files · ⌥O open file · ⌥space follow-up" : s.toast)

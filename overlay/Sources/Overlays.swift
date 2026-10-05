@@ -3,34 +3,52 @@ import SwiftUI
 
 // MARK: - Answer markup
 
-struct Box: Identifiable {
-    let id = UUID()
+/// Something Claude draws on the screen to explain: [[box|circle|arrow:IMAGE:x1,y1,x2,y2:label]], [[step:IMAGE:x,y:N:label]].
+struct Mark {
+    enum Kind { case box, circle, arrow, step(Int) }
+    let kind: Kind
     let image: Int
-    let rect: CGRect // image pixels
+    let a: CGPoint   // image pixels: box/circle corner, arrow start, step position
+    let b: CGPoint   // box/circle opposite corner, arrow end (== a for steps)
     let label: String
 }
 
 enum Markup {
     static let boxPattern = #"\[\[box:(\d+):\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?::([^\]]*))?\]\]"#
+    static let anyMarker = #"\[\[(?:box|circle|arrow|step):[^\]]*\]\]"#
+    // x1,y1,x2,y2 (also tolerates "x1,y1:x2,y2", which models sometimes write)
+    private static let shapePattern = #"\[\[(box|circle|arrow):(\d+):\s*(\d+)\s*,\s*(\d+)\s*[,:]\s*(\d+)\s*,\s*(\d+)\s*(?::([^\]]*))?\]\]"#
+    private static let stepPattern = #"\[\[step:(\d+):\s*(\d+)\s*,\s*(\d+)\s*:\s*(\d+)\s*(?::([^\]]*))?\]\]"#
 
-    /// Highlight markers in the answer.
-    static func boxes(in text: String) -> [Box] {
-        let re = try! NSRegularExpression(pattern: boxPattern)
-        return re.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { m in
-            func n(_ i: Int) -> CGFloat? { Range(m.range(at: i), in: text).flatMap { Double(text[$0]) }.map { CGFloat($0) } }
-            guard let img = n(1), let x1 = n(2), let y1 = n(3), let x2 = n(4), let y2 = n(5) else { return nil }
-            let label = Range(m.range(at: 6), in: text).map { String(text[$0]).trimmingCharacters(in: .whitespaces) } ?? ""
-            return Box(image: Int(img), rect: CGRect(x: min(x1, x2), y: min(y1, y2), width: abs(x2 - x1), height: abs(y2 - y1)), label: label)
+    /// All drawing markers in the answer, in the order they appear (so walkthroughs animate in sequence).
+    static func marks(in text: String) -> [Mark] {
+        var found: [(Int, Mark)] = []
+        let range = NSRange(text.startIndex..., in: text)
+        func str(_ m: NSTextCheckingResult, _ i: Int) -> String? { Range(m.range(at: i), in: text).map { String(text[$0]) } }
+        func num(_ m: NSTextCheckingResult, _ i: Int) -> CGFloat? { str(m, i).flatMap(Double.init).map { CGFloat($0) } }
+        for m in try! NSRegularExpression(pattern: shapePattern).matches(in: text, range: range) {
+            guard let kind = str(m, 1), let img = num(m, 2), let x1 = num(m, 3), let y1 = num(m, 4), let x2 = num(m, 5), let y2 = num(m, 6) else { continue }
+            let k: Mark.Kind = kind == "arrow" ? .arrow : kind == "circle" ? .circle : .box
+            found.append((m.range.location, Mark(kind: k, image: Int(img), a: CGPoint(x: x1, y: y1), b: CGPoint(x: x2, y: y2),
+                                                 label: (str(m, 7) ?? "").trimmingCharacters(in: .whitespaces))))
         }
+        for m in try! NSRegularExpression(pattern: stepPattern).matches(in: text, range: range) {
+            guard let img = num(m, 1), let x = num(m, 2), let y = num(m, 3), let n = num(m, 4) else { continue }
+            let p = CGPoint(x: x, y: y)
+            found.append((m.range.location, Mark(kind: .step(Int(n)), image: Int(img), a: p, b: p,
+                                                 label: (str(m, 5) ?? "").trimmingCharacters(in: .whitespaces))))
+        }
+        return found.sorted { $0.0 < $1.0 }.map(\.1)
     }
 
     /// Text to show: markers removed (including a half-streamed one at the end).
     static func display(_ text: String) -> String {
-        var t = text.replacingOccurrences(of: boxPattern, with: "", options: .regularExpression)
+        var t = text.replacingOccurrences(of: anyMarker, with: "", options: .regularExpression)
         if let open = t.range(of: "[[", options: .backwards), !t[open.lowerBound...].contains("]]") {
             t = String(t[..<open.lowerBound])
         }
         return t.replacingOccurrences(of: #"[ \t]+\n"#, with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: #"[ \t]+([,.;:!?])"#, with: "$1", options: .regularExpression) // gap left by a removed marker
             .replacingOccurrences(of: #"  +"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -66,18 +84,35 @@ enum Markup {
 
 // MARK: - Highlights drawn on the real screen
 
+/// A drawing in AppKit global coordinates.
+struct DrawItem {
+    let kind: Mark.Kind
+    let a: CGPoint
+    let b: CGPoint
+    let label: String
+}
+
 final class HighlightOverlay {
     private var panels: [NSPanel] = []
     private var hideWork: DispatchWorkItem?
 
-    /// rects are AppKit global coordinates.
+    /// Boxes (AppKit global rects), e.g. the dashed outline of a selected area.
     func show(_ items: [(CGRect, String)], for seconds: Double = 12, persistent: Bool = false) {
+        draw(items.map { DrawItem(kind: .box, a: CGPoint(x: $0.0.minX, y: $0.0.minY), b: CGPoint(x: $0.0.maxX, y: $0.0.maxY), label: $0.1) },
+             for: seconds, persistent: persistent)
+    }
+
+    func draw(_ items: [DrawItem], for seconds: Double = 12, persistent: Bool = false) {
         hide()
         for screen in NSScreen.screens {
-            let local = items.filter { $0.0.intersects(screen.frame) }.map { item -> (CGRect, String) in
-                // AppKit global → SwiftUI top-left local to this screen
-                let r = item.0
-                return (CGRect(x: r.minX - screen.frame.minX, y: screen.frame.maxY - r.maxY, width: r.width, height: r.height), item.1)
+            // AppKit global → SwiftUI top-left local to this screen. An item belongs to the screen holding its midpoint.
+            let local = items.filter {
+                screen.frame.contains(CGPoint(x: ($0.a.x + $0.b.x) / 2, y: ($0.a.y + $0.b.y) / 2))
+            }.map { item in
+                DrawItem(kind: item.kind,
+                         a: CGPoint(x: item.a.x - screen.frame.minX, y: screen.frame.maxY - item.a.y),
+                         b: CGPoint(x: item.b.x - screen.frame.minX, y: screen.frame.maxY - item.b.y),
+                         label: item.label)
             }
             guard !local.isEmpty else { continue }
             let panel = NSPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -94,7 +129,7 @@ final class HighlightOverlay {
         if !persistent {
             let work = DispatchWorkItem { [weak self] in self?.hide() }
             hideWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds + Double(items.count) * 0.35, execute: work)
         }
     }
 
@@ -105,17 +140,39 @@ final class HighlightOverlay {
     }
 }
 
-struct HighlightView: View {
-    let items: [(CGRect, String)]
+struct ArrowShape: Shape {
+    let from: CGPoint
+    let to: CGPoint
+    func path(in _: CGRect) -> Path {
+        var p = Path()
+        p.move(to: from)
+        p.addLine(to: to)
+        let angle = atan2(to.y - from.y, to.x - from.x), head: CGFloat = 16, spread: CGFloat = .pi / 7
+        p.move(to: to)
+        p.addLine(to: CGPoint(x: to.x - head * cos(angle - spread), y: to.y - head * sin(angle - spread)))
+        p.move(to: to)
+        p.addLine(to: CGPoint(x: to.x - head * cos(angle + spread), y: to.y - head * sin(angle + spread)))
+        return p
+    }
+}
+
+/// One drawing, appearing after `delay` (so several play like someone explaining with a pen).
+struct DrawingView: View {
+    let item: DrawItem
+    let delay: Double
     var dashed = false
     @State private var shown = false
     @State private var pulse = false
 
+    private var rect: CGRect {
+        CGRect(x: min(item.a.x, item.b.x), y: min(item.a.y, item.b.y), width: abs(item.b.x - item.a.x), height: abs(item.b.y - item.a.y))
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
-            Color.clear
-            ForEach(items.indices, id: \.self) { i in
-                let r = items[i].0.insetBy(dx: -4, dy: -4)
+            switch item.kind {
+            case .box:
+                let r = rect.insetBy(dx: -4, dy: -4)
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(accent, style: StrokeStyle(lineWidth: 3, dash: dashed ? [8, 5] : []))
                     .shadow(color: .cyan.opacity(pulse ? 0.9 : 0.4), radius: pulse ? 12 : 5)
@@ -123,24 +180,72 @@ struct HighlightView: View {
                     .offset(x: r.minX, y: r.minY)
                     .scaleEffect(shown ? 1 : 1.08)
                     .opacity(shown ? 1 : 0)
-                if !items[i].1.isEmpty {
-                    Text(items[i].1)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Capsule().fill(bubbleFill))
-                        .overlay(Capsule().stroke(bubbleStroke))
-                        .fixedSize()
-                        .offset(x: r.minX, y: max(0, r.minY - 28))
-                        .opacity(shown ? 1 : 0)
+                label(at: CGPoint(x: r.minX, y: max(0, r.minY - 28)))
+            case .circle:
+                let r = rect.insetBy(dx: -12, dy: -10)
+                Ellipse()
+                    .trim(from: 0, to: shown ? 1 : 0)
+                    .stroke(accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .shadow(color: .pink.opacity(pulse ? 0.9 : 0.4), radius: pulse ? 12 : 5)
+                    .frame(width: r.width, height: r.height)
+                    .offset(x: r.minX, y: r.minY)
+                label(at: CGPoint(x: r.minX, y: max(0, r.minY - 28)))
+            case .arrow:
+                ArrowShape(from: item.a, to: item.b)
+                    .trim(from: 0, to: shown ? 1 : 0)
+                    .stroke(LinearGradient(colors: [.cyan, .purple, .pink], startPoint: .leading, endPoint: .trailing),
+                            style: StrokeStyle(lineWidth: 3.5, lineCap: .round, lineJoin: .round))
+                    .shadow(color: .purple.opacity(pulse ? 0.9 : 0.4), radius: pulse ? 10 : 4)
+                // Label beside the middle of the arrow (its start often has a step badge).
+                label(at: CGPoint(x: (item.a.x + item.b.x) / 2 + 12, y: max(0, (item.a.y + item.b.y) / 2 - 12)))
+            case .step(let n):
+                ZStack {
+                    Circle().fill(LinearGradient(colors: [.cyan, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    Circle().stroke(Color.white.opacity(0.85), lineWidth: 2)
+                    Text("\(n)").font(.system(size: 15, weight: .bold, design: .rounded)).foregroundStyle(.white)
                 }
+                .frame(width: 30, height: 30)
+                .shadow(color: .cyan.opacity(pulse ? 0.9 : 0.5), radius: pulse ? 12 : 6)
+                .scaleEffect(shown ? 1 : 0.3)
+                .opacity(shown ? 1 : 0)
+                .offset(x: item.a.x - 15, y: item.a.y - 15)
+                label(at: CGPoint(x: item.a.x + 20, y: item.a.y - 12))
+            }
+        }
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                withAnimation(.easeOut(duration: 0.55)) { shown = true }
+                withAnimation(.easeInOut(duration: 0.9).repeatForever()) { pulse = true }
+            }
+        }
+    }
+
+    @ViewBuilder private func label(at p: CGPoint) -> some View {
+        if !item.label.isEmpty {
+            Text(item.label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Capsule().fill(bubbleFill))
+                .overlay(Capsule().stroke(bubbleStroke))
+                .fixedSize()
+                .offset(x: p.x, y: p.y)
+                .opacity(shown ? 1 : 0)
+        }
+    }
+}
+
+struct HighlightView: View {
+    let items: [DrawItem]
+    var dashed = false
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear
+            ForEach(items.indices, id: \.self) { i in
+                DrawingView(item: items[i], delay: Double(i) * 0.35, dashed: dashed)
             }
         }
         .ignoresSafeArea()
-        .onAppear {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) { shown = true }
-            withAnimation(.easeInOut(duration: 0.9).repeatForever()) { pulse = true }
-        }
     }
 }
 

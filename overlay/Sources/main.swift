@@ -235,6 +235,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             }
         }
 
+        // Debug: `--demo-answer` shows a sample answer with a mermaid diagram and screen drawings (rendering check).
+        if CommandLine.arguments.contains("--demo-answer") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                // Draw relative to the whole main screen (deterministic, wherever the pointer is).
+                let main = NSScreen.screens[0].frame
+                self.currentShots = [Shot(jpeg: Data(), pixelSize: main.size, screenRect: CGRect(origin: .zero, size: main.size), label: "main screen")]
+                let W = Int(self.currentShots.first?.pixelSize.width ?? 1200), H = Int(self.currentShots.first?.pixelSize.height ?? 800)
+                self.state.question = "How are orders and payments related?"
+                self.state.project = "demo"
+                self.state.raw = """
+                Each order can have several payments; a payment always points back to one order through `order_id`.
+                ```mermaid
+                erDiagram
+                  ORDERS ||--o{ PAYMENTS : "paid by"
+                  ORDERS { int id  decimal total }
+                  PAYMENTS { int id  int order_id  decimal amount }
+                ```
+                Start at the order [[step:1:\(W/6),\(H/5):1:Order]], follow it [[arrow:1:\(W/6),\(H/5 + 30),\(W/6),\(H*3/4 - 40):order_id]] to the payment [[circle:1:\(W/12),\(H*3/4 - 30),\(W/4 + 40),\(H*3/4 + 40):Payment]] [[step:1:\(W/4 + 70),\(H*3/4):2:Refunds too]] [[box:1:\(W*3/5),\(H/10),\(W*9/10),\(H/10 + 70):Totals]].
+                """
+                self.set(.thinking)
+                self.finish(result: self.state.raw, error: nil)
+                self.state.pinned = false
+            }
+        }
+
         // Debug: `--test-update` checks GitHub and installs a newer release without dialogs.
         if CommandLine.arguments.contains("--test-update") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
@@ -712,7 +737,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             guard let self, s === self.current, self.state.phase != .hidden else { return }
             if self.state.phase == .thinking { self.set(.answering) }
             self.state.raw += t
-            self.speaker.feed(self.state.answer, final: false)
+            self.speaker.feed(Diagrams.speakable(self.state.answer), final: false)
             self.activity.text(t)
         }
         s.onToolUse = { [weak self, weak s] name, input in
@@ -808,7 +833,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 parts.append(p + ".")
             }
             // Gemini can't take a system prompt in its interactive mode, so the voice instructions ride along.
-            if briefInstructions { parts.append(assistant == .antigravity ? "View the screenshot file(s) first. " : ""); parts.append("Asked out loud: the reply is also shown in a bubble above the mouse and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line.") }
+            if briefInstructions { parts.append(assistant == .antigravity ? "View the screenshot file(s) first. " : ""); parts.append("Asked out loud: the reply is also shown in a bubble above the mouse and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line; for flows or relationships you may add one small ```mermaid diagram.") }
             let t = terminal(for: currentProject, assistant: assistant)
             // Prefer one the user already runs: the tab they pointed at, else any tab for this project.
             if let ctx = terminalContext, ctx.assistant == assistant, let tab = ctx.itermSession {
@@ -854,15 +879,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
         if let result, !result.isEmpty { state.raw = result }
         set(.done)
-        speaker.feed(state.answer, final: true)
+        speaker.feed(Diagrams.speakable(state.answer), final: true)
 
         // Draw any boxes Claude pointed at.
-        let marks = Markup.boxes(in: state.raw).compactMap { box -> (CGRect, String)? in
+        let drawings = Markup.marks(in: state.raw).compactMap { mark -> DrawItem? in
             guard !currentShots.isEmpty else { return nil }
-            let shot = currentShots[min(max(box.image, 1), currentShots.count) - 1]
-            return (shot.screenRect(forImageRect: box.rect), box.label)
+            let shot = currentShots[min(max(mark.image, 1), currentShots.count) - 1]
+            return DrawItem(kind: mark.kind, a: shot.screenPoint(forImagePoint: mark.a), b: shot.screenPoint(forImagePoint: mark.b), label: mark.label)
         }
-        if !marks.isEmpty { highlight.show(marks, for: 20) }
+        if !drawings.isEmpty {
+            log("drawing \(drawings.count): " + drawings.map { "\($0.kind) \(Int($0.a.x)),\(Int($0.a.y))→\(Int($0.b.x)),\(Int($0.b.y))" }.joined(separator: "; "))
+            highlight.draw(drawings, for: 20)
+        }
 
         history.add(HistoryEntry(date: Date(), project: currentProject, question: state.question, answer: state.raw,
                                  screenshots: currentShots.compactMap { $0.file?.path }))
@@ -881,7 +909,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         if Settings.ttsEngine == "kokoro" && !kokoro.isRunning { kokoro.start() }
         if speaker.isSpeaking { speaker.reset() } else {
             speaker.reset()
-            speaker.feed(state.answer, final: true, force: true)
+            speaker.feed(Diagrams.speakable(state.answer), final: true, force: true)
         }
     }
 

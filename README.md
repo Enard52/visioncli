@@ -16,7 +16,7 @@ by typing in <b>Claude Code or Gemini</b> (Antigravity / Gemini CLI) or <b>by vo
 - **"What is this file for?"** Claude looks at the window under your mouse, finds the real file in your project and answers with `file:line` references.
 - **Hold ⌥ Space and ask out loud.** A loader rides on your cursor, and the answer appears in a bubble above it, read aloud.
 - **Works with your Claude Code session.** It types into the `claude` already running for that project, or opens one, so you can type and talk in the same conversation.
-- **Points at things.** Claude draws glowing boxes on your screen around what it's talking about.
+- **Points and draws.** Answers draw on your real screen to explain (glowing boxes, circles, arrows and numbered steps that animate like a pen), and can include **Mermaid diagrams** rendered right in the bubble.
 - **Fast browser control.** "Open the Stripe tab", "click sign in", "pause the video" run in under a second (via TypeSafe Jev), with a visible AI cursor.
 - **Knows your data.** Read-only database questions ("how are payments and orders related?") using your project's `.env`.
 

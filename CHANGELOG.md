@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0
+
+- **Mermaid diagrams in the answer bubble.** For flows, relationships, data models or architecture, the answer can include a ```mermaid diagram (flowchart, sequence, ER…). It's rendered as a picture in the bubble with the bundled Mermaid (works offline), sized to fit, with a "Drawing diagram…" placeholder while it streams; the read-aloud voice skips the code.
+- **Drawing on the screen to explain.** Besides boxes, answers can draw **arrows** (from one thing to another), **circles**, and **numbered steps** (①②③) on your real screen. They animate in the order written, like someone explaining with a pen. Works with Claude, Gemini (Antigravity) and Gemini CLI.
+
 ## 0.5.5
 
 - **Self-repairing permissions.** After a signature change (moving to the permanently signed releases), System Settings can show VisionCLI as allowed while macOS still asks, and toggling doesn't help. On the first launch of a new version, VisionCLI now clears its own stale entries (only for permissions not actually in effect), so macOS shows a fresh prompt and one click fixes it. 👁 → Settings → *Fix Permissions…* does the same on demand.

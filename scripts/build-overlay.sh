@@ -15,7 +15,7 @@ VERSION="${VISIONCLI_VERSION:-$(node -p "require('./package.json').version" 2>/d
 APP=overlay/build/VisionCLI.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp overlay/Resources/AppIcon.icns overlay/Resources/kokoro_server.py "$APP/Contents/Resources/"
+cp overlay/Resources/AppIcon.icns overlay/Resources/kokoro_server.py overlay/Resources/mermaid.min.js "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

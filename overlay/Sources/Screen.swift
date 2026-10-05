@@ -29,6 +29,13 @@ struct Shot {
     var pointer: CGPoint? // pointer position in image pixels, if inside
     var file: URL?
 
+    /// Image-pixel point → AppKit global point.
+    func screenPoint(forImagePoint p: CGPoint) -> CGPoint {
+        let x = screenRect.minX + p.x * screenRect.width / pixelSize.width
+        let yTop = screenRect.minY + p.y * screenRect.height / pixelSize.height
+        return CGPoint(x: x, y: Geometry.primaryHeight - yTop)
+    }
+
     /// Image-pixel rect → AppKit screen rect, for drawing highlights over the real thing.
     func screenRect(forImageRect r: CGRect) -> CGRect {
         let sx = screenRect.width / pixelSize.width, sy = screenRect.height / pixelSize.height
