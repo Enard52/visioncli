@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     var listener: Listener!
     let speaker = Speaker()
     var whisper: WhisperEngine?
+    var installer: ModelInstaller!
     var sigterm: DispatchSourceSignal?
     let activity = ActivityLog()
     var activityShown = false
@@ -139,6 +140,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         listener.onLevel = { [weak self] l in self?.state.level = l }
 
         startVoiceEngines()
+        installer = ModelInstaller(cfg: cfg)
+        installer.onFinished = { [weak self] kind, error in
+            guard let self else { return }
+            self.state.question = "visioncli"
+            if let error { self.flash(error, seconds: 12); return }
+            switch kind {
+            case .whisper:
+                Settings.sttEngine = "whisper"
+                Settings.whisperModel = "small.en"
+                self.restartWhisper()
+                self.flash("Whisper is installed. Transcription now runs locally.", seconds: 6)
+            case .kokoro:
+                Settings.ttsEngine = "kokoro"
+                Settings.speak = true
+                self.kokoro.start()
+                self.flash("Kokoro voices are installed. Answers will be read aloud; pick a voice in 👁 → Voice & Audio → Voice.", seconds: 8)
+            }
+        }
         updateStatusTitle()
         refreshCandidates()
         if Config.isFirstRun { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showWelcome() } }
@@ -186,6 +205,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 for app in ["iTerm2", "Terminal"] {
                     let c = TerminalProbe.probe(app: app)
                     log("probe \(app): \(c.map { "project=\($0.project) cwd=\($0.cwd) assistant=\($0.assistant?.binary ?? "-") session=\($0.sessionId ?? "-") tab=\($0.itermSession ?? "-")" } ?? "nothing")")
+                }
+            }
+        }
+
+        // Debug: `--test-download` fetches the small Kokoro voices file through the installer (progress, save, finish).
+        if CommandLine.arguments.contains("--test-download") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                self.installer.onFinished = { kind, error in log("test-download finished: \(kind.rawValue) error=\(error ?? "none")") }
+                self.installer.debugDownload([ModelInstaller.kokoroFiles[1]])
+                Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { t in
+                    if let s = self.installer.status { log("test-download status: \(s)") } else { t.invalidate() }
                 }
             }
         }
@@ -964,6 +994,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         } }
 
         submenu("Voice & Audio", in: menu) { m in
+            if let status = installer?.status { item("⏳ " + status, nil, in: m); m.addItem(.separator()) }
             item("Speak Answers", #selector(toggleSpeakSetting), in: m, on: Settings.speak)
             submenu("Speech Speed", in: m) { sp in
                 for x in [1.0, 1.25, 1.5, 1.75, 2.0] {
@@ -978,6 +1009,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                     }
                 }
                 item("System voice", #selector(chooseVoice(_:)), in: v, on: Settings.ttsEngine == "system" || VoiceModels.kokoroModel == nil)
+                if !ModelInstaller.kokoroInstalled {
+                    v.addItem(.separator())
+                    item(installer?.isBusy == true ? "Installing…" : "Download Natural Voices (Kokoro, ~350 MB)…",
+                         installer?.isBusy == true ? nil : #selector(installKokoro), in: v)
+                }
             }
             submenu("Speech Recognition", in: m) { r in
                 let models = VoiceModels.whisperModels()
@@ -985,7 +1021,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                     item("Whisper \(name) (local)", #selector(chooseWhisper(_:)), in: r,
                          on: Settings.sttEngine == "whisper" && (whisper?.modelName ?? Settings.whisperModel) == name, value: name)
                 }
-                if models.isEmpty { item("Whisper: install whisper-cpp + a ggml model", nil, in: r) }
+                if models.isEmpty || VoiceModels.binary("whisper-server", path: cfg.path) == nil {
+                    item(installer?.isBusy == true ? "Installing…" : "Download Whisper (better accuracy, ~490 MB)…",
+                         installer?.isBusy == true ? nil : #selector(installWhisper), in: r)
+                }
                 item("Apple (on-device)", #selector(chooseWhisper(_:)), in: r, on: Settings.sttEngine == "apple" || whisper == nil)
                 r.addItem(.separator())
                 item("Edit Vocabulary…", #selector(editVocabulary), in: r)
@@ -1101,6 +1140,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
     }
 
+    @objc func installWhisper() { installer.installWhisper() }
+    @objc func installKokoro() { installer.installKokoro() }
+
     @objc func chooseSpeed(_ sender: NSMenuItem) {
         guard let x = sender.representedObject as? Double else { return }
         Settings.speechSpeed = x
@@ -1190,6 +1232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         • Hold ⌥ Space, ask, let go: the answer appears above your mouse.
         • Hold ⌥ ⇧ Space to drag a box around what you mean.
         • The 👁 menu bar icon has projects, voices, models and settings.
+        • Optional: 👁 → Voice & Audio can download Whisper (more accurate transcription) and natural Kokoro voices.
 
         macOS will ask for Microphone, Speech Recognition and Screen Recording access. VisionCLI needs all three.
         To use the tools by typing in Claude Code, also give your terminal app (iTerm, Terminal…) Screen Recording access.

@@ -51,14 +51,16 @@ macOS will ask for three permissions. VisionCLI needs all of them:
 
 If something doesn't work, check System Settings → Privacy & Security, and 👁 → Settings → *Open Log*.
 
-### 3. Optional extras (auto-detected)
+### 3. Optional extras
 
 | Add | Get | How |
 |---|---|---|
-| **Whisper** | Better transcription of names and jargon (~0.7s) | `brew install whisper-cpp`, then put a model such as [`ggml-small.en.bin`](https://huggingface.co/ggerganov/whisper.cpp) in `~/Library/Application Support/visioncli/models/` |
-| **Kokoro** | Natural voices for spoken answers | install [`uv`](https://docs.astral.sh/uv/), then put [`kokoro-v1.0.onnx` and `voices-v1.0.bin`](https://github.com/thewh1teagle/kokoro-onnx/releases) in the same `models/` folder |
+| **Whisper** | More accurate transcription of names and jargon (~0.7s, local) | 👁 → Voice & Audio → Speech Recognition → **Download Whisper** (installs `whisper-cpp` via Homebrew, then downloads the ~490 MB model) |
+| **Kokoro** | Natural voices for spoken answers (local) | 👁 → Voice & Audio → Voice → **Download Natural Voices** (installs [`uv`](https://docs.astral.sh/uv/) if needed, then downloads ~350 MB) |
 | **TypeSafe Jev** | Instant browser commands | add your key via 👁 → Settings → *API Keys*, or set `TYPESAFE_API_KEY` |
 | **Browser control** | Click, scroll and read pages | in Chrome or Brave: **View → Developer → Allow JavaScript from Apple Events** |
+
+Models are saved in `~/Library/Application Support/visioncli/models/`. Whisper and Kokoro models you already have from other tools (e.g. in `~/.cache/whisper`) are picked up automatically. Without them, VisionCLI uses Apple's on-device speech recognition and the system voice.
 
 ## Gemini (Antigravity CLI or Gemini CLI)
 

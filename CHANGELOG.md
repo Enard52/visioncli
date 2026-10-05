@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- **Whisper and Kokoro on any Mac**: when they aren't installed, 👁 → Voice & Audio offers *Download Whisper* (installs whisper-cpp via Homebrew + the small.en model) and *Download Natural Voices* (installs uv if needed + the Kokoro model), with progress in the menu. Each switches itself on when done. Previously they only appeared on Macs that already had the models.
+
 ## 0.5.0
 
 - **Gemini via Antigravity CLI (`agy`)**, using your Google sign-in: 👁 → Assistant → *Gemini (Antigravity CLI)*. Terminal mode opens or attaches to `agy` and follows its transcript (`~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`). Bubble Only mode runs `agy -p --output-format stream-json --conversation <id>`. *Set Up Antigravity CLI* registers the MCP tools globally with allow rules. Verified end to end in both modes, including attaching to a running `agy`.
