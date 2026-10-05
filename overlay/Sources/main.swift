@@ -858,7 +858,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 parts.append(p + ".")
             }
             // Gemini can't take a system prompt in its interactive mode, so the voice instructions ride along.
-            if briefInstructions { parts.append(assistant == .antigravity ? "View the screenshot file(s) first. " : ""); parts.append("Asked out loud: the reply is also shown in a bubble above the mouse and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line; for flows or relationships you may add one small ```mermaid diagram; put any [[box/arrow/circle/step]] drawing markers on the last line.") }
+            if briefInstructions { parts.append(assistant == .antigravity ? "View the screenshot file(s) first. " : ""); parts.append("Asked out loud: the reply is also shown in a bubble on screen and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line; for flows or relationships you may add one small ```mermaid diagram; put any [[box/arrow/circle/step]] drawing markers on the last line.") }
             let t = terminal(for: currentProject, assistant: assistant)
             // Prefer one the user already runs: the tab they pointed at, else any tab for this project.
             if let ctx = terminalContext, ctx.assistant == assistant, let tab = ctx.itermSession {
@@ -906,20 +906,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         set(.done)
         speaker.feed(Diagrams.speakable(state.answer), final: true)
 
-        // Drawings go on the screenshot inside the bubble, never on the real screen.
+        // Drawings go on the real screen, over the thing the answer is about (the answer itself sits in the corner).
         let marks = Markup.marks(in: state.raw)
         if !marks.isEmpty, !currentShots.isEmpty {
-            var byShot: [Int: [DrawItem]] = [:]
-            for mark in marks {
-                let index = min(max(mark.image, 1), currentShots.count) - 1
-                byShot[index, default: []].append(DrawItem(kind: mark.kind, a: mark.a, b: mark.b, label: mark.label))
+            let items: [DrawItem] = marks.map { mark in
+                let shot = currentShots[min(max(mark.image, 1), currentShots.count) - 1]
+                return DrawItem(kind: mark.kind, a: shot.screenPoint(forImagePoint: mark.a),
+                                b: shot.screenPoint(forImagePoint: mark.b), label: mark.label)
             }
-            state.annotated = byShot.keys.sorted().compactMap { index in
-                let shot = currentShots[index]
-                guard let image = NSImage(data: shot.jpeg) else { return nil }
-                return AnnotatedShot(image: image, size: shot.pixelSize, items: byShot[index] ?? [])
-            }
-            log("drawing \(marks.count) mark(s) on \(state.annotated.count) screenshot(s) in the bubble")
+            highlight.draw(items, for: 25)
+            log("drawing \(marks.count) mark(s) on screen")
         }
 
         history.add(HistoryEntry(date: Date(), project: currentProject, question: state.question, answer: state.raw,
