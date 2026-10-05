@@ -1074,12 +1074,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             let (status, out, err) = shell(cfg.claude, ["mcp", "add", "visioncli", "--scope", "user", "--", node, server], env: env)
             alert.messageText = status == 0 ? "Claude Code is set up" : "Couldn't set up Claude Code"
             alert.informativeText = status == 0
-                ? "visioncli's tools (look at screen, browser, database…) are now available in every Claude Code project. Restart any running `claude` sessions to load them."
+                ? "visioncli's tools (look at screen, browser, database…) are now available in every Claude Code project. Restart any running `claude` sessions to load them.\n\nFor screenshots when typing in Claude Code, give your terminal app Screen Recording access too (System Settings → Privacy & Security)."
                 : (err.isEmpty ? out : err)
         } else {
             alert.messageText = "Missing requirements"
             alert.informativeText = [
-                cfg.node == nil ? "• Node.js 18+ (https://nodejs.org)" : nil,
+                cfg.node == nil ? "• Node.js 18 or later (https://nodejs.org). An older Node was ignored if present." : nil,
                 FileManager.default.isExecutableFile(atPath: cfg.claude) ? nil : "• Claude Code CLI (https://claude.com/claude-code)",
                 cfg.server == nil ? "• The visioncli server (use the release build of VisionCLI.app)" : nil,
             ].compactMap { $0 }.joined(separator: "\n") + "\n\nInstall them, then choose Settings → Set Up Claude Code again."
@@ -1101,6 +1101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         • The 👁 menu bar icon has projects, voices, models and settings.
 
         macOS will ask for Microphone, Speech Recognition and Screen Recording access. VisionCLI needs all three.
+        To use the tools by typing in Claude Code, also give your terminal app (iTerm, Terminal…) Screen Recording access.
 
         Set up Claude Code now so its tools work in every project?
         """

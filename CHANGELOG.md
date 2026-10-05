@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
 
+- First-run setup picks the newest Node.js 18+ on the machine instead of the first `node` on the path (an old Node 16 in /usr/local/bin was being chosen).
+- Welcome screen, setup dialog and README now explain that typing in Claude Code needs Screen Recording for your terminal app.
 - Removed the `share` tool and the Slack, Linear, Jira and markdown-report integrations. `integrations.json` now only holds the TypeSafe key for Jev.
 
 ## 0.4.0

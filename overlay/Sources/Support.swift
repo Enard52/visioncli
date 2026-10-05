@@ -77,6 +77,20 @@ struct Config: Codable {
         return (dirs + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]).joined(separator: ":")
     }
 
+    /// The newest Node.js 18+ on the machine (an old /usr/local/bin/node often shadows nvm/Homebrew installs).
+    static func findNode(path: String) -> String? {
+        var best: (path: String, version: [Int])?
+        for dir in path.split(separator: ":") {
+            let candidate = "\(dir)/node"
+            guard FileManager.default.isExecutableFile(atPath: candidate) else { continue }
+            let (status, out, _) = shell(candidate, ["-v"])
+            let version = out.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst().split(separator: ".").compactMap { Int($0) }
+            guard status == 0, let major = version.first, major >= 18 else { continue }
+            if best == nil || version.lexicographicallyPrecedes(best!.version) == false && version != best!.version { best = (candidate, version) }
+        }
+        return best?.path
+    }
+
     static func find(_ name: String, path: String) -> String? {
         path.split(separator: ":").map { "\($0)/\(name)" }.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
@@ -110,7 +124,7 @@ struct Config: Codable {
         // Self-configure anything missing (e.g. the app was downloaded and opened from Finder).
         if !c.path.contains(".local/bin") { c.path = c.path + ":" + commonPath }
         if c.server == nil || !FileManager.default.fileExists(atPath: c.server!) { c.server = bundledServer ?? c.server }
-        if c.node == nil || !FileManager.default.isExecutableFile(atPath: c.node!) { c.node = find("node", path: c.path) }
+        if c.node == nil || !FileManager.default.isExecutableFile(atPath: c.node!) { c.node = findNode(path: c.path) }
         if !c.claude.hasPrefix("/") || !FileManager.default.isExecutableFile(atPath: c.claude) { c.claude = Config.findClaude(path: c.path) ?? c.claude }
         if isFirstRun {
             try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)

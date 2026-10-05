@@ -1,6 +1,6 @@
 {
   "name": "visioncli",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Let Claude Code see your screen: ask about the file, error, UI, table or web page you are looking at, by typing or by voice, with answers above your mouse.",
   "main": "dist/index.js",
   "scripts": {

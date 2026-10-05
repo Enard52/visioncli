@@ -45,7 +45,8 @@ macOS will ask for three permissions. VisionCLI needs all of them:
 | Permission | Why |
 |---|---|
 | **Microphone** and **Speech Recognition** | to hear your question while you hold ⌥ Space |
-| **Screen & System Audio Recording** | to see the window you're asking about. After allowing it, quit and reopen VisionCLI. |
+| **Screen & System Audio Recording** for **VisionCLI** | to see the window you're asking about in voice mode. After allowing it, quit and reopen VisionCLI. |
+| **Screen & System Audio Recording** for **your terminal app** (iTerm, Terminal, Warp…) | when you *type* to Claude Code, the screenshot is taken by the terminal running `claude`. Without it, Claude only sees the wallpaper. Restart the terminal after allowing it. |
 | **Automation** (iTerm, Chrome/Brave) | asked the first time it types into your terminal or controls the browser |
 
 If something doesn't work, check System Settings → Privacy & Security, and 👁 → Settings → *Open Log*.
@@ -139,7 +140,8 @@ node dist/index.js voice          # start voice mode (under launchd: restarts af
 | Problem | Fix |
 |---|---|
 | "VisionCLI can't be opened" | Right-click → Open, or `xattr -dr com.apple.quarantine /Applications/VisionCLI.app` |
-| Claude sees only the wallpaper | Enable Screen Recording for VisionCLI, then quit and reopen it |
+| Claude sees only the wallpaper | Voice: enable Screen Recording for VisionCLI. Typing in Claude Code: enable it for your terminal app. Then quit and reopen that app. |
+| Tools missing in Claude Code | 👁 → Settings → *Set Up Claude Code* (again after moving the app or switching Node versions), then restart `claude` |
 | Answers only in the terminal, or none at all | 👁 → Settings → *Open Log*; check `claude` is installed and signed in |
 | Microphone errors | Pick a specific mic in 👁 → Voice & Audio → Microphone |
 | It crashed | It restarts automatically; details are in 👁 → Settings → *Open Crash Log* |

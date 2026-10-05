@@ -51,15 +51,8 @@ compile() { # arch out
   build "$1" "$2" "" # rerun to show the real errors
 }
 
-if [ -n "$RELEASE" ]; then
-  TMP="$(mktemp -d)"
-  compile arm64 "$TMP/VisionCLI-arm64"
-  compile x86_64 "$TMP/VisionCLI-x86_64"
-  lipo -create "$TMP/VisionCLI-arm64" "$TMP/VisionCLI-x86_64" -output "$APP/Contents/MacOS/VisionCLI"
-  rm -rf "$TMP"
-  echo "Universal binary: $(lipo -archs "$APP/Contents/MacOS/VisionCLI")"
-
-  # Bundle the MCP server so the downloaded app works without the repo (Node.js is still needed at runtime).
+bundle_server() {
+  # Bundle the MCP server so the app works without the repo (Node.js is still needed at runtime).
   [ -f dist/index.js ] || npx tsc
   SERVER="$APP/Contents/Resources/server"
   mkdir -p "$SERVER"
@@ -68,8 +61,20 @@ if [ -n "$RELEASE" ]; then
   (cd "$SERVER" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error)
   rm -f "$SERVER/package-lock.json"
   echo "Bundled MCP server ($(du -sh "$SERVER" | cut -f1))"
+}
+
+if [ -n "$RELEASE" ]; then
+  TMP="$(mktemp -d)"
+  compile arm64 "$TMP/VisionCLI-arm64"
+  compile x86_64 "$TMP/VisionCLI-x86_64"
+  lipo -create "$TMP/VisionCLI-arm64" "$TMP/VisionCLI-x86_64" -output "$APP/Contents/MacOS/VisionCLI"
+  rm -rf "$TMP"
+  echo "Universal binary: $(lipo -archs "$APP/Contents/MacOS/VisionCLI")"
+  bundle_server
 else
   compile "$(uname -m)" "$APP/Contents/MacOS/VisionCLI"
+  # VISIONCLI_BUNDLE_SERVER=1: also bundle the server in a local build (to test the downloaded-app experience).
+  [ "${VISIONCLI_BUNDLE_SERVER:-}" = "1" ] && bundle_server
 fi
 
 # Signing: releases are ad-hoc (no Apple Developer ID). Local builds prefer the stable local identity
