@@ -25,7 +25,7 @@ by typing in <b>Claude Code or Gemini CLI</b> or <b>by voice</b>, with the answe
 ### Requirements
 
 - macOS 13 or later (Apple Silicon or Intel)
-- [Claude Code](https://claude.com/claude-code) (`claude` CLI), signed in, **and/or** [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`) with a Gemini API key (see [Gemini CLI](#gemini-cli))
+- [Claude Code](https://claude.com/claude-code) (`claude`) **and/or** [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`), installed and signed in
 - [Node.js](https://nodejs.org) 18 or later
 
 ### 1. Download the app
@@ -70,7 +70,7 @@ VisionCLI works with Gemini CLI as well as Claude Code:
   - *Bubble Only* mode runs `gemini -p … -o stream-json`, resuming the same session each time.
 - **Pointing at a terminal** that runs `claude` or `gemini` uses that CLI, whatever the Assistant setting.
 
-**Sign-in:** Google no longer serves Gemini CLI on a *personal Google sign-in* (the free "Code Assist for individuals" tier says to move to Antigravity). Use a **Gemini API key** from [aistudio.google.com/apikey](https://aistudio.google.com/apikey): put it in 👁 → Settings → *API Keys* (`"gemini": {"apiKey": "..."}`) or set `GEMINI_API_KEY` before `visioncli voice`. VisionCLI then runs `gemini` with API-key auth for its own sessions (a per-run settings override), without changing your Gemini settings. Paid Code Assist (Standard/Enterprise) sign-ins keep working as-is.
+**Sign-in:** VisionCLI runs `gemini` with whatever sign-in your Gemini CLI already has, exactly like it uses your `claude` login. If `gemini` works when you run it in a terminal, it works in VisionCLI. Google no longer accepts Gemini CLI on the free *personal* Code Assist tier ("…no longer supported for Gemini Code Assist for individuals"). If you see that, sign in again with `/auth` in `gemini` using an account that has access. Optionally, add `"gemini": {"apiKey": "..."}` in 👁 → Settings → *API Keys* to make VisionCLI's runs use an API key instead.
 
 **Limits:** in Bubble Only mode Gemini can't ask for approval, so it can only read (code, screen, browser, database); for edits and commands use Gemini Terminal mode. Highlight boxes, history, speech and Jev work the same with either assistant.
 
@@ -130,9 +130,9 @@ Slash commands: `/mcp__visioncli__see <question>`, `/mcp__visioncli__point <ques
 ```
 
 - `typesafe`: instant browser commands with [Jev](https://typesafe.ai). Without it, every request goes to the assistant.
-- `gemini`: lets VisionCLI run Gemini CLI with API-key auth.
+- `gemini` (optional): makes VisionCLI's Gemini runs use this API key instead of your `gemini` sign-in.
 
-`TYPESAFE_API_KEY` / `GEMINI_API_KEY` in your shell are copied here by `visioncli voice` if the file has none.
+`TYPESAFE_API_KEY` in your shell is copied here by `visioncli voice` if the file has none.
 
 ## Privacy
 
@@ -162,7 +162,7 @@ node dist/index.js voice          # start voice mode (under launchd: restarts af
 | "VisionCLI can't be opened" | Right-click → Open, or `xattr -dr com.apple.quarantine /Applications/VisionCLI.app` |
 | Claude sees only the wallpaper | Voice: enable Screen Recording for VisionCLI. Typing in Claude Code: enable it for your terminal app. Then quit and reopen that app. |
 | Tools missing in Claude Code / Gemini CLI | 👁 → Settings → *Set Up Claude Code* / *Set Up Gemini CLI* (again after moving the app or switching Node versions), then restart `claude` / `gemini` |
-| Gemini: "no longer supported…" or "API key not valid" | Add a valid key from aistudio.google.com/apikey in 👁 → Settings → *API Keys* |
+| Gemini: "no longer supported for Code Assist for individuals" | Your `gemini` sign-in was refused by Google. Run `gemini` → `/auth` with an account that has access (or add an API key in *API Keys*) |
 | Answers only in the terminal, or none at all | 👁 → Settings → *Open Log*; check `claude` is installed and signed in |
 | Microphone errors | Pick a specific mic in 👁 → Voice & Audio → Microphone |
 | It crashed | It restarts automatically; details are in 👁 → Settings → *Open Crash Log* |

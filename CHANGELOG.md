@@ -3,7 +3,7 @@
 ## Unreleased
 
 - **Gemini CLI support**: *Set Up Gemini CLI* registers the MCP tools (`gemini mcp add -s user --trust`); 👁 → Assistant → Gemini CLI answers voice questions in Gemini Terminal mode (types into your running `gemini`, reads its session file) or Bubble Only mode (`gemini -p -o stream-json`, resumed per project). Pointing at a terminal that runs `gemini` uses it automatically, and the Project menu marks running `gemini` sessions.
-- Gemini runs can use a Gemini API key (integrations.json `gemini.apiKey` or `GEMINI_API_KEY`) through a per-run settings override, since personal Google sign-in is no longer served. Auth errors show actionable messages.
+- Gemini uses your normal `gemini` sign-in, like Claude uses your `claude` login. Optionally, a `gemini.apiKey` in integrations.json switches VisionCLI's runs to API-key auth. Auth errors show actionable messages.
 - `visioncli install` also registers with Gemini CLI when it's installed.
 
 ## 0.4.1

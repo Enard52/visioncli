@@ -81,8 +81,8 @@ export async function startVoice(cwd: string): Promise<string> {
 
   // The app runs under launchd without your shell's environment: keep the TypeSafe key (for Jev quick
   // commands) in integrations.json, readable only by you.
-  // Same for a Gemini API key (Gemini CLI no longer works on personal Google sign-in).
-  const keys: Record<string, string | undefined> = { typesafe: process.env.TYPESAFE_API_KEY, gemini: process.env.GEMINI_API_KEY };
+  // (Gemini uses your normal `gemini` sign-in; a Gemini API key is only used if you add one to integrations.json yourself.)
+  const keys: Record<string, string | undefined> = { typesafe: process.env.TYPESAFE_API_KEY };
   if (Object.values(keys).some(Boolean)) {
     const file = join(SUPPORT, "integrations.json");
     let cfg: Record<string, any> = {};

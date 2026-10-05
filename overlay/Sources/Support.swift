@@ -141,16 +141,16 @@ struct Config: Codable {
         return dirs.map { "\($0)/claude" }.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    /// Environment for `gemini` processes. With a Gemini API key (integrations.json "gemini.apiKey" or GEMINI_API_KEY),
-    /// VisionCLI's own runs use API-key auth via a system-settings override, leaving the user's Gemini settings alone.
-    /// (Google no longer serves Gemini CLI on personal Google sign-in; an API key or a paid Code Assist plan is needed.)
+    /// Environment for `gemini` processes. By default `gemini` uses its own sign-in, exactly like running it yourself.
+    /// Only if the user deliberately adds "gemini": {"apiKey": …} to integrations.json do VisionCLI's runs switch to
+    /// API-key auth (via a system-settings override, leaving the user's Gemini settings alone).
     func geminiEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = path
         let file = supportDir.appendingPathComponent("integrations.json")
         let stored = (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             .flatMap { ($0["gemini"] as? [String: Any])?["apiKey"] as? String }
-        if let key = (stored?.isEmpty == false ? stored : nil) ?? env["GEMINI_API_KEY"], !key.isEmpty {
+        if let key = stored, !key.isEmpty {
             env["GEMINI_API_KEY"] = key
             let override = supportDir.appendingPathComponent("gemini-system-settings.json")
             try? #"{"security":{"auth":{"selectedType":"gemini-api-key"}}}"#.write(to: override, atomically: true, encoding: .utf8)
