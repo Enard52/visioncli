@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2
+
+- **Fix: level bars move but no text appears** (seen on some Macs). Live captions no longer fail silently. VisionCLI checks Speech Recognition permission, retries with Apple's online recognition when on-device recognition isn't available for the language, and shows the reason and fix in the pill (permission, Dictation off, …). Audio keeps recording, so Whisper can still transcribe; if nothing could, the bubble says why instead of "Didn't catch that".
+
 ## 0.5.1
 
 - **Whisper and Kokoro on any Mac**: when they aren't installed, 👁 → Voice & Audio offers *Download Whisper* (installs whisper-cpp via Homebrew + the small.en model) and *Download Natural Voices* (installs uv if needed + the Kokoro model), with progress in the menu. Each switches itself on when done. Previously they only appeared on Macs that already had the models.

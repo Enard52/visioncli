@@ -138,6 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         listener = Listener(locale: cfg.locale)
         listener.onText = { [weak self] t in self?.state.question = t }
         listener.onLevel = { [weak self] l in self?.state.level = l }
+        listener.onIssue = { [weak self] issue in
+            guard let self, self.state.phase == .listening, self.state.question.isEmpty else { return }
+            self.state.status = issue // shown in the pill while no text has arrived
+        }
 
         startVoiceEngines()
         installer = ModelInstaller(cfg: cfg)
@@ -507,7 +511,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         guard !text.isEmpty else {
             highlight.hide()
             state.question = ""
-            flash("Didn't catch that. Hold ⌥ Space while you speak.")
+            // Explain *why* nothing was transcribed when we know (permission, Dictation off, …).
+            if let issue = listener.lastIssue {
+                flash(issue + (whisper == nil ? " Or install Whisper in 👁 → Voice & Audio → Speech Recognition." : ""), seconds: 12)
+            } else {
+                flash("Didn't catch that. Hold ⌥ Space while you speak.")
+            }
             return
         }
         state.question = text

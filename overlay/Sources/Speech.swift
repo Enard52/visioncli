@@ -17,6 +17,13 @@ final class Listener {
 
     var onText: (String) -> Void = { _ in }
     var onLevel: (CGFloat) -> Void = { _ in }
+    /// Why live captions aren't working (permission, Dictation off, …); shown in the pill. Recording continues.
+    var onIssue: (String) -> Void = { _ in }
+    private(set) var lastIssue: String?
+
+    /// The request audio is appended to; swapped when recognition restarts (e.g. on-device → online).
+    private let box = RequestBox()
+    private var retriedOnline = false
 
     init(locale: String?) {
         if let locale { recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)) }
@@ -24,16 +31,17 @@ final class Listener {
     }
 
     func start() throws {
-        guard let recognizer, recognizer.isAvailable else {
-            throw NSError(domain: "visioncli", code: 1, userInfo: [NSLocalizedDescriptionKey: "Speech recognition isn't available"])
-        }
         cancel()
         latest = ""
+        lastIssue = nil
+        retriedOnline = false
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
         req.addsPunctuation = true
-        if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
+        // Prefer on-device; if that fails (model not downloaded for this language), we retry online below.
+        if recognizer?.supportsOnDeviceRecognition == true { req.requiresOnDeviceRecognition = true }
         request = req
+        box.set(req)
 
         // A specific mic picked in the menu is captured input-only (AVCaptureSession). AVAudioEngine drives input
         // and output as one unit, so it can't use e.g. the built-in mic, which is a separate device from the speakers.
@@ -54,17 +62,70 @@ final class Listener {
         }
         if capture == nil { try startEngine(req: req) }
 
+        // Live captions need Speech Recognition permission and an available recognizer. Without them we still
+        // record (Whisper can transcribe on release) and say why captions are missing.
+        switch SFSpeechRecognizer.authorizationStatus() {
+        case .authorized: break
+        case .notDetermined:
+            SFSpeechRecognizer.requestAuthorization { _ in }
+            report("Allow Speech Recognition for VisionCLI to see live captions (macOS is asking).")
+            return
+        default:
+            report("Live captions need Speech Recognition: System Settings → Privacy & Security → Speech Recognition → VisionCLI.")
+            return
+        }
+        guard let recognizer, recognizer.isAvailable else {
+            report("Apple speech recognition isn't available right now (check Siri & Dictation in System Settings → Keyboard).")
+            return
+        }
+        startTask(recognizer, req)
+    }
+
+    private func startTask(_ recognizer: SFSpeechRecognizer, _ req: SFSpeechAudioBufferRecognitionRequest) {
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, self.request === req else { return }
                 // The final result after endAudio() is sometimes empty; never let it wipe what we heard.
                 if let text = result?.bestTranscription.formattedString, !text.isEmpty {
                     self.latest = text
                     self.onText(text)
                 }
+                if let error, self.finish == nil { self.recognitionFailed(error, recognizer, req); return }
                 if result?.isFinal == true || error != nil { self.complete() }
             }
         }
+    }
+
+    /// Recognition stopped while still listening: retry online if on-device failed, otherwise explain.
+    private func recognitionFailed(_ error: Error, _ recognizer: SFSpeechRecognizer, _ failed: SFSpeechAudioBufferRecognitionRequest) {
+        let e = error as NSError
+        log("listener: recognition error \(e.domain) \(e.code): \(e.localizedDescription)")
+        if failed.requiresOnDeviceRecognition && !retriedOnline {
+            retriedOnline = true
+            let req = SFSpeechAudioBufferRecognitionRequest()
+            req.shouldReportPartialResults = true
+            req.addsPunctuation = true
+            req.requiresOnDeviceRecognition = false
+            request = req
+            box.set(req)
+            log("listener: retrying with online recognition")
+            startTask(recognizer, req)
+            return
+        }
+        let text = e.localizedDescription.lowercased()
+        if text.contains("siri") || text.contains("dictation") || e.code == 201 {
+            report("Live captions need Dictation: turn on System Settings → Keyboard → Dictation (and Siri & Dictation in Privacy).")
+        } else if e.code == 203 || text.contains("no speech") {
+            return // just silence so far; keep listening
+        } else {
+            report("Live captions stopped (\(e.localizedDescription)). Still recording.")
+        }
+    }
+
+    private func report(_ issue: String) {
+        lastIssue = issue
+        log("listener: \(issue)")
+        onIssue(issue)
     }
 
     private var capture: CaptureMic?
@@ -72,8 +133,9 @@ final class Listener {
     /// What to do with each microphone buffer: feed speech recognition, the WAV for Whisper, and the level meter.
     private func handler(for req: SFSpeechAudioBufferRecognitionRequest) -> (AVAudioPCMBuffer) -> Void {
         let recorder = self.recorder
+        let box = self.box
         return { [weak self] buf in
-            req.append(buf)
+            box.current?.append(buf)
             recorder.append(buf)
             guard let ch = buf.floatChannelData?[0], buf.frameLength > 0 else { return }
             var sum: Float = 0
@@ -117,6 +179,7 @@ final class Listener {
     }
 
     func cancel() {
+        box.set(nil)
         finish = nil
         stopAudio()
         task?.cancel()
@@ -142,6 +205,14 @@ final class Listener {
         task = nil
         done(latest.trimmingCharacters(in: .whitespacesAndNewlines))
     }
+}
+
+/// Thread-safe holder for the request the audio thread appends to.
+final class RequestBox {
+    private let lock = NSLock()
+    private var req: SFSpeechAudioBufferRecognitionRequest?
+    var current: SFSpeechAudioBufferRecognitionRequest? { lock.lock(); defer { lock.unlock() }; return req }
+    func set(_ r: SFSpeechAudioBufferRecognitionRequest?) { lock.lock(); req = r; lock.unlock() }
 }
 
 /// Input-only capture from one specific microphone, delivered as PCM buffers.

@@ -177,6 +177,7 @@ node dist/index.js voice          # start voice mode (under launchd: restarts af
 | Gemini answers "tried a step that needs your approval" | Bubble Only mode can't approve commands/edits; switch 👁 → Answer In to the terminal |
 | Answers only in the terminal, or none at all | 👁 → Settings → *Open Log*; check `claude` is installed and signed in |
 | Microphone errors | Pick a specific mic in 👁 → Voice & Audio → Microphone |
+| Sound bars move but no text appears | The pill now says why. Usually: allow **Speech Recognition** for VisionCLI (Privacy & Security), or turn on **Keyboard → Dictation**. Installing Whisper also transcribes without Apple's recognizer. |
 | It crashed | It restarts automatically; details are in 👁 → Settings → *Open Crash Log* |
 
 ## License
