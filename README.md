@@ -182,7 +182,7 @@ node dist/index.js voice          # start voice mode (under launchd: restarts af
 | Answers only in the terminal, or none at all | 👁 → Settings → *Open Log*; check `claude` is installed and signed in |
 | Microphone errors | Pick a specific mic in 👁 → Voice & Audio → Microphone |
 | Sound bars move but no text appears | The pill now says why. Usually: allow **Speech Recognition** for VisionCLI (Privacy & Security), or turn on **Keyboard → Dictation**. Installing Whisper also transcribes without Apple's recognizer. |
-| Asked for permissions again after updating | Expected once when moving to 0.5.3 (the first release signed with VisionCLI's permanent certificate). Later updates keep permissions. |
+| Asked for permissions again after updating, though Settings shows VisionCLI as allowed | The switch belongs to an older signature. VisionCLI 0.5.5+ clears it automatically on first launch; otherwise use 👁 → Settings → **Fix Permissions…** (or remove VisionCLI with − and add it again). Happens once when moving to the permanently signed releases; later updates keep permissions. |
 | It crashed | It restarts automatically; details are in 👁 → Settings → *Open Crash Log* |
 
 ## License

@@ -266,9 +266,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         hotkeys = HotKeys()
         HotKeys.handler = { [weak self] key, pressed in self?.hotkey(key, pressed: pressed) }
 
+        let repaired = repairStalePermissions(force: false)
         SFSpeechRecognizer.requestAuthorization { _ in }
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
         if !Screen.hasPermission { CGRequestScreenCaptureAccess() }
+        if !repaired.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                self.state.question = "visioncli"
+                self.flash("This version needs you to allow VisionCLI once more (\(repaired.joined(separator: ", "))). Turn it on in the prompt or in System Settings → Privacy & Security; updates keep it from now on.", seconds: 14)
+            }
+        }
 
     }
 
@@ -1076,6 +1083,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             item("Set Up Antigravity CLI (MCP tools)…", cfg.agy == nil ? nil : #selector(setupAgy), in: m)
             item("Set Up Gemini CLI (MCP tools)…", cfg.gemini == nil ? nil : #selector(setupGemini), in: m)
             item("Start at Login", #selector(toggleLogin), in: m, on: LoginItem.isEnabled)
+            item("Fix Permissions…", #selector(fixPermissions), in: m)
             item("Check for Updates… (v\(Updater.currentVersion))", #selector(checkForUpdates), in: m)
             item("Check for Updates Automatically", #selector(toggleAutoUpdate), in: m, on: Settings.autoUpdate)
             item("Instant Browser Commands (Jev)", #selector(toggleQuick), in: m, on: Settings.quickCommands)
@@ -1175,6 +1183,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     @objc func toggleAutoUpdate() { Settings.autoUpdate.toggle() }
+
+    /// macOS ties permissions to the code signature. After a signature change (e.g. moving to the permanently
+    /// signed releases) the old switch stays "on" in System Settings but no longer applies, and toggling it often
+    /// doesn't help. Clearing VisionCLI's own stale entries lets macOS register the current version cleanly.
+    /// Runs once per version, only for permissions that aren't actually in effect.
+    @discardableResult
+    func repairStalePermissions(force: Bool) -> [String] {
+        let version = Updater.currentVersion
+        guard force || UserDefaults.standard.string(forKey: "permissionRepairVersion") != version else { return [] }
+        UserDefaults.standard.set(version, forKey: "permissionRepairVersion")
+        var services: [(String, String)] = []
+        if force || !Screen.hasPermission { services.append(("ScreenCapture", "Screen Recording")) }
+        if force || AVCaptureDevice.authorizationStatus(for: .audio) == .denied { services.append(("Microphone", "Microphone")) }
+        if force || SFSpeechRecognizer.authorizationStatus() == .denied { services.append(("SpeechRecognition", "Speech Recognition")) }
+        if force { services.append(("AppleEvents", "Automation")) }
+        let bundle = Bundle.main.bundleIdentifier ?? "dev.visioncli.overlay"
+        for (service, _) in services { shell("/usr/bin/tccutil", ["reset", service, bundle]) }
+        if !services.isEmpty { log("permissions: cleared stale \(services.map(\.0)) for \(bundle)") }
+        return services.map(\.1)
+    }
+
+    @objc func fixPermissions() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Fix VisionCLI's permissions?"
+        alert.informativeText = "This clears VisionCLI's Screen Recording, Microphone, Speech Recognition and Automation entries (only VisionCLI's) so macOS asks again for this version. Use it if System Settings shows VisionCLI as allowed but it still asks or can't see the screen."
+        alert.addButton(withTitle: "Fix Permissions")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        repairStalePermissions(force: true)
+        SFSpeechRecognizer.requestAuthorization { _ in }
+        AVCaptureDevice.requestAccess(for: .audio) { _ in }
+        CGRequestScreenCaptureAccess()
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+    }
 
     @objc func checkForUpdates() {
         updater.check(manual: true) { [weak self] release in

@@ -1,6 +1,6 @@
 {
   "name": "visioncli",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "Let Claude see your screen: ask about the file, error or UI you're looking at without pasting screenshots.",
   "mcpServers": {
     "visioncli": {
