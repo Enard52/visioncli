@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Removed the `share` tool and the Slack, Linear, Jira and markdown-report integrations. `integrations.json` now only holds the TypeSafe key for Jev.
+
 ## 0.4.0
 
 First public release.

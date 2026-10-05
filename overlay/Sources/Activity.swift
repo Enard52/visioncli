@@ -57,7 +57,7 @@ final class ActivityLog {
     func toolResult(_ text: String, isError: Bool, tool: String?) {
         let lines = text.components(separatedBy: "\n")
         // Show command / query output; just summarize file reads and searches.
-        let verbose = isError || tool == "Bash" || tool == "mcp__visioncli__db_query" || tool == "mcp__visioncli__share"
+        let verbose = isError || tool == "Bash" || tool == "mcp__visioncli__db_query"
         if verbose {
             for l in lines.prefix(15) { line(c(isError ? "31" : "2", "   │ " + String(l.prefix(200)))) }
             if lines.count > 15 { line(c("2", "   │ … \(lines.count - 15) more lines")) }

@@ -21,7 +21,7 @@ final class HistoryStore: ObservableObject {
         load()
     }
 
-    /// Save screenshots for an entry and return their paths (also passed to Claude for `share`).
+    /// Save screenshots for an entry and return their paths (also referenced in the question sent to Claude).
     func save(_ shots: [Shot]) -> [Shot] {
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         return shots.enumerated().map { i, shot in

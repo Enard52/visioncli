@@ -204,12 +204,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
         if !Screen.hasPermission { CGRequestScreenCaptureAccess() }
 
-        DispatchQueue.global().async { [cfg] in
-            let (status, out, _) = cfg.visioncli(["destinations"])
-            if status == 0, let list = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String] {
-                DispatchQueue.main.async { self.state.destinations = list }
-            }
-        }
     }
 
     // MARK: Panel
@@ -798,19 +792,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
     }
 
-    func share(to destination: String) {
-        let title = String(state.question.prefix(90))
-        let app = currentWindow?.label ?? ""
-        let body = "**Question:** \(state.question)\n\n\(state.answer)\n\n_Project: \((currentProject as NSString).lastPathComponent)\(app.isEmpty ? "" : " · \(app)")_"
-        let image = currentShots.last?.file?.path
-        state.toast = "Sharing…"
-        DispatchQueue.global().async { [cfg] in
-            let (status, out, err) = cfg.visioncli(["share", destination, title] + (image.map { [$0] } ?? []), stdin: Data(body.utf8))
-            let msg = (status == 0 ? out : err).trimmingCharacters(in: .whitespacesAndNewlines)
-            DispatchQueue.main.async { self.state.toast = String(msg.prefix(90)) }
-        }
-    }
-
     func showHistory() { historyWindow.show(store: history) }
 
     func dismiss() {
@@ -983,7 +964,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             item("Start at Login", #selector(toggleLogin), in: m, on: LoginItem.isEnabled)
             item("Instant Browser Commands (Jev)", #selector(toggleQuick), in: m, on: Settings.quickCommands)
             item("Show AI Cursor in Browser", #selector(toggleGhost), in: m, on: !FileManager.default.fileExists(atPath: ghostOffFile.path))
-            item("Set Up Integrations (Slack, Linear, Jira, TypeSafe)…", #selector(openIntegrations), in: m)
+            item("TypeSafe API Key (Jev)…", #selector(openIntegrations), in: m)
             m.addItem(.separator())
             item("Open Log", #selector(openLog), in: m)
             if ((try? FileManager.default.attributesOfItem(atPath: CrashReporter.logURL.path)[.size] as? Int) ?? 0) > 0 {
@@ -1093,7 +1074,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             let (status, out, err) = shell(cfg.claude, ["mcp", "add", "visioncli", "--scope", "user", "--", node, server], env: env)
             alert.messageText = status == 0 ? "Claude Code is set up" : "Couldn't set up Claude Code"
             alert.informativeText = status == 0
-                ? "visioncli's tools (look at screen, browser, database, share…) are now available in every Claude Code project. Restart any running `claude` sessions to load them."
+                ? "visioncli's tools (look at screen, browser, database…) are now available in every Claude Code project. Restart any running `claude` sessions to load them."
                 : (err.isEmpty ? out : err)
         } else {
             alert.messageText = "Missing requirements"
@@ -1198,29 +1179,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
     @objc func openLog() { NSWorkspace.shared.open(logURL) }
 
+    /// integrations.json holds only the TypeSafe key (Jev instant browser commands).
     @objc func openIntegrations() {
         let file = supportDir.appendingPathComponent("integrations.json")
         if !FileManager.default.fileExists(atPath: file.path) {
-            let template = """
-            {
-              "reportsDir": "~/Documents/visioncli-reports",
-              "_slack": { "webhookUrl": "https://hooks.slack.com/services/..." },
-              "_linear": { "apiKey": "lin_api_...", "teamId": "TEAM-UUID" },
-              "_jira": { "baseUrl": "https://yourteam.atlassian.net", "email": "you@example.com", "apiToken": "...", "projectKey": "ABC", "issueType": "Task" },
-              "_typesafe": { "apiKey": "TypeSafe key for instant browser commands (Jev)" }
-            }
-            """
             try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
-            try? (template + "\n").write(to: file, atomically: true, encoding: .utf8)
+            try? "{\n  \"typesafe\": { \"apiKey\": \"\" }\n}\n".write(to: file, atomically: true, encoding: .utf8)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         }
         NSWorkspace.shared.open(file)
-        // Pick up changes the next time the bubble opens.
-        DispatchQueue.global().asyncAfter(deadline: .now() + 30) { [cfg] in
-            let (status, out, _) = cfg.visioncli(["destinations"])
-            if status == 0, let list = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String] {
-                DispatchQueue.main.async { self.state.destinations = list }
-            }
-        }
     }
 
     @objc func toggleLogin() {

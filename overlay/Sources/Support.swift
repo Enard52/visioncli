@@ -125,7 +125,7 @@ struct Config: Codable {
         return dirs.map { "\($0)/claude" }.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    /// Run the visioncli node CLI (share, destinations, …).
+    /// Run the visioncli node CLI (quick, warm, …).
     func visioncli(_ args: [String], stdin: Data? = nil) -> (Int32, String, String) {
         guard let node, let server else { return (-1, "", "Node.js wasn't found. Install it (https://nodejs.org) and reopen VisionCLI.") }
         var env = ProcessInfo.processInfo.environment

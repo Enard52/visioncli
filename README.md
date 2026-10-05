@@ -56,7 +56,7 @@ If something doesn't work, check System Settings → Privacy & Security, and �
 |---|---|---|
 | **Whisper** | Better transcription of names and jargon (~0.7s) | `brew install whisper-cpp`, then put a model such as [`ggml-small.en.bin`](https://huggingface.co/ggerganov/whisper.cpp) in `~/Library/Application Support/visioncli/models/` |
 | **Kokoro** | Natural voices for spoken answers | install [`uv`](https://docs.astral.sh/uv/), then put [`kokoro-v1.0.onnx` and `voices-v1.0.bin`](https://github.com/thewh1teagle/kokoro-onnx/releases) in the same `models/` folder |
-| **TypeSafe Jev** | Instant browser commands | add `"typesafe": {"apiKey": "..."}` via 👁 → Settings → *Set Up Integrations*, or set `TYPESAFE_API_KEY` |
+| **TypeSafe Jev** | Instant browser commands | add your key via 👁 → Settings → *TypeSafe API Key (Jev)*, or set `TYPESAFE_API_KEY` |
 | **Browser control** | Click, scroll and read pages | in Chrome or Brave: **View → Developer → Allow JavaScript from Apple Events** |
 
 ## Use it
@@ -67,7 +67,7 @@ If something doesn't work, check System Settings → Privacy & Security, and �
 |---|---|
 | **Hold ⌥ Space**, speak, let go | Ask about what's under the mouse (or tap to start, tap again to send) |
 | **Hold ⌥ ⇧ Space** | Ask, and drag a box around exactly what you mean |
-| **⌥ P** | Pin the answer: scroll, select text, click `file:line` links, toolbar (copy, read aloud, share, history) |
+| **⌥ P** | Pin the answer: scroll, select text, click `file:line` links, toolbar (copy, read aloud, history) |
 | **⌥ O** | Open the first `file:line` in your editor (JetBrains IDEs, Xcode, VS Code, Cursor) |
 | **⌥ ↩ / esc** | Approve or deny an edit or command (background mode) |
 | **esc** | Dismiss, or stop the answer |
@@ -96,27 +96,22 @@ Slash commands: `/mcp__visioncli__see <question>`, `/mcp__visioncli__point <ques
 | `device_screenshot` | Clean iOS Simulator (needs Xcode) or Android (`adb`) screenshot |
 | `db_schema`, `db_query` | Tables, columns, foreign keys; single read-only SELECT/SHOW/DESCRIBE/EXPLAIN/WITH queries in a read-only transaction (MySQL, Postgres, SQLite from `.env`) |
 | `browser_tabs`, `browser_open`, `browser_switch_tab`, `browser_navigate`, `browser_read`, `browser_elements`, `browser_click`, `browser_type`, `browser_scroll` | Fast Chrome/Brave control via AppleScript |
-| `share` | Markdown report, Slack, Linear or Jira |
 | `start_voice` | Start the voice overlay |
 </details>
 
 ## Menu
 
-**👁 Project** (Auto, or pick from running `claude` sessions, open editors and recent projects) · **Answer In** (Claude terminal, or bubble only) · **Model** (Sonnet or Opus) · **Voice & Audio** (speak answers, speed up to 2×, voice, speech recognition, microphone, speaker) · History · Copy Last Answer · New Conversation · **Settings** (Set Up Claude Code, Start at Login, instant browser commands, AI cursor, integrations, logs).
+**👁 Project** (Auto, or pick from running `claude` sessions, open editors and recent projects) · **Answer In** (Claude terminal, or bubble only) · **Model** (Sonnet or Opus) · **Voice & Audio** (speak answers, speed up to 2×, voice, speech recognition, microphone, speaker) · History · Copy Last Answer · New Conversation · **Settings** (Set Up Claude Code, Start at Login, instant browser commands, AI cursor, TypeSafe key, logs).
 
-## Integrations
+## TypeSafe key (Jev)
 
-👁 → Settings → *Set Up Integrations* opens `~/Library/Application Support/visioncli/integrations.json`:
+Instant browser commands use a [TypeSafe](https://typesafe.ai) key. 👁 → Settings → *TypeSafe API Key (Jev)* opens `~/Library/Application Support/visioncli/integrations.json` (readable only by you):
 
 ```json
-{
-  "reportsDir": "~/Documents/visioncli-reports",
-  "slack": { "webhookUrl": "https://hooks.slack.com/services/..." },
-  "linear": { "apiKey": "lin_api_...", "teamId": "TEAM-UUID" },
-  "jira": { "baseUrl": "https://you.atlassian.net", "email": "you@example.com", "apiToken": "...", "projectKey": "ABC" },
-  "typesafe": { "apiKey": "..." }
-}
+{ "typesafe": { "apiKey": "..." } }
 ```
+
+Or set `TYPESAFE_API_KEY` in your shell before running `visioncli voice`. Without a key, every request goes to Claude.
 
 ## Privacy
 

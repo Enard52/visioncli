@@ -19,7 +19,6 @@ import {
 import * as browser from "./browser.js";
 import { describeConnection, query, schema } from "./db.js";
 import { quick, warm } from "./quick.js";
-import { type Destination, configuredDestinations, share } from "./share.js";
 import { install, startVoice } from "./voice.js";
 
 const INSTRUCTIONS = `visioncli lets you see the user's screen so they don't have to paste screenshots.
@@ -34,7 +33,6 @@ Use it whenever the user refers to something they are looking at: "this file", "
   in code by grepping for visible strings.
 - For database questions ("how are payments and orders related"), use \`db_schema\` / \`db_query\` (read-only, uses the
   project's .env) together with the models/migrations in the code.
-- \`share\` sends a report to a file, Slack, Linear or Jira when the user asks.
 - Browser (Brave/Chrome): \`browser_tabs\`, \`browser_open\`, \`browser_switch_tab\`, \`browser_navigate\`, \`browser_read\`,
   \`browser_elements\` → \`browser_click\` / \`browser_type\` (by element id), \`browser_scroll\`. Prefer these over screenshots for
   web pages: they're fast and exact.`;
@@ -209,30 +207,6 @@ server.registerTool(
   async ({ sql }) => {
     try {
       return { content: [{ type: "text" as const, text: await query(sql) }] };
-    } catch (err) {
-      return errorResult(err);
-    }
-  },
-);
-
-server.registerTool(
-  "share",
-  {
-    title: "Share a report",
-    description:
-      "Send a short report (e.g. the question, your answer, and file references) to a destination the user has set up: " +
-      '"file" (markdown in ~/Documents/visioncli-reports, always available), "slack", "linear" or "jira". ' +
-      "Only call this when the user asks to share/send/file something.",
-    inputSchema: {
-      destination: z.enum(["file", "slack", "linear", "jira"]),
-      title: z.string().describe("Short title / issue summary"),
-      body: z.string().describe("Markdown body"),
-      image_path: z.string().optional().describe("Path to a screenshot to attach (saved with file reports)"),
-    },
-  },
-  async ({ destination, title, body, image_path }) => {
-    try {
-      return { content: [{ type: "text" as const, text: await share(destination, title, body, image_path) }] };
     } catch (err) {
       return errorResult(err);
     }
@@ -423,13 +397,12 @@ server.registerPrompt(
   }),
 );
 
-// CLI: `visioncli voice [dir]`, `visioncli install`, `visioncli share <dest> <title> [image] < body`, `visioncli destinations`
+// CLI: `visioncli voice [dir]`, `visioncli install`, `visioncli quick <command>`, `visioncli warm`, `visioncli browser <sub>`
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd) {
   try {
     if (cmd === "voice") console.log(await startVoice(rest[0] ?? process.cwd()));
     else if (cmd === "install") console.log(await install());
-    else if (cmd === "destinations") console.log(JSON.stringify(await configuredDestinations()));
     else if (cmd === "quick") console.log(JSON.stringify(await quick(rest.join(" "))));
     else if (cmd === "warm") console.log(await warm());
     else if (cmd === "browser") {
@@ -445,12 +418,8 @@ if (cmd) {
         sub === "nav" ? await browser.navigate(a[0] as "back") : `unknown: ${sub}`;
       console.log(typeof out === "string" ? out : JSON.stringify(out, null, 2));
     }
-    else if (cmd === "share") {
-      const chunks: Buffer[] = [];
-      for await (const c of process.stdin) chunks.push(c as Buffer);
-      console.log(await share(rest[0] as Destination, rest[1] ?? "visioncli report", Buffer.concat(chunks).toString(), rest[2]));
-    } else {
-      console.error("Usage: visioncli [voice [dir] | install | share <file|slack|linear|jira> <title> [image] | destinations | quick <command> | browser <sub>]");
+    else {
+      console.error("Usage: visioncli [voice [dir] | install | quick <command> | warm | browser <sub>]");
       process.exit(2);
     }
     process.exit(0);

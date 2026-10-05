@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import * as browser from "./browser.js";
-import { INTEGRATIONS_FILE } from "./share.js";
+import { INTEGRATIONS_FILE } from "./config.js";
 
 // Instant voice commands: one Jev (TypeSafe System One) request routes the spoken command and picks its
 // target from candidates code collected (open tabs, clickable elements); code then performs the action.

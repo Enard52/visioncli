@@ -312,7 +312,7 @@ final class TerminalSession {
 
     /// Edits and commands may be waiting for approval in the terminal; say so in the bubble.
     private func checkApprovalWait() {
-        guard awaiting != nil, let tool = lastTool, ["Edit", "MultiEdit", "Write", "Bash", "NotebookEdit", "mcp__visioncli__share"].contains(tool),
+        guard awaiting != nil, let tool = lastTool, ["Edit", "MultiEdit", "Write", "Bash", "NotebookEdit"].contains(tool),
               Date().timeIntervalSince(lastToolAt) > 1.5 else { return }
         onStatus("Running \(tool)… approve in the Claude terminal if asked")
         lastTool = nil

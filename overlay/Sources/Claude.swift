@@ -14,12 +14,11 @@ Screenshots of what they are looking at are attached to each question, with the 
 - To run tests, builds, artisan/npm/git commands etc., use Bash. The user approves each command from the bubble, so run one focused command at a time and summarize the output briefly.
 - For web pages in Brave/Chrome, prefer the mcp__visioncli__browser_* tools over screenshots: browser_read for the page text, browser_elements then browser_click/browser_type to act, browser_tabs/browser_open/browser_switch_tab/browser_navigate to move around. Clicks and typing ask the user first.
 - If you can't tell what they mean, call mcp__visioncli__select_region so they can drag a box around it. If they say they copied a screenshot, use mcp__visioncli__clipboard_image.
-- If the user asks to share, send, file or save this, use mcp__visioncli__share and pass the saved screenshot path as image_path.
 - Reply in plain conversational text, under about 100 words unless they ask for detail. No headings or tables, and code snippets of 3 lines at most.
 - The question came from speech-to-text, so technical words may be misheard; infer what they meant.
 """
 
-/// Tools that run without asking. Everything else (Edit, Write, Bash, share, …) asks the user in the bubble.
+/// Tools that run without asking. Everything else (Edit, Write, Bash, …) asks the user in the bubble.
 let autoAllowedTools = [
     "Read", "Grep", "Glob",
     "mcp__visioncli__look", "mcp__visioncli__list_windows", "mcp__visioncli__device_screenshot",
@@ -44,7 +43,6 @@ struct PermissionRequest {
         case "Edit", "MultiEdit": return "Claude wants to edit \(name)"
         case "Write": return FileManager.default.fileExists(atPath: file ?? "") ? "Claude wants to overwrite \(name)" : "Claude wants to create \(name)"
         case "Bash": return "Claude wants to run a command"
-        case "mcp__visioncli__share": return "Claude wants to share to \(input["destination"] as? String ?? "?")"
         default: return "Claude wants to use \(tool.replacingOccurrences(of: "mcp__visioncli__", with: ""))"
         }
     }
@@ -65,7 +63,6 @@ struct PermissionRequest {
             return edits.prefix(3).flatMap { lines($0["old_string"] as? String, .removed, max: 3) + lines($0["new_string"] as? String, .added, max: 4) }
         case "Write": return lines(input["content"] as? String, .added, max: 10)
         case "Bash": return [("$ " + (input["command"] as? String ?? ""), .context)]
-        case "mcp__visioncli__share": return lines("\(input["title"] as? String ?? "")\n\n\(input["body"] as? String ?? "")", .context, max: 8)
         default:
             let json = (try? JSONSerialization.data(withJSONObject: input, options: [.prettyPrinted])).map { String(decoding: $0, as: UTF8.self) }
             return lines(json, .context, max: 8)
@@ -297,7 +294,6 @@ final class ClaudeSession {
         case "mcp__visioncli__device_screenshot": return "Looking at the simulator…"
         case "mcp__visioncli__db_schema": return "Reading the database schema…"
         case "mcp__visioncli__db_query": return "Querying the database…"
-        case "mcp__visioncli__share": return "Sharing…"
         case "Read": return "Reading \(base("file_path"))…"
         case "Grep": return "Searching for “\((input["pattern"] as? String ?? "").prefix(40))”…"
         case "Glob": return "Finding files…"

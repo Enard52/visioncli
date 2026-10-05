@@ -15,7 +15,6 @@ final class OverlayState: ObservableObject {
     @Published var regionSelected = false
     @Published var permission: PermissionRequest?
     @Published var toast = ""
-    @Published var destinations: [String] = ["file"]
     @Published var speaking = false
 
     var answer: String { Markup.display(raw) }
@@ -25,7 +24,6 @@ final class OverlayState: ObservableObject {
 protocol BubbleActions: AnyObject {
     func copyAnswer()
     func toggleSpeak()
-    func share(to destination: String)
     func showHistory()
     func dismiss()
     func togglePin()
@@ -189,17 +187,6 @@ struct AnswerBubble: View {
         HStack(spacing: 2) {
             IconButton(symbol: "doc.on.doc", help: "Copy answer") { actions?.copyAnswer() }
             IconButton(symbol: s.speaking ? "speaker.wave.2.fill" : "speaker.wave.2", help: "Read aloud", active: s.speaking) { actions?.toggleSpeak() }
-            Menu {
-                ForEach(s.destinations, id: \.self) { d in
-                    Button(d == "file" ? "Save as Markdown report" : "Send to \(d.capitalized)") { actions?.share(to: d) }
-                }
-            } label: {
-                Image(systemName: "square.and.arrow.up").font(.system(size: 11.5, weight: .medium)).foregroundStyle(.white.opacity(0.6))
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 24, height: 22)
-            .help("Share")
             IconButton(symbol: "clock.arrow.circlepath", help: "History") { actions?.showHistory() }
             Spacer()
             if !s.toast.isEmpty {
