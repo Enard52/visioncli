@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1
+
+- **Fix: browser tasks opened lots of tabs and windows.** `browser_open` now switches to a tab already showing the page, otherwise reuses the assistant's own working tab, and opens at most one new tab. In Chrome/Brave, keyboard navigation (⌘L/⌘T/⌘N) from computer control is refused in favour of the browser tools, so keys can't land in the wrong window.
+- **Browser tools see inside frames.** Portals and admin panels that put their UI in iframes/frames (government and bank sites, Ext JS apps) now work with `browser_elements`, `browser_click`, `browser_type`, `browser_select` and `browser_read`, instead of falling back to pixel clicks.
+- **No more races.** Clicks and typing in the browser happen immediately (the AI cursor just shows where), so the next step never runs before a field is filled, even when Chrome is in the background.
+- **Answers in the top-right corner.** The answer bubble and approval cards sit in the corner (under the task panel); only the listening/thinking loader follows the cursor. Pointing markers are drawn on the real screen again, over the thing being explained.
+
 ## 0.7.0
 
 - **Computer control: VisionCLI can use your Mac.** Claude or Gemini can click, double/right-click, drag, scroll, type, press shortcuts, open apps and URLs, in any app, from voice or from the terminal. It reads each app's real buttons, fields and menus through Accessibility (`ui_elements`) so it clicks "Save" by id instead of guessing pixels; pixel positions on a screenshot work too. Keys and typing go to the app it's working in, never by accident to your terminal.

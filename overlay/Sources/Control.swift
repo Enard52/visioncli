@@ -483,6 +483,16 @@ extension AppDelegate {
         }
         let keyboardTarget = (action == "type" || action == "key") ? controlTarget.flatMap { $0.isTerminated ? nil : $0 } : nil
         let app = keyboardTarget ?? Computer.frontApp
+
+        // In Chrome/Brave the browser_* tools are exact and fast; keyboard navigation there opened stray tabs/windows
+        // and typed into whichever window happened to be in front.
+        let browserIds: Set<String> = ["com.google.Chrome", "com.brave.Browser", "com.google.Chrome.canary", "com.brave.Browser.beta"]
+        if action == "key", browserIds.contains(app?.bundleIdentifier ?? ""),
+           let keys = (r["keys"] as? String)?.lowercased().replacingOccurrences(of: " ", with: ""),
+           ["cmd+l", "cmd+t", "cmd+n", "cmd+shift+n", "command+l", "command+t", "command+n"].contains(where: { keys.contains($0) }) {
+            reply(["error": "Don't use keyboard shortcuts to open or navigate pages in \(app?.localizedName ?? "the browser"). Use browser_open (reuses tabs), browser_navigate, browser_switch_tab, browser_elements + browser_click/browser_type/browser_select. Use click/type_text only for things those can't reach (canvas, cross-origin frames, browser dialogs)."])
+            return
+        }
         let appName = app?.localizedName ?? "the front app"
         let what: String = {
             let on = element.map { uiElements.label($0) } ?? target.map { "(\(Int($0.x)), \(Int($0.y)))" } ?? ""

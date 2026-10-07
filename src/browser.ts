@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -104,18 +104,64 @@ export async function switchTo(tabId: string, b?: BrowserName) {
   end tell`);
 }
 
-export async function open(url: string, newTab = true, b?: BrowserName) {
+// The tab the assistant works in: later opens navigate it instead of piling up new tabs/windows.
+// Kept in a file because quick commands run as separate processes.
+const AGENT_TAB = join(homedir(), "Library", "Application Support", "visioncli", "agent-tab.json");
+const sameUrl = (a: string, b: string) => {
+  const norm = (u: string) => u.replace(/#.*$/, "").replace(/\/+$/, "").replace(/^https?:\/\/(www\.)?/i, "").toLowerCase();
+  return norm(a) === norm(b);
+};
+
+/**
+ * Open a URL without spamming tabs: switch to a tab that already shows it; otherwise navigate the assistant's own tab
+ * (if it's still open); otherwise make one new tab in the front window. `newTab: false` loads it in the current tab.
+ */
+export async function open(url: string, newTab = true, b?: BrowserName): Promise<string> {
   const browser = b ?? (await pick());
-  if (!/^[a-z]+:\/\//i.test(url)) url = "https://" + url;
-  await osa(
-    newTab
-      ? `tell application ${q(browser)}
-          if (count of windows) = 0 then make new window
-          tell window 1 to make new tab with properties {URL:${q(url)}}
-          activate
-        end tell`
-      : `tell application ${q(browser)} to set URL of active tab of window 1 to ${q(url)}`,
-  );
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = "https://" + url;
+  const existing = (await tabs(browser).catch(() => [] as Tab[])).find((t) => sameUrl(t.url, url));
+  if (existing) {
+    await switchTo(existing.id, browser);
+    return `Switched to the tab already showing ${url}`;
+  }
+  if (!newTab) {
+    await osa(`tell application ${q(browser)}
+      if (count of windows) = 0 then make new window
+      set URL of active tab of window 1 to ${q(url)}
+      activate
+    end tell`);
+    return `Opened ${url} in the current tab`;
+  }
+  let agent: { browser?: string; id?: string } = {};
+  try { agent = JSON.parse(readFileSync(AGENT_TAB, "utf8")); } catch {}
+  if (agent.browser === browser && agent.id) {
+    const r = await osa(`tell application ${q(browser)}
+      repeat with w in windows
+        repeat with i from 1 to (count of tabs of w)
+          if (id of tab i of w as text) is ${q(agent.id)} then
+            set URL of tab i of w to ${q(url)}
+            set active tab index of w to i
+            set index of w to 1
+            activate
+            return "reused"
+          end if
+        end repeat
+      end repeat
+      return "gone"
+    end tell`).catch(() => "gone");
+    if (r === "reused") return `Opened ${url} (in the assistant's tab)`;
+  }
+  const id = await osa(`tell application ${q(browser)}
+    if (count of windows) = 0 then make new window
+    tell window 1 to set t to make new tab with properties {URL:${q(url)}}
+    activate
+    return id of t as text
+  end tell`);
+  try {
+    mkdirSync(dirname(AGENT_TAB), { recursive: true });
+    writeFileSync(AGENT_TAB, JSON.stringify({ browser, id }));
+  } catch {}
+  return `Opened ${url} in a new tab`;
 }
 
 export async function navigate(action: "back" | "forward" | "reload" | "close" | "new", b?: BrowserName) {
@@ -142,9 +188,25 @@ export async function js(code: string, b?: BrowserName): Promise<string> {
   return osa(`tell application ${q(browser)} to execute active tab of window 1 javascript ${q(code)}`, 10000);
 }
 
+/**
+ * Page-side helpers that see into same-origin iframes/frames too (government and enterprise portals, Ext JS apps and
+ * older admin panels often put the whole UI inside frames): __docs() all documents, __q/__qa query across them,
+ * __rect an element's box in top-window coordinates.
+ */
+const FRAMES = `const __docs = () => { const out = [document];
+    for (let i = 0; i < out.length && out.length < 40; i++) for (const f of out[i].querySelectorAll('iframe, frame')) {
+      try { if (f.contentDocument && f.contentDocument.documentElement) out.push(f.contentDocument); } catch (e) {} }
+    return out; };
+  const __qa = sel => __docs().flatMap(d => [...d.querySelectorAll(sel)]);
+  const __q = sel => { for (const d of __docs()) { const e = d.querySelector(sel); if (e) return e; } return null; };
+  const __rect = el => { const r = el.getBoundingClientRect(); let x = r.left, y = r.top, w = el.ownerDocument.defaultView;
+    while (w && w !== window && w.frameElement) { const fr = w.frameElement.getBoundingClientRect(); x += fr.left; y += fr.top; w = w.parent; }
+    return { left: x, top: y, width: r.width, height: r.height }; };`;
+
 // Tags visible, clickable elements with data-vcli ids so a later click/type can target them exactly.
 const ELEMENTS_JS = `(() => {
-  const vis = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+  ${FRAMES}
+  const vis = el => { const r = el.getBoundingClientRect(); const s = el.ownerDocument.defaultView.getComputedStyle(el);
     return r.width > 2 && r.height > 2 && s.visibility !== 'hidden' && s.display !== 'none' &&
       r.bottom > -200 && r.top < innerHeight + 1200; };
   // Form controls are named by their <label> (minus the control's own text, e.g. a select's options).
@@ -157,8 +219,8 @@ const ELEMENTS_JS = `(() => {
     '[role=button], [role=link], [role=tab], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=option], ' +
     '[role=checkbox], [role=switch], [role=radio], [role=combobox], [role=listbox], [role=slider], [role=treeitem]';
   const out = []; let n = 0;
-  document.querySelectorAll('[data-vcli]').forEach(el => el.removeAttribute('data-vcli')); // ids from an earlier listing
-  for (const el of document.querySelectorAll(sel)) {
+  __qa('[data-vcli]').forEach(el => el.removeAttribute('data-vcli')); // ids from an earlier listing
+  for (const el of __qa(sel)) {
     if (!vis(el)) continue;
     if (el.tagName === 'LABEL' && el.querySelector('input, select, textarea, button')) continue; // the control itself is listed
     const text = label(el); if (!text && el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') continue;
@@ -232,7 +294,7 @@ const GHOST_LIB = `if (!window.__vcliGhost) {
 const PRESS_LIB = `if (!window.__vcliPress) {
   window.__vcliPress = (el) => {
     const r = el.getBoundingClientRect();
-    const o = { bubbles: true, cancelable: true, composed: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0 };
+    const o = { bubbles: true, cancelable: true, composed: true, view: el.ownerDocument.defaultView, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0 };
     const P = window.PointerEvent || MouseEvent;
     el.dispatchEvent(new P('pointerover', { ...o, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
     el.dispatchEvent(new MouseEvent('mouseover', o));
@@ -248,10 +310,11 @@ const PRESS_LIB = `if (!window.__vcliPress) {
 /** Click an element by data-vcli id (from elements()) or, failing that, by its visible text. */
 export async function click(target: string, b?: BrowserName): Promise<string> {
   const code = `(() => {
-    let el = document.querySelector('[data-vcli=${JSON.stringify(target)}]');
+    ${FRAMES}
+    let el = __q('[data-vcli=${JSON.stringify(target)}]');
     if (!el) {
       const want = ${JSON.stringify(target.toLowerCase())};
-      el = [...document.querySelectorAll('a, button, label, [role=button], [role=link], [role=tab], [role=option], [role=menuitem], [role=checkbox], [role=switch], [role=radio], [role=combobox], [aria-haspopup], input[type=submit], summary')]
+      el = [...__qa('a, button, label, [role=button], [role=link], [role=tab], [role=option], [role=menuitem], [role=checkbox], [role=switch], [role=radio], [role=combobox], [aria-haspopup], input[type=submit], summary')]
         .find(e => (e.innerText || e.value || e.getAttribute('aria-label') || '').toLowerCase().trim().includes(want));
     }
     if (!el) return 'NOT_FOUND';
@@ -260,8 +323,9 @@ export async function click(target: string, b?: BrowserName): Promise<string> {
     const label = (el.labels?.[0]?.innerText || el.innerText || el.getAttribute('aria-label') || el.value || el.tagName).replace(/\\s+/g, ' ').trim().slice(0, 80);
     el.scrollIntoView({ block: 'center' });
     ${ghostOn() ? `${GHOST_LIB}
-    const r = el.getBoundingClientRect();
-    window.__vcliGhost(r.left + Math.min(r.width / 2, 48), r.top + r.height / 2, () => window.__vcliPress(el));` : "window.__vcliPress(el);"}
+    const r = __rect(el);
+    window.__vcliPress(el); // act now; the ghost cursor only shows where (its timers may be throttled)
+    window.__vcliGhost(r.left + Math.min(r.width / 2, 48), r.top + r.height / 2, null);` : "window.__vcliPress(el);"}
     return label;
   })()`;
   const r = await js(code, b);
@@ -272,7 +336,9 @@ export async function click(target: string, b?: BrowserName): Promise<string> {
 
 export async function type(target: string, text: string, submit = false, b?: BrowserName): Promise<string> {
   const code = `(() => {
-    const el = document.querySelector('[data-vcli=${JSON.stringify(target)}]') || document.activeElement;
+    ${FRAMES}
+    let el = __q('[data-vcli=${JSON.stringify(target)}]') || document.activeElement;
+    while (el && el.contentDocument && el.contentDocument.activeElement) el = el.contentDocument.activeElement; // focus inside a frame
     if (!el || !('value' in el)) return 'NOT_FOUND';
     const text = ${JSON.stringify(text)};
     const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
@@ -284,13 +350,10 @@ export async function type(target: string, text: string, submit = false, b?: Bro
     };
     el.scrollIntoView({ block: 'center' });
     ${ghostOn() ? `${GHOST_LIB}
-    const r = el.getBoundingClientRect();
-    window.__vcliGhost(r.left + 14, r.top + r.height / 2, () => {
-      // Type it out visibly (about half a second in total), then commit the exact value.
-      el.focus();
-      const step = Math.max(1, Math.ceil(text.length / 25)); let i = 0;
-      const tick = setInterval(() => { i += step; if (i >= text.length) { clearInterval(tick); finish(); } else set(text.slice(0, i)); }, 20);
-    });` : "el.focus(); finish();"}
+    const r = __rect(el);
+    // Commit the exact value right away so the next step never races an animation; the ghost just shows where.
+    el.focus(); finish();
+    window.__vcliGhost(r.left + 14, r.top + r.height / 2, null);` : "el.focus(); finish();"}
     return 'ok';
   })()`;
   const r = await js(code, b);
@@ -318,8 +381,10 @@ export async function scroll(where: "down" | "up" | "top" | "bottom", b?: Browse
 /** Readable text of the current page (title, URL, main content), capped. */
 export async function read(maxChars = 12000, b?: BrowserName): Promise<string> {
   const code = `(() => {
+    ${FRAMES}
     const main = document.querySelector('main, article, [role=main]') || document.body;
-    const text = (main.innerText || '').replace(/\\n{3,}/g, '\\n\\n');
+    const frames = __docs().slice(1).map(d => d.body ? d.body.innerText || '' : '').filter(t => t.trim());
+    const text = [main.innerText || '', ...frames].join('\\n\\n').replace(/\\n{3,}/g, '\\n\\n');
     return JSON.stringify({ title: document.title, url: location.href, selection: String(getSelection() || ''), text: text.slice(0, ${maxChars}) });
   })()`;
   const page = JSON.parse(await js(code, b));
@@ -334,7 +399,8 @@ export async function select(target: string, option: string, b?: BrowserName): P
   const want = JSON.stringify(option.toLowerCase().trim());
   const first = await js(`(() => {
     ${PRESS_LIB}
-    const el = document.querySelector('[data-vcli=${JSON.stringify(target)}]');
+    ${FRAMES}
+    const el = __q('[data-vcli=${JSON.stringify(target)}]');
     if (!el) return 'NOT_FOUND';
     el.scrollIntoView({ block: 'center' });
     if (el.tagName === 'SELECT') {
@@ -342,7 +408,7 @@ export async function select(target: string, option: string, b?: BrowserName): P
       const opt = [...el.options].find(o => o.text.trim().toLowerCase() === want || o.value.toLowerCase() === want)
         || [...el.options].find(o => o.text.toLowerCase().includes(want));
       if (!opt) return 'NO_OPTION:' + [...el.options].map(o => o.text.trim()).slice(0, 30).join(' | ');
-      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+      const setter = Object.getOwnPropertyDescriptor(el.ownerDocument.defaultView.HTMLSelectElement.prototype, 'value').set;
       setter.call(el, opt.value);
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -359,7 +425,8 @@ export async function select(target: string, option: string, b?: BrowserName): P
     ${PRESS_LIB}
     const want = ${want};
     const vis = e => { const r = e.getBoundingClientRect(); return r.width > 1 && r.height > 1; };
-    const items = [...document.querySelectorAll('[role=option], [role=menuitem], [role=menuitemradio], [role=menuitemcheckbox], [role=treeitem], [cmdk-item], li')].filter(vis);
+    ${FRAMES}
+    const items = [...__qa('[role=option], [role=menuitem], [role=menuitemradio], [role=menuitemcheckbox], [role=treeitem], [cmdk-item], li')].filter(vis);
     const text = e => (e.innerText || e.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
     const hit = items.find(e => text(e).toLowerCase() === want) || items.find(e => text(e).toLowerCase().includes(want));
     if (!hit) return 'NO_OPTION:' + items.map(text).filter(Boolean).slice(0, 30).join(' | ');

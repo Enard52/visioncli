@@ -36,7 +36,9 @@ Use it whenever the user refers to something they are looking at: "this file", "
   project's .env) together with the models/migrations in the code.
 - Using the computer (any app): \`ui_elements\` lists the front app's controls with ids → \`click\` / \`type_text\` by id;
   or \`look\` then \`click\` at pixel x/y in that screenshot. \`press_keys\` for Enter/shortcuts, \`scroll\`, \`drag\`, \`open_app\`,
-  \`open_url\`. Work step by step and verify with \`look_after: true\` or \`look\`. The user approves actions in a bubble; if they
+  \`open_url\`. In Chrome/Brave use the browser_* tools instead (never ⌘L/⌘T or typing URLs): they're exact, see into frames
+  and reuse tabs; pixel clicks there only for canvas, cross-origin frames or browser dialogs. Work step by step and verify
+  with \`look_after: true\` or \`look\`. The user approves actions in a bubble; if they
   decline or press Esc, stop and ask.
 - Browser (Brave/Chrome): \`browser_tabs\`, \`browser_open\`, \`browser_switch_tab\`, \`browser_navigate\`, \`browser_read\`,
   \`browser_elements\` → \`browser_click\` / \`browser_type\` / \`browser_select\` (dropdowns) by element id, \`browser_scroll\`. Prefer these over screenshots for
@@ -248,13 +250,12 @@ server.registerTool(
   "browser_open",
   {
     title: "Open a URL",
-    description: "Open a URL in the browser, in a new tab (default) or the current one.",
+    description:
+      "Open a URL in Chrome/Brave. Always use this (never ⌘L/⌘T + typing) to go to a page: it switches to a tab already showing it, " +
+      "otherwise reuses your own working tab, and only opens one new tab the first time. new_tab: false loads it in the user's current tab.",
     inputSchema: { url: z.string(), new_tab: z.boolean().default(true) },
   },
-  wrap(async ({ url, new_tab }) => {
-    await browser.open(url, new_tab);
-    return `Opened ${url}`;
-  }),
+  wrap(async ({ url, new_tab }) => browser.open(url, new_tab)),
 );
 
 server.registerTool(
@@ -455,7 +456,7 @@ server.registerTool(
   "press_keys",
   {
     title: "Press keys",
-    description: 'Press a key or shortcut, e.g. "enter", "cmd+s", "cmd+shift+p", "tab", "esc", "down". Several separated by spaces run in order: "cmd+a delete".',
+    description: 'Press a key or shortcut (not for browser navigation: use browser_open/browser_navigate), e.g. "enter", "cmd+s", "cmd+shift+p", "tab", "esc", "down". Several separated by spaces run in order: "cmd+a delete".',
     inputSchema: {
       keys: z.string(),
       app: z.string().optional().describe("App to send the keys to (brought to the front first); default: the app you last worked in"),
@@ -601,6 +602,7 @@ if (cmd) {
         sub === "read" ? await browser.read(2000) :
         sub === "click" ? await browser.click(a.join(" ")) :
         sub === "select" ? await browser.select(a[0], a.slice(1).join(" ")) :
+        sub === "type" ? await browser.type(a[0], a.slice(1).join(" ")) :
         sub === "open" ? await browser.open(a[0]) :
         sub === "scroll" ? await browser.scroll(a[0] as "down") :
         sub === "nav" ? await browser.navigate(a[0] as "back") : `unknown: ${sub}`;
