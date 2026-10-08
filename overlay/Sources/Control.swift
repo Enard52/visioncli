@@ -450,6 +450,30 @@ extension AppDelegate {
                 ["x": s.frame.minX, "y": primary - s.frame.maxY, "width": s.frame.width, "height": s.frame.height]
             }])
             return
+        case "capture":
+            // Fast screenshot for the `look` tool (ScreenCaptureKit, in memory). window_id, or x/y/width/height
+            // (top-left points, e.g. a whole display).
+            let windowId = (r["window_id"] as? NSNumber).map { CGWindowID($0.uint32Value) }
+            let rect = num("width").map { w in CGRect(x: num("x") ?? 0, y: num("y") ?? 0, width: w, height: num("height") ?? 0) }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let image: CGImage?
+                if let windowId {
+                    let bounds = Screen.windows().first { $0.id == windowId }?.bounds ?? .zero
+                    image = FastCapture.window(windowId, bounds: bounds)
+                } else if let rect {
+                    image = FastCapture.area(rect)
+                } else {
+                    image = nil
+                }
+                guard let image, let jpeg = Screen.jpeg(image) else {
+                    DispatchQueue.main.async { reply(["error": "capture unavailable"]) }
+                    return
+                }
+                DispatchQueue.main.async {
+                    reply(["data": jpeg.0.base64EncodedString(), "width": Int(jpeg.1.width), "height": Int(jpeg.1.height)])
+                }
+            }
+            return
         case "elements":
             guard Computer.isTrusted else { reply(needTrust()); return }
             let (app, items) = uiElements.list(appNamed: r["app"] as? String)

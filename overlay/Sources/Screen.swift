@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import ImageIO
+import ScreenCaptureKit
 import UniformTypeIdentifiers
 
 // Coordinates: CoreGraphics window bounds use a global space with the origin at the top-left of the
@@ -106,17 +107,26 @@ enum Screen {
     }
 
     static func capture(window w: WinInfo) throws -> Shot {
-        var shot = try capture(args: ["-l", String(w.id)], rect: w.bounds, label: w.label)
+        let started = Date()
+        var shot: Shot
+        if let image = FastCapture.window(w.id, bounds: w.bounds) {
+            shot = try makeShot(image, rect: w.bounds, label: w.label)
+        } else {
+            shot = try capture(args: ["-l", String(w.id)], rect: w.bounds, label: w.label)
+        }
         shot.window = w
+        log("capture: window in \(Int(Date().timeIntervalSince(started) * 1000))ms")
         return shot
     }
 
     static func capture(rect: CGRect) throws -> Shot {
         let r = rect.integral
-        let label = windows().first(where: { $0.bounds.intersects(r) })?.label ?? "Screen"
-        return try capture(args: ["-R", "\(Int(r.minX)),\(Int(r.minY)),\(Int(r.width)),\(Int(r.height))"], rect: r, label: "Selected area of \(label)")
+        let label = "Selected area of " + (windows().first(where: { $0.bounds.intersects(r) })?.label ?? "Screen")
+        if let image = FastCapture.area(r) { return try makeShot(image, rect: r, label: label) }
+        return try capture(args: ["-R", "\(Int(r.minX)),\(Int(r.minY)),\(Int(r.width)),\(Int(r.height))"], rect: r, label: label)
     }
 
+    /// Fallback: the `screencapture` tool (older macOS, or if ScreenCaptureKit fails).
     private static func capture(args: [String], rect: CGRect, label: String) throws -> Shot {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("visioncli-\(UUID().uuidString).png")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -126,6 +136,10 @@ enum Screen {
               let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
             throw CaptureError.failed("Screenshot failed: \(err.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
+        return try makeShot(image, rect: rect, label: label)
+    }
+
+    private static func makeShot(_ image: CGImage, rect: CGRect, label: String) throws -> Shot {
         let (jpeg, size) = try encode(image)
         var shot = Shot(jpeg: jpeg, pixelSize: size, screenRect: rect, label: label)
         let p = Geometry.pointer
@@ -135,6 +149,9 @@ enum Screen {
         }
         return shot
     }
+
+    /// JPEG for the `look` tool (same size and quality as voice screenshots).
+    static func jpeg(_ image: CGImage) -> (Data, CGSize)? { try? encode(image) }
 
     /// Downscale to maxImageDim and JPEG-encode.
     private static func encode(_ image: CGImage) throws -> (Data, CGSize) {
@@ -156,4 +173,76 @@ enum Screen {
         CGImageDestinationFinalize(dest)
         return (data as Data, size)
     }
+}
+
+// MARK: - Fast capture
+
+/// ScreenCaptureKit (macOS 14+): captures straight into memory at the size we send (≤ maxImageDim), no helper process
+/// or temporary file. Returns nil when unavailable so callers fall back to `screencapture`.
+enum FastCapture {
+    static func window(_ id: CGWindowID, bounds: CGRect) -> CGImage? {
+        guard #available(macOS 14.0, *) else { return nil }
+        return run { content in
+            guard let win = content.windows.first(where: { $0.windowID == id }) else { return nil }
+            let config = configuration(for: bounds.size, scale: scale(at: bounds))
+            return (SCContentFilter(desktopIndependentWindow: win), config)
+        }
+    }
+
+    static func area(_ rect: CGRect) -> CGImage? {
+        guard #available(macOS 14.0, *) else { return nil }
+        return run { content in
+            // The display containing the area's centre; sourceRect is in that display's own top-left points.
+            let center = CGPoint(x: rect.midX, y: rect.midY)
+            guard let display = content.displays.first(where: { $0.frame.contains(center) }) ?? content.displays.first else { return nil }
+            let mine = content.windows.filter { $0.owningApplication?.processID == getpid() } // never our overlays
+            let config = configuration(for: rect.size, scale: scale(at: rect))
+            config.sourceRect = rect.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+            return (SCContentFilter(display: display, excludingWindows: mine), config)
+        }
+    }
+
+    @available(macOS 14.0, *)
+    private static func configuration(for size: CGSize, scale: CGFloat) -> SCStreamConfiguration {
+        let c = SCStreamConfiguration()
+        let pixels = CGSize(width: size.width * scale, height: size.height * scale)
+        let fit = min(1, maxImageDim / max(pixels.width, pixels.height, 1))
+        c.width = max(1, Int((pixels.width * fit).rounded()))
+        c.height = max(1, Int((pixels.height * fit).rounded()))
+        c.showsCursor = false
+        c.capturesAudio = false
+        if #available(macOS 14.2, *) { c.ignoreShadowsSingleWindow = true }
+        return c
+    }
+
+    /// Backing scale of the screen under a top-left rect (2 on Retina).
+    private static func scale(at rect: CGRect) -> CGFloat {
+        let appKit = Geometry.toAppKit(rect)
+        let center = CGPoint(x: appKit.midX, y: appKit.midY)
+        return (NSScreen.screens.first { $0.frame.contains(center) } ?? NSScreen.main)?.backingScaleFactor ?? 2
+    }
+
+    /// Runs the async ScreenCaptureKit calls for a synchronous caller. ScreenCaptureKit replies on its own queues, so
+    /// waiting here is safe even on the main thread. Gives up after 3 s.
+    @available(macOS 14.0, *)
+    private static func run(_ build: @escaping (SCShareableContent) -> (SCContentFilter, SCStreamConfiguration)?) -> CGImage? {
+        let done = DispatchSemaphore(value: 0)
+        let box = ImageBox()
+        Task.detached {
+            defer { done.signal() }
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                guard let (filter, config) = build(content) else { return }
+                box.image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            } catch {
+                log("capture: ScreenCaptureKit failed (\(error.localizedDescription)); using screencapture")
+            }
+        }
+        _ = done.wait(timeout: .now() + 3)
+        return box.image
+    }
+}
+
+private final class ImageBox: @unchecked Sendable {
+    var image: CGImage?
 }

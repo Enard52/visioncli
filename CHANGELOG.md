@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.3
+
+- **Parakeet is included in the download.** 0.7.2 was built without it (the release build's compiler was too old); the release build now uses the latest Xcode.
+- **Faster screenshots:** captured in memory with ScreenCaptureKit, about 3× faster (≈80 ms for a whole display instead of ≈215 ms). Claude's `look` tool uses the running app for this too; without the app it falls back to `screencapture`.
+
 ## 0.7.2
 
 - **New keys, no Space:** hold **⌃** to ask as text only (no screenshot, far fewer tokens; the assistant takes its own look if it needs to), hold **⌃⌥** to ask with a screenshot of the window under the mouse (adding ⌥ while holding ⌃ also works). ⌥⇧Space still lets you drag an area. Other ⌃ shortcuts (⌃C, ⌃-click) keep working. Without the Accessibility permission the keys fall back to ⌃Space / ⌃⌥Space. 👁 → Settings → *Screenshot Every Question* brings back the old behaviour.

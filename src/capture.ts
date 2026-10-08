@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { displayBounds, send } from "./control.js";
 
 const run = promisify(execFile);
 
@@ -176,8 +177,21 @@ export async function findWindow(opts: { app?: string; windowId?: number; underC
   return w;
 }
 
+/** Fast path: VisionCLI.app captures in memory with ScreenCaptureKit (~0.1 s). null if the app isn't running. */
+async function captureViaApp(req: Record<string, unknown>): Promise<Capture | null> {
+  try {
+    const r = await send({ action: "capture", ...req });
+    if (typeof r.data !== "string") return null;
+    return { data: r.data, mimeType: "image/jpeg", width: r.width, height: r.height };
+  } catch {
+    return null;
+  }
+}
+
 export async function captureWindow(w: WindowInfo): Promise<Capture> {
   requireMac("Window capture");
+  const fast = await captureViaApp({ window_id: w.id });
+  if (fast) return fast;
   return withTempDir(async (dir) => {
     const src = join(dir, "win.png");
     // -o: no drop shadow, -x: no shutter sound, -l: capture this window id even if partly covered
@@ -187,6 +201,11 @@ export async function captureWindow(w: WindowInfo): Promise<Capture> {
 }
 
 export async function captureScreen(display?: number): Promise<Capture> {
+  if (isMac) {
+    const b = await displayBounds(display ?? 1);
+    const fast = b && (await captureViaApp({ x: b.x, y: b.y, width: b.width, height: b.height }));
+    if (fast) return fast;
+  }
   return withTempDir(async (dir) => {
     const src = join(dir, "screen.png");
     if (isMac) {
