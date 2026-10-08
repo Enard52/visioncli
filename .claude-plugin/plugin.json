@@ -1,7 +1,7 @@
 {
   "name": "visioncli",
   "version": "0.7.1",
-  "description": "Let Claude see your screen: ask about the file, error or UI you're looking at without pasting screenshots.",
+  "description": "AI co-assistant for developers that sees your screen and uses your Mac: ask about what you're looking at or have it do the task, by typing or voice, with Claude Code or Gemini (Antigravity).",
   "mcpServers": {
     "visioncli": {
       "command": "node",

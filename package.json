@@ -1,7 +1,7 @@
 {
   "name": "visioncli",
   "version": "0.7.1",
-  "description": "Let Claude Code see your screen: ask about the file, error, UI, table or web page you are looking at, by typing or by voice, with answers above your mouse.",
+  "description": "AI co-assistant for developers that sees your screen and uses your Mac: ask about what you're looking at or have it do the task, by typing or voice, with Claude Code or Gemini (Antigravity).",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc && sh scripts/build-overlay.sh",

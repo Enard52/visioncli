@@ -3,8 +3,9 @@
 <h1 align="center">VisionCLI</h1>
 
 <p align="center">
-Let Claude see your screen. Ask about the file, error, UI, database table or web page you're looking at,<br>
-by typing in <b>Claude Code or Gemini</b> (Antigravity / Gemini CLI) or <b>by voice</b>, with the answer floating above your mouse pointer.
+<b>An AI co-assistant for developers that sees your screen and uses your Mac.</b><br>
+Ask about the file, error, UI, database table or web page in front of you, or have it do the task for you:
+by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or <b>Gemini</b> (Antigravity).
 </p>
 
 <p align="center">
@@ -13,14 +14,14 @@ by typing in <b>Claude Code or Gemini</b> (Antigravity / Gemini CLI) or <b>by vo
 
 ---
 
-- **"What is this file for?"** Claude looks at the window under your mouse, finds the real file in your project and answers with `file:line` references.
-- **Hold ⌥ Space and ask out loud.** A loader rides on your cursor, and the answer appears in a bubble above it, read aloud.
-- **Works with your Claude Code session.** It types into the `claude` already running for that project, or opens one, so you can type and talk in the same conversation.
+- **"What is this file for?"** Your assistant looks at the window under your mouse, finds the real file in your project and answers with `file:line` references.
+- **Hold ⌥ Space and ask out loud.** A loader rides on your cursor while it thinks; the answer appears in the top-right corner and is read aloud.
+- **Claude or Gemini, your choice.** Uses your own `claude` or `agy` sign-in (no API keys) and the session already running for that project, so you can type and talk in the same conversation. Pick the model and effort from the menu.
 - **Uses your computer.** "Open Xcode and run the app", "fill this form", "switch the dropdown to Production": it clicks, types, presses shortcuts and opens apps, one checked step at a time, reading each app's real buttons and fields through Accessibility. You approve each action (or allow all), passwords and System Settings always ask, a task panel shows every step with Pause/Stop, and **Esc stops it instantly**.
 - **Recipes.** Saved routines like *Run the tests*, *Review my changes*, *Explain the last crash*, *Run on the simulator*. Pick from the menu or say the name. Edit your own in `recipes.json`.
 - **Notices crashes.** When your app (Mac or Simulator) crashes, VisionCLI offers to explain it, and the next question already knows which crash report to read.
-- **Draws to explain.** Answers mark up a screenshot inside the bubble (boxes, circles, arrows, numbered steps) and can include **Mermaid diagrams** rendered right in the bubble.
-- **Fast browser control.** "Open the Stripe tab", "click sign in", "pause the video" run in under a second (via TypeSafe Jev), with a visible AI cursor.
+- **Points and draws.** Answers point at things on your real screen (boxes, circles, arrows, numbered steps) and can include **Mermaid diagrams** rendered in the bubble.
+- **Fast browser control.** "Open the Stripe tab", "click sign in", "pause the video" run in under a second (via TypeSafe Jev), with a visible AI cursor. Forms, dropdowns, toggles and framed portals work through the page itself, without opening stray tabs.
 - **Knows your data.** Read-only database questions ("how are payments and orders related?") using your project's `.env`.
 
 ## Install
@@ -155,7 +156,7 @@ Slash commands: `/mcp__visioncli__see <question>`, `/mcp__visioncli__point <ques
 
 ## Privacy
 
-- Screenshots and questions go to Claude through your own Claude Code login.
+- Screenshots and questions go to the assistant you picked (Claude Code or Antigravity), through your own login.
 - With Jev enabled, quick commands send your spoken words, open tab titles and URLs, and visible link/button text to api.typesafe.ai. Turn it off in Settings.
 - Computer control runs locally: the MCP server talks to VisionCLI.app over 127.0.0.1 with a per-launch secret token (in a file only you can read). Nothing is clicked or typed unless an assistant asks and you allow it (or chose *Allow All Actions*).
 - Whisper and Kokoro run locally. History is stored in `~/Library/Application Support/visioncli/`.
