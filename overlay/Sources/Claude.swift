@@ -266,6 +266,8 @@ final class ClaudeSession: AssistantSession {
     private func handle(_ obj: [String: Any]) {
         if let sid = obj["session_id"] as? String { sessionId = sid }
         switch obj["type"] as? String {
+        case "rate_limit_event":
+            if let info = obj["rate_limit_info"] as? [String: Any] { UsageTracker.shared.record(info) }
         case "stream_event":
             guard obj["parent_tool_use_id"] == nil || obj["parent_tool_use_id"] is NSNull,
                   let ev = obj["event"] as? [String: Any] else { return }

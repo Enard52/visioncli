@@ -8,6 +8,8 @@ final class Listener {
     // Recreated for every question: a long-lived engine keeps a stale input format after the mic changes
     // (AirPods connect, Teams/Zoom grab the device, sample-rate switch), and installTap then aborts the app.
     private var engine = AVAudioEngine()
+    private var configObserver: NSObjectProtocol?
+    private var tapped = false
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private let recognizer: SFSpeechRecognizer?
@@ -160,6 +162,7 @@ final class Listener {
         let onBuffer = handler(for: req)
         // format: nil = the node's own output format; an explicit format that disagrees with it aborts the app.
         input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buf, _ in onBuffer(buf) }
+        tapped = true
         engine.prepare()
         do {
             try engine.start()
@@ -167,6 +170,21 @@ final class Listener {
             input.removeTap(onBus: 0)
             _ = recorder.finish()
             throw error
+        }
+        // Bluetooth headsets (AirPods, Sony…) switch to their call profile when the mic opens, which stops the engine
+        // mid-question. Re-attach to the new input and keep recording into the same file.
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        let current = engine
+        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: current, queue: .main) { [weak self] _ in
+            guard let self, self.engine === current, self.request != nil else { return }
+            let input = current.inputNode
+            let format = input.inputFormat(forBus: 0)
+            input.removeTap(onBus: 0)
+            guard format.sampleRate > 0, format.channelCount > 0 else { log("listener: input changed, no usable format yet"); return }
+            input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buf, _ in onBuffer(buf) }
+            current.prepare()
+            do { try current.start(); log("listener: input changed (\(Int(format.sampleRate)) Hz), resumed") }
+            catch { log("listener: input changed, couldn't resume: \(error.localizedDescription)") }
         }
     }
 
@@ -191,8 +209,12 @@ final class Listener {
         capture?.stop()
         capture = nil
         if engine.isRunning { engine.stop() }
-        engine.inputNode.removeTap(onBus: 0)
+        // Touching inputNode when we never used it opens the mic (and flips Bluetooth headsets into call mode).
+        if tapped { engine.inputNode.removeTap(onBus: 0); tapped = false }
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver); self.configObserver = nil }
         recordingURL = recorder.finish()
+        let bytes = (recordingURL.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? Int }) ?? 0
+        log("listener: recorded \(String(format: "%.1f", Double(max(0, bytes - 44)) / 32000))s")
     }
 
     /// The WAV of the last question (for Whisper), available after stop().

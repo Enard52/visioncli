@@ -55,7 +55,7 @@ enum VoiceModels {
         guard let text = try? String(contentsOf: pidFile, encoding: .utf8) else { return }
         for pid in text.split(separator: "\n").compactMap({ Int32($0) }) {
             let (_, cmd, _) = shell("/bin/ps", ["-o", "command=", "-p", String(pid)])
-            if cmd.contains("whisper-server") || cmd.contains("kokoro_server") || cmd.contains("kokoro-onnx") {
+            if cmd.contains("whisper-server") || cmd.contains("parakeet-server") || cmd.contains("kokoro_server") || cmd.contains("kokoro-onnx") {
                 kill(pid, SIGKILL)
                 log("killed stray helper \(pid)")
             }
@@ -175,6 +175,96 @@ final class WhisperEngine {
             log("whisper: \(String(format: "%.2f", Date().timeIntervalSince(started)))s \(error.map { "error \($0.localizedDescription)" } ?? "")")
             DispatchQueue.main.async { done(text) }
         }.resume()
+    }
+}
+
+// MARK: - Parakeet
+
+/// NVIDIA Parakeet TDT on the Neural Engine (overlay/helpers/parakeet, built on FluidAudio). Faster than Whisper and
+/// takes a word list (class names, frameworks, CLI tools) that it actually spells right. One JSON request per line.
+final class ParakeetEngine {
+    private var proc: Process?
+    private var stdin: FileHandle?
+    private var buffer = Data()
+    private var callbacks: [Int: (String?) -> Void] = [:]
+    private var nextId = 0
+    private(set) var ready = false
+
+    /// The helper ships inside the app (arm64 only); a dev build can also sit in Application Support.
+    static var binary: String? {
+        [Bundle.main.bundlePath + "/Contents/MacOS/parakeet-server", supportDir.appendingPathComponent("bin/parakeet-server").path]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    func start(attempt: Int = 0) {
+        guard proc?.isRunning != true, let bin = Self.binary else { return }
+        ready = false
+        buffer = Data()
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: bin)
+        let input = Pipe(), output = Pipe()
+        p.standardInput = input
+        p.standardOutput = output
+        p.standardError = FileHandle.nullDevice // CoreML prints harmless shape warnings
+        output.fileHandleForReading.readabilityHandler = { [weak self] h in
+            let data = h.availableData
+            DispatchQueue.main.async { self?.received(data) }
+        }
+        p.terminationHandler = { [weak self] proc in
+            DispatchQueue.main.async {
+                guard let self, self.proc === proc else { return }
+                self.proc = nil
+                self.ready = false
+                self.callbacks.values.forEach { $0(nil) }
+                self.callbacks = [:]
+                log("parakeet exited (\(proc.terminationStatus))")
+                if attempt < 2 { self.start(attempt: attempt + 1) }
+            }
+        }
+        do { try p.run() } catch { log("parakeet failed to start: \(error)"); return }
+        proc = p
+        stdin = input.fileHandleForWriting
+        VoiceModels.remember(p.processIdentifier)
+        log("parakeet starting (first run downloads ~600 MB of models)")
+    }
+
+    func stop() {
+        let p = proc
+        proc = nil
+        ready = false
+        VoiceModels.hardStop(p)
+    }
+
+    private func received(_ data: Data) {
+        buffer.append(data)
+        while let nl = buffer.firstIndex(of: 0x0A) {
+            var line = buffer[buffer.startIndex..<nl]
+            buffer.removeSubrange(buffer.startIndex...nl)
+            // CoreML prints warnings to stdout without a newline, so they can prefix a reply: start at the JSON.
+            if let brace = line.firstIndex(of: 0x7B) { line = line[brace...] }
+            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+            if obj["ready"] as? Bool == true { ready = true; log("parakeet ready"); continue }
+            if let err = obj["error"] as? String, obj["id"] == nil { log("parakeet: \(err)"); continue }
+            guard let id = obj["id"] as? Int, let done = callbacks.removeValue(forKey: id) else { continue }
+            let boosted = (obj["boosted"] as? [String]) ?? []
+            log("parakeet: \(obj["ms"] ?? "?")ms\(boosted.isEmpty ? "" : " vocabulary: " + boosted.joined(separator: "; "))\(obj["error"].map { " error \($0)" } ?? "")")
+            done(obj["text"] as? String)
+        }
+    }
+
+    /// Transcribe a 16 kHz mono WAV, spelling `vocabulary` terms as given. Calls back on main; nil on failure.
+    func transcribe(_ wav: URL, vocabulary: [String], timeout: Double = 6, _ done: @escaping (String?) -> Void) {
+        guard ready, let stdin else { done(nil); return }
+        nextId += 1
+        let id = nextId
+        callbacks[id] = done
+        let req: [String: Any] = ["id": id, "wav": wav.path, "vocab": vocabulary]
+        guard var line = try? JSONSerialization.data(withJSONObject: req) else { callbacks[id] = nil; done(nil); return }
+        line.append(0x0A)
+        do { try stdin.write(contentsOf: line) } catch { callbacks[id] = nil; done(nil); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            if let cb = self?.callbacks.removeValue(forKey: id) { log("parakeet: timed out"); cb(nil) }
+        }
     }
 }
 

@@ -13,7 +13,7 @@ import SwiftUI
 
 // MARK: - Hotkeys (Carbon: no Accessibility permission needed)
 
-enum HotKey: UInt32 { case talk = 1, point, dismiss, pin, open, allow }
+enum HotKey: UInt32 { case talk = 1, point, dismiss, pin, open, allow, screen }
 
 final class HotKeys {
     static var handler: (HotKey, Bool) -> Void = { _, _ in }
@@ -21,8 +21,9 @@ final class HotKeys {
     private let sig: OSType = 0x5643_4C49 // "VCLI"
 
     private static let combos: [HotKey: (Int, Int)] = [
-        .talk: (kVK_Space, optionKey),
+        .talk: (kVK_Space, controlKey),
         .point: (kVK_Space, optionKey | shiftKey),
+        .screen: (kVK_Space, controlKey | optionKey),
         .dismiss: (kVK_Escape, 0),
         .pin: (kVK_ANSI_P, optionKey),
         .open: (kVK_ANSI_O, optionKey),
@@ -44,8 +45,7 @@ final class HotKeys {
             }
             return noErr
         }, types.count, &types, nil, nil)
-        set(.talk, true)
-        set(.point, true)
+        set(.point, true) // ⌃ / ⌃⌥ are held modifiers (ModifierHold); ⌃Space / ⌃⌥Space only without Accessibility
     }
 
     /// Esc, ⌥P, ⌥O and ⌥↩ are only grabbed while the overlay is visible, so they keep working in other apps otherwise.
@@ -58,6 +58,63 @@ final class HotKeys {
         } else if !on, let ref = refs.removeValue(forKey: key) {
             UnregisterEventHotKey(ref)
         }
+    }
+}
+
+/// Hold-to-talk on modifier keys alone, like a dictation app's fn key: hold ⌃ to ask (text only), ⌃⌥ to ask with a
+/// screenshot. Needs Accessibility (VisionCLI has it for computer control). Any other key or a click while holding
+/// cancels it, so ⌃C, ⌃-click and friends keep working.
+final class ModifierHold {
+    var onChange: (HotKey, Bool) -> Void = { _, _ in }
+    /// ⌥ added while ⌃ is already held: the question becomes a screenshot question.
+    var onUpgrade: () -> Void = {}
+    /// While listening, a press counts at once (the tap that sends the question).
+    var immediate: () -> Bool = { false }
+    private var monitors: [Any] = []
+    private var pending: DispatchWorkItem?
+    private var candidate: HotKey?
+    private var active: HotKey?
+
+    func start() {
+        let mask: NSEvent.EventTypeMask = [.flagsChanged, .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]
+        if let g = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] e in self?.handle(e) }) { monitors.append(g) }
+        if let l = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] e in self?.handle(e); return e }) { monitors.append(l) }
+    }
+
+    private func handle(_ e: NSEvent) {
+        if e.cgEvent?.getIntegerValueField(.eventSourceUserData) == FlowDictation.tag { return } // our own fake keys
+        guard e.type == .flagsChanged else {
+            cancel() // a shortcut (⌃C) or a ⌃-click, not a hold
+            return
+        }
+        let flags = e.modifierFlags.intersection([.control, .option, .command, .shift])
+        if let held = active {
+            if !ModifierHold.controlDown { active = nil; onChange(held, false); return }
+            if held == .talk, flags == [.control, .option] { active = .screen; onUpgrade() }
+            return
+        }
+        guard let key: HotKey = flags == [.control] ? .talk : flags == [.control, .option] ? .screen : nil else { cancel(); return }
+        candidate = key
+        pending?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let c = self.candidate else { return }
+            self.candidate = nil
+            self.active = c
+            self.onChange(c, true)
+        }
+        pending = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + (immediate() ? 0 : 0.3), execute: work)
+    }
+
+    private func cancel() {
+        pending?.cancel()
+        pending = nil
+        candidate = nil
+    }
+
+    /// The physical Control keys (left or right), unaffected by key events VisionCLI posts.
+    static var controlDown: Bool {
+        CGEventSource.keyState(.hidSystemState, key: 59) || CGEventSource.keyState(.hidSystemState, key: 62)
     }
 }
 
@@ -75,9 +132,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     var panel: OverlayPanel!
     var hosting: NSHostingView<OverlayView>!
     var hotkeys: HotKeys!
+    let modifierHold = ModifierHold()
     var listener: Listener!
     let speaker = Speaker()
     var whisper: WhisperEngine?
+    var parakeet: ParakeetEngine?
+    let flow = FlowDictation()
+    let spotlight = Spotlight()
     var installer: ModelInstaller!
     let updater = Updater()
     var sigterm: DispatchSourceSignal?
@@ -104,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     var candidates: (running: [(project: String, assistant: Assistant)], windows: [String]) = ([], [])
     var currentShots: [Shot] = []
     var currentWindow: WinInfo?
+    var withScreen = false // this question gets a screenshot (⌥⇧Space, or the "every question" setting)
     var alwaysAllow: [String: Set<String>] = [:] // project → tools approved for the session
     // Computer control (see Control.swift)
     let controlServer = ControlServer()
@@ -303,8 +365,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         term.resume()
         sigterm = term
 
+        flow.onText = { [weak self] text in self?.state.question = text }
         hotkeys = HotKeys()
         HotKeys.handler = { [weak self] key, pressed in self?.hotkey(key, pressed: pressed) }
+        if Computer.isTrusted {
+            modifierHold.onChange = { [weak self] key, pressed in self?.hotkey(key, pressed: pressed) }
+            modifierHold.immediate = { [weak self] in self?.state.phase == .listening }
+            modifierHold.onUpgrade = { [weak self] in
+                guard let self, self.state.phase == .listening, !self.withScreen else { return }
+                log("hotkey: ⌥ added, now with a screenshot")
+                self.withScreen = true
+                self.spotlight.show()
+            }
+            modifierHold.start()
+        } else {
+            // No Accessibility yet: modifier-only keys can't be seen, so use ⌃Space / ⌃⌥Space until it's granted.
+            log("hotkeys: no Accessibility permission; using ⌃ and ⌃⌥")
+            hotkeys.set(.talk, true)
+            hotkeys.set(.screen, true)
+        }
 
         let repaired = repairStalePermissions(force: false)
         SFSpeechRecognizer.requestAuthorization { _ in }
@@ -341,6 +420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     func set(_ phase: Phase) {
         state.phase = phase
         hideWork?.cancel()
+        if phase != .listening { spotlight.hide() }
         if phase == .hidden {
             followTimer?.invalidate()
             followTimer = nil
@@ -421,14 +501,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     // MARK: Hotkeys
 
     func hotkey(_ key: HotKey, pressed: Bool) {
-        if key == .talk || key == .point || pressed { log("hotkey \(key) \(pressed ? "down" : "up") in \(state.phase)") }
+        if key == .talk || key == .point || key == .screen || pressed { log("hotkey \(key) \(pressed ? "down" : "up") in \(state.phase)") }
         switch (key, pressed) {
-        case (.talk, true), (.point, true):
+        case (.talk, true), (.point, true), (.screen, true):
             // Second tap while listening (tap mode) sends the question.
             if state.phase == .listening { finishListening(); return }
             if state.phase == .approval { return }
-            startListening(point: key == .point)
-        case (.talk, false), (.point, false):
+            startListening(point: key == .point, screen: key == .screen)
+        case (.talk, false), (.point, false), (.screen, false):
             keysReleased()
         case (.dismiss, true): dismiss()
         case (.pin, true): togglePin()
@@ -438,7 +518,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
     }
 
-    func startListening(point: Bool) {
+    func startListening(point: Bool, screen: Bool = false) {
         speaker.reset()
         highlight.hide()
         state.pinned = false
@@ -451,7 +531,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         state.annotated = []
         startShot = nil
         region = nil
-        do {
+        withScreen = point || screen || Settings.screenshotEveryQuestion
+        let external = Settings.sttEngine == "external" // Wispr Flow listens instead of our mic (see FlowDictation)
+        if !external { do {
             try listener.start()
         } catch {
             log("listener failed: \(error)")
@@ -465,10 +547,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 flash("Couldn't start the microphone (\(error.localizedDescription)). Try again, or pick another mic in 👁 → Microphone.", seconds: 10)
             }
             return
-        }
+        } }
         set(.listening)
         pressedAt = Date()
         warmQuick()
+        // Screenshot questions: dim everything but the window that will be captured (point mode has its own dimming).
+        if withScreen && !point { spotlight.show() }
 
         // Work out the project now and warm up its Claude session while the user is still talking.
         let window = Screen.windowUnderPointer()
@@ -499,15 +583,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
         state.project = (currentProject as NSString).lastPathComponent
         if !Settings.terminalMode { session(for: currentProject).warm() }
-        if let window {
+        if let window, withScreen {
             DispatchQueue.global().async {
                 let shot = try? Screen.capture(window: window)
                 DispatchQueue.main.async { if self.state.phase == .listening { self.startShot = shot } }
             }
         }
 
+        if external {
+            state.status = "Listening with Wispr Flow…"
+            flow.begin()
+        }
+
         if point {
-            state.status = "Drag around what you mean…"
+            state.status = "Drag around what you mean, or tap ⌥⇧Space for the whole window…"
             selector.begin { [weak self] rect in
                 guard let self, let rect else { return }
                 self.region = rect
@@ -524,8 +613,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         keyPoll?.invalidate()
         keyPoll = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { [weak self] _ in
             let space = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(kVK_Space))
-            let option = NSEvent.modifierFlags.contains(.option)
-            if !(space && option) { self?.keysReleased() }
+            // ⌥⇧Space holds Space and Option; ⌃ / ⌃⌥ are held on their own (⌃Space without Accessibility).
+            let held = point ? space && NSEvent.modifierFlags.contains(.option) : ModifierHold.controlDown
+            if !held { self?.keysReleased() }
         }
         RunLoop.main.add(keyPoll!, forMode: .common)
         let started = pressedAt
@@ -539,11 +629,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         keyPoll?.invalidate()
         keyPoll = nil
         guard state.phase == .listening else { return }
+        // Wispr Flow: letting go always ends the question (Flow has no tap mode here).
+        if Settings.sttEngine == "external" {
+            if selector.isActive && region == nil { return }
+            finishListening()
+            return
+        }
         // In point mode, keep listening while the user is still dragging.
         if selector.isActive && region == nil { return }
         if Date().timeIntervalSince(pressedAt) < 0.35 {
             // Quick tap: keep listening until the next tap.
-            if state.question.isEmpty { state.status = "Listening… tap ⌥ Space to send" }
+            if state.question.isEmpty { state.status = "Listening… tap ⌃ to send" }
             return
         }
         finishListening()
@@ -553,6 +649,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         keyPoll?.invalidate()
         keyPoll = nil
         guard state.phase == .listening else { return }
+        if Settings.sttEngine == "external" {
+            if selector.isActive { selector.cancel() }
+            set(.thinking)
+            state.status = "Wispr Flow is transcribing…"
+            flow.end { [weak self] text in
+                guard let self, self.state.phase == .thinking else { return }
+                if text.isEmpty {
+                    self.flash("Wispr Flow didn't type anything. Make sure Flow is running and its push-to-talk key is fn.", seconds: 8)
+                    return
+                }
+                self.state.question = text
+                self.questionReady(text)
+            }
+            return
+        }
         if selector.isActive { selector.cancel() }
         state.status = "Thinking…"
         set(.thinking)
@@ -561,7 +672,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             guard let self, self.state.phase == .thinking else { return }
             let apple = final.isEmpty ? heard.trimmingCharacters(in: .whitespacesAndNewlines) : final
             // Re-transcribe the recording with local Whisper (better with names and jargon); fall back to Apple's text.
-            if let whisper = self.whisper, whisper.ready, let wav = self.listener.recordingURL {
+            if let parakeet = self.parakeet, parakeet.ready, let wav = self.listener.recordingURL {
+                self.state.status = "Transcribing…"
+                parakeet.transcribe(wav, vocabulary: self.vocabularyWords()) { [weak self] text in
+                    guard let self, self.state.phase == .thinking else { return }
+                    let best = (text?.isEmpty == false) ? text! : apple
+                    log("transcript: apple=\"\(apple)\" parakeet=\"\(text ?? "nil")\"")
+                    self.questionReady(best)
+                }
+            } else if let whisper = self.whisper, whisper.ready, let wav = self.listener.recordingURL {
                 self.state.status = "Transcribing…"
                 whisper.transcribe(wav, prompt: self.vocabularyPrompt()) { [weak self] text in
                     guard let self, self.state.phase == .thinking else { return }
@@ -584,12 +703,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             if let issue = listener.lastIssue {
                 flash(issue + (whisper == nil ? " Or install Whisper in 👁 → Voice & Audio → Speech Recognition." : ""), seconds: 12)
             } else {
-                flash("Didn't catch that. Hold ⌥ Space while you speak.")
+                flash("Didn't catch that. Hold ⌃ while you speak.")
             }
             return
         }
         state.question = text
-        state.status = "Looking at your screen…"
+        state.status = withScreen ? "Looking at your screen…" : "Thinking…"
         guard Settings.quickCommands else { captureAndAsk(text); return }
         // Jev first (fast path for simple browser commands); Claude if it isn't a confident quick action.
         let started = Date()
@@ -657,6 +776,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     /// Words Whisper should spell right: project, window title, the user's vocabulary file, common dev terms.
+    /// Terms Parakeet should spell exactly: the project, code-like words in the window title (PaymentController.php →
+    /// PaymentController), the user's vocabulary file and common developer names.
+    func vocabularyWords() -> [String] {
+        var words = [(currentProject as NSString).lastPathComponent]
+        if let title = Screen.windowUnderPointer()?.title {
+            for token in title.components(separatedBy: CharacterSet.alphanumerics.inverted) where token.count >= 4 {
+                // CamelCase / snake-ish identifiers only; plain words don't need help.
+                if token.dropFirst().contains(where: \.isUppercase) { words.append(token) }
+            }
+        }
+        if let custom = try? String(contentsOf: Settings.vocabularyFile, encoding: .utf8) {
+            words += custom.components(separatedBy: CharacterSet(charactersIn: ",\n")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        }
+        words += ["VisionCLI", "Laravel", "SwiftUI", "Xcode", "TypeScript", "JavaScript", "GitHub", "kubectl", "Postgres", "MySQL",
+                  "Redis", "Docker", "Kubernetes", "Next.js", "Node.js", "npm", "PhpStorm", "Tailwind", "GraphQL", "Webpack", "Vite"]
+        var seen = Set<String>()
+        return words.filter { seen.insert($0.lowercased()).inserted }.prefix(80).map { $0 }
+    }
+
     func vocabularyPrompt() -> String {
         var words = [(currentProject as NSString).lastPathComponent]
         if let title = Screen.windowUnderPointer()?.title, !title.isEmpty { words.append(title) }
@@ -690,7 +828,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     func restartWhisper() {
         whisper?.stop()
         whisper = nil
-        guard Settings.sttEngine == "whisper" else { return }
+        parakeet?.stop()
+        parakeet = nil
+        if Settings.sttEngine == "parakeet" {
+            if ParakeetEngine.binary != nil { parakeet = ParakeetEngine(); parakeet?.start(); return }
+            log("parakeet helper missing; using Whisper")
+        }
+        guard Settings.sttEngine == "whisper" || Settings.sttEngine == "parakeet" else { return }
         whisper = WhisperEngine(cfg: cfg, model: Settings.whisperModel)
         if whisper == nil { log("whisper unavailable: install whisper-cpp and a ggml model; using Apple speech recognition") }
         whisper?.start()
@@ -698,6 +842,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
 
     func captureAndAsk(_ text: String) {
         let region = self.region, startShot = self.startShot
+        // Text only: no image tokens. The window's name goes along so the assistant can decide to `look` itself.
+        guard withScreen else {
+            highlight.hide()
+            ask(text, shots: [], window: Screen.windowUnderPointer())
+            return
+        }
         DispatchQueue.global().async {
             var shots: [Shot] = []
             var failure: Error?
@@ -813,7 +963,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         return t
     }
 
-    func ask(_ question: String, shots: [Shot]) {
+    func ask(_ question: String, shots: [Shot], window: WinInfo? = nil) {
         taskHUD.reset(title: question.count > 40 ? String(question.prefix(40)) + "…" : question)
         var question = question
         if let recipe = Recipes.match(question) { question = "\(recipe.name): \(recipe.prompt)" }
@@ -824,13 +974,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         // A terminal the user pointed at wins; otherwise the window the pointer ended on decides the project.
         if let pinned = Settings.pinnedProject { currentProject = pinned }
         else if let ctx = terminalContext { currentProject = ctx.project }
-        else if let p = projects.project(for: shots.last?.window) { currentProject = p }
+        else if let p = projects.project(for: shots.last?.window ?? window) { currentProject = p }
         state.project = (currentProject as NSString).lastPathComponent
         let saved = history.save(shots)
         currentShots = saved
         writeShotMap(saved)
         controlStopped = nil // a new question re-enables computer control after an Esc stop
-        currentWindow = saved.last?.window ?? currentWindow
+        currentWindow = saved.last?.window ?? window ?? currentWindow
+        let noShot = "No screenshot attached (to save tokens it's only sent when asked for)" + (window.map { "; the mouse is over \($0.label)" } ?? "")
+            + ". If answering needs the screen, call mcp__visioncli__look (or ui_elements / browser_read, cheaper as text)."
 
         var context = ["Project: \(currentProject)."]
         for (i, shot) in saved.enumerated() {
@@ -839,7 +991,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             if let f = shot.file { line += ", saved at \(f.path)" }
             context.append(line + ".")
         }
-        if saved.isEmpty { context.append("No screenshot is available; use mcp__visioncli__look if you need one.") }
+        if saved.isEmpty { context.append(noShot) }
         let text = "\(question)\n\n[Voice question. \(context.joined(separator: " "))]"
 
         activity.question(question, project: currentProject, shots: saved)
@@ -847,6 +999,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         if Settings.terminalMode {
             // The CLI running in the tab the user pointed at wins; otherwise the chosen assistant.
             let assistant = terminalContext?.assistant ?? Settings.assistant
+            // "slash model haiku" / "/compact": a CLI command, typed as-is so the CLI runs it.
+            if let cmd = Self.slashCommand(question) {
+                let t = terminal(for: currentProject, assistant: assistant)
+                if let ctx = terminalContext, ctx.assistant == assistant, let tab = ctx.itermSession {
+                    t.claudeCwd = ctx.cwd
+                    t.attach(itermSession: tab, sessionId: ctx.sessionId)
+                }
+                if t.command(cmd) {
+                    state.raw = "Sent \(cmd) to \(assistant.name)."
+                    set(.done)
+                    scheduleHide(after: 3)
+                } else {
+                    finish(result: nil, error: "No \(assistant.name) is running in a terminal for this project, so \(cmd) wasn't sent.")
+                }
+                return
+            }
             let gemini = assistant == .gemini
             let briefInstructions = assistant != .claude // no system prompt in gemini/agy interactive mode
             let paths = gemini ? geminiAttachable(saved) : saved.compactMap { $0.file?.path }
@@ -857,8 +1025,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 if i < paths.count { p += gemini ? ", @\(paths[i]) " : ", file \(paths[i])" }
                 parts.append(p + ".")
             }
+            if saved.isEmpty { parts.append(noShot) }
             // Gemini can't take a system prompt in its interactive mode, so the voice instructions ride along.
-            if briefInstructions { parts.append(assistant == .antigravity ? "View the screenshot file(s) first. " : ""); parts.append("Asked out loud: the reply is also shown in a bubble on screen and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line; for flows or relationships you may add one small ```mermaid diagram; put any [[box/arrow/circle/step]] drawing markers on the last line.") }
+            if briefInstructions { parts.append(assistant == .antigravity && !saved.isEmpty ? "View the screenshot file(s) first. " : ""); parts.append("Asked out loud: the reply is also shown in a bubble on screen and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line; for flows or relationships you may add one small ```mermaid diagram; put any [[box/arrow/circle/step]] drawing markers on the last line.") }
             let t = terminal(for: currentProject, assistant: assistant)
             // Prefer one the user already runs: the tab they pointed at, else any tab for this project.
             if let ctx = terminalContext, ctx.assistant == assistant, let tab = ctx.itermSession {
@@ -890,6 +1059,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         state.status = "Thinking…"
         if state.phase != .thinking { set(.thinking) }
         s.send(text: text, shots: saved)
+    }
+
+    /// A spoken or typed CLI command: "/model haiku", "Slash model haiku." → "/model haiku".
+    static func slashCommand(_ question: String) -> String? {
+        var q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = q.last, ".?!,".contains(last) { q.removeLast() }
+        let lower = q.lowercased()
+        if lower.hasPrefix("slash ") { q = "/" + q.dropFirst(6) }
+        else if lower.hasPrefix("forward slash ") { q = "/" + q.dropFirst(14) }
+        guard q.hasPrefix("/"), q.count > 1, q.count < 60, !q.contains("\n") else { return nil }
+        let parts = q.split(separator: " ", maxSplits: 1)
+        let name = parts[0].lowercased().replacingOccurrences(of: ",", with: "")
+        return parts.count > 1 ? "\(name) \(parts[1].lowercased())" : name
     }
 
     func finish(result: String?, error: String?) {
@@ -939,7 +1121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
     }
 
-    func showHistory() { historyWindow.show(store: history) }
+    func showHistory() { historyWindow.show(store: history, project: currentProject) }
 
     func dismiss() {
         if controlActive {
@@ -949,6 +1131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
         if state.phase == .approval { approve(false, always: false); return }
         if selector.isActive { selector.cancel() }
+        flow.cancel()
         keyPoll?.invalidate()
         listener.cancel()
         if let s = current, s.busy { s.stop() } // stop the turn; the next question resumes the conversation
@@ -1009,10 +1192,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+        UsageTracker.shared.onChange = { [weak self] in self?.updateStatusTitle() }
+        UsageTracker.shared.scanToday()
+        // Fresh limits on launch if what we have is old (a tiny Haiku request); replies keep them current after that.
+        if Date().timeIntervalSince(UsageTracker.shared.updated ?? .distantPast) > 3 * 3600 { UsageTracker.shared.refresh(claude: cfg.claude) }
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.updateStatusTitle() } // resets roll over
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        syncModelFromTerminal()
         @discardableResult func item(_ title: String, _ action: Selector?, in m: NSMenu, key: String = "", on: Bool = false, value: Any? = nil) -> NSMenuItem {
             let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
             i.target = self
@@ -1051,7 +1240,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             m.addItem(.separator())
             item("Choose Folder…", #selector(chooseProjectFolder), in: m)
         }
-        item("Hold ⌥Space to ask · ⌥⇧Space to point at an area", nil, in: menu)
+        usageItems(in: menu, item: item)
+        item(Settings.screenshotEveryQuestion ? "Hold ⌃ to ask · ⌥⇧Space to point at an area" : "Hold ⌃ to ask (text) · ⌃⌥ with a screenshot · ⌥⇧Space to point at an area", nil, in: menu)
         if let status = updater.status { item("⏳ " + status, nil, in: menu) }
         else if let release = updater.available { item("⬆︎ Install Update (\(release.version))…", #selector(installUpdate), in: menu) }
         if !Screen.hasPermission { item("⚠︎ Grant Screen Recording…", #selector(openScreenSettings), in: menu) }
@@ -1086,7 +1276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             }
         }
 
-        submenu("Model", in: menu) { m in
+        submenu(Settings.assistant == .antigravity ? "Model" : "Model: \(MenuLabels.claudeModel(cfg.model ?? Settings.model))", in: menu) { m in
             if Settings.assistant == .antigravity {
                 item("Default (from your agy settings)", #selector(chooseAgyModel(_:)), in: m, on: Settings.agyModel == nil)
                 m.addItem(.separator())
@@ -1097,8 +1287,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 }
             } else {
                 let model = cfg.model ?? Settings.model
-                item("Fast (Sonnet)", #selector(useSonnet), in: m, on: model == "sonnet")
-                item("Deeper (Opus)", #selector(useOpus), in: m, on: model == "opus")
+                for (alias, label) in MenuLabels.claudeModels {
+                    if alias == "opusplan" { m.addItem(.separator()) }
+                    item(label, cfg.model == nil ? #selector(chooseClaudeModel(_:)) : nil, in: m, on: model == alias, value: alias)
+                }
                 if cfg.model != nil { item("(set by VISIONCLI_MODEL)", nil, in: m) }
             }
         }
@@ -1155,16 +1347,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 }
             }
             submenu("Speech Recognition", in: m) { r in
+                if ParakeetEngine.binary != nil {
+                    item("Parakeet (local, fastest, knows your project's names)" + (parakeet != nil && parakeet?.ready != true ? " · loading…" : ""),
+                         #selector(chooseParakeet), in: r, on: parakeet != nil)
+                }
+                item(FlowDictation.isInstalled ? "Wispr Flow (your Flow account)" : "Wispr Flow (not installed)",
+                     FlowDictation.isInstalled ? #selector(chooseExternalDictation) : nil, in: r, on: Settings.sttEngine == "external")
                 let models = VoiceModels.whisperModels()
                 for (name, _) in models {
                     item("Whisper \(name) (local)", #selector(chooseWhisper(_:)), in: r,
-                         on: Settings.sttEngine == "whisper" && (whisper?.modelName ?? Settings.whisperModel) == name, value: name)
+                         on: parakeet == nil && Settings.sttEngine != "apple" && Settings.sttEngine != "external" && (whisper?.modelName ?? Settings.whisperModel) == name, value: name)
                 }
                 if models.isEmpty || VoiceModels.binary("whisper-server", path: cfg.path) == nil {
                     item(installer?.isBusy == true ? "Installing…" : "Download Whisper (better accuracy, ~490 MB)…",
                          installer?.isBusy == true ? nil : #selector(installWhisper), in: r)
                 }
-                item("Apple (on-device)", #selector(chooseWhisper(_:)), in: r, on: Settings.sttEngine == "apple" || whisper == nil)
+                item("Apple (on-device)", #selector(chooseWhisper(_:)), in: r, on: Settings.sttEngine == "apple" || (whisper == nil && parakeet == nil && Settings.sttEngine != "external"))
                 r.addItem(.separator())
                 item("Edit Vocabulary…", #selector(editVocabulary), in: r)
             }
@@ -1185,6 +1383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             item("Fix Permissions…", #selector(fixPermissions), in: m)
             item("Check for Updates… (v\(Updater.currentVersion))", #selector(checkForUpdates), in: m)
             item("Check for Updates Automatically", #selector(toggleAutoUpdate), in: m, on: Settings.autoUpdate)
+            item("Screenshot Every Question (uses more tokens)", #selector(toggleScreenshotEvery), in: m, on: Settings.screenshotEveryQuestion)
             item("Instant Browser Commands (Jev)", #selector(toggleQuick), in: m, on: Settings.quickCommands)
             item("Show AI Cursor in Browser", #selector(toggleGhost), in: m, on: !FileManager.default.fileExists(atPath: ghostOffFile.path))
             item("API Keys (TypeSafe for Jev, Gemini)…", #selector(openIntegrations), in: m)
@@ -1244,10 +1443,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     /// Project name next to the menu-bar icon (📌 when chosen manually).
+    /// Claude plan usage at the top of the menu, with a submenu to refresh it or hide it from the menu bar.
+    func usageItems(in menu: NSMenu, item: (String, Selector?, NSMenu, String, Bool, Any?) -> NSMenuItem) {
+        let u = UsageTracker.shared
+        u.scanToday()
+        let s = u.percent(u.session), w = u.percent(u.week)
+        let sub = NSMenu()
+        let card = NSMenuItem()
+        let host = NSHostingView(rootView: UsageCard(
+            session: s.flatMap { p in u.session.map { (p, $0.resetsAt) } }, week: w.flatMap { p in u.week.map { (p, $0.resetsAt) } },
+            today: u.today, updated: u.updated))
+        host.frame = NSRect(origin: .zero, size: host.fittingSize)
+        card.view = host
+        sub.addItem(card)
+        sub.addItem(.separator())
+        item("Refresh Usage", #selector(refreshUsage), sub, "", false, nil).image = UsageArt.symbol("arrow.clockwise")
+        item("Show Session in Menu Bar", #selector(toggleUsageInMenuBar), sub, "", Settings.usageInMenuBar, nil).image = UsageArt.symbol("menubar.rectangle")
+        item("Show Weekly in Menu Bar", Settings.usageInMenuBar ? #selector(toggleWeeklyInMenuBar) : nil, sub, "", Settings.weeklyInMenuBar, nil).image = UsageArt.symbol("calendar")
+        let i = NSMenuItem(title: s != nil && w != nil ? "Claude Usage: \(s!)% session · \(w!)% week" : "Claude Usage", action: nil, keyEquivalent: "")
+        i.image = (max(s ?? 0, w ?? 0) >= 80 ? UsageArt.symbol("exclamationmark.triangle.fill") : UsageArt.symbol("gauge.with.dots.needle.33percent", fallback: "gauge"))
+        i.submenu = sub
+        menu.addItem(i)
+    }
+
+    @objc func refreshUsage() { UsageTracker.shared.refresh(claude: cfg.claude) }
+    @objc func toggleWeeklyInMenuBar() {
+        Settings.weeklyInMenuBar.toggle()
+        updateStatusTitle()
+    }
+    @objc func toggleUsageInMenuBar() {
+        Settings.usageInMenuBar.toggle()
+        updateStatusTitle()
+    }
+
     func updateStatusTitle() {
         let name = (currentProject as NSString).lastPathComponent
-        statusItem?.button?.title = " " + (Settings.pinnedProject != nil ? "📌 " : "") + (name.count > 18 ? String(name.prefix(17)) + "…" : name)
-        statusItem?.button?.font = NSFont.menuBarFont(ofSize: 0)
+        let title = " " + (Settings.pinnedProject != nil ? "📌 " : "") + (name.count > 18 ? String(name.prefix(17)) + "…" : name)
+        let u = UsageTracker.shared
+        if Settings.usageInMenuBar, let sp = u.percent(u.session), let wp = u.percent(u.week) {
+            // Colored rings: the current 5-hour session, plus the week when turned on.
+            statusItem?.button?.attributedTitle = UsageArt.barTitle(prefix: title, session: sp, week: Settings.weeklyInMenuBar ? wp : nil)
+            statusItem?.button?.toolTip = "VisionCLI · Claude usage: \(sp)% of this 5-hour session, \(wp)% of this week"
+        } else {
+            statusItem?.button?.title = title
+            statusItem?.button?.font = NSFont.menuBarFont(ofSize: 0)
+            statusItem?.button?.toolTip = "VisionCLI"
+        }
     }
 
     /// Refresh the Project menu's candidates in the background (running claude/gemini sessions, open editor windows).
@@ -1389,6 +1630,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     @objc func chooseEffort(_ sender: NSMenuItem) {
         Settings.effort = sender.representedObject as? String
         log("effort: \(Settings.effort ?? "default")")
+        if let level = Settings.effort { propagate("/effort \(level)") }
     }
 
     @objc func chooseAgyModel(_ sender: NSMenuItem) {
@@ -1452,7 +1694,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         alert.informativeText = """
         Ask Claude about anything on your screen, by voice.
 
-        • Hold ⌥ Space, ask, let go: the answer appears above your mouse.
+        • Hold ⌃, ask, let go: the answer appears in the top-right corner.
+        • Hold ⌃ ⌥ to send a screenshot of the window too.
         • Hold ⌥ ⇧ Space to drag a box around what you mean.
         • The 👁 menu bar icon has projects, voices, models and settings.
         • Optional: 👁 → Voice & Audio can download Whisper (more accurate transcription) and natural Kokoro voices.
@@ -1476,6 +1719,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         Settings.speak.toggle()
         if !Settings.speak { speaker.reset() }
         if Settings.speak && Settings.ttsEngine == "kokoro" { kokoro.start() }
+    }
+    @objc func chooseExternalDictation() {
+        Settings.sttEngine = "external"
+        restartWhisper() // stops the local engines; the box needs none
+    }
+    @objc func chooseParakeet() {
+        Settings.sttEngine = "parakeet"
+        restartWhisper()
     }
     @objc func chooseWhisper(_ sender: NSMenuItem) {
         if let model = sender.representedObject as? String { Settings.sttEngine = "whisper"; Settings.whisperModel = model }
@@ -1503,8 +1754,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
         NSWorkspace.shared.open(Settings.vocabularyFile)
     }
-    @objc func useSonnet() { Settings.model = "sonnet" }
-    @objc func useOpus() { Settings.model = "opus" }
+    @objc func chooseClaudeModel(_ sender: NSMenuItem) {
+        guard let alias = sender.representedObject as? String else { return }
+        Settings.model = alias
+        propagate("/model \(alias)")
+    }
+
+    /// Send a /model or /effort change to the Claude running in the terminal, so the menu and the terminal agree.
+    func propagate(_ cmd: String) {
+        guard Settings.terminalMode, Settings.assistant == .claude else { return }
+        let t = terminal(for: currentProject, assistant: .claude)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let ok = t.command(cmd)
+            DispatchQueue.main.async { if !ok { log("terminal: no running claude for \(self.currentProject); \(cmd) applies when one starts") } }
+        }
+    }
+
+    /// The terminal changed its model itself (/model there): follow it in the menu.
+    func syncModelFromTerminal() {
+        guard Settings.terminalMode, Settings.assistant == .claude, cfg.model == nil else { return }
+        let t = terminal(for: currentProject, assistant: .claude)
+        DispatchQueue.global(qos: .utility).async {
+            t.findRunning()
+            guard let used = t.lastModel else { return }
+            DispatchQueue.main.async {
+                let family = ["fable", "opus", "sonnet", "haiku"].first { used.contains($0) }
+                let current = Settings.model.replacingOccurrences(of: "[1m]", with: "")
+                if let family, current != family, !(current == "opusplan" && (family == "opus" || family == "sonnet")) {
+                    log("model: terminal is on \(used); menu follows")
+                    Settings.model = family
+                }
+            }
+        }
+    }
     @objc func showHistoryMenu() { showHistory() }
     @objc func showActivityMenu() {
         activityShown = true
@@ -1512,6 +1794,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
     @objc func toggleAutoActivity() { Settings.autoActivity.toggle() }
     @objc func toggleQuick() { Settings.quickCommands.toggle() }
+    @objc func toggleScreenshotEvery() { Settings.screenshotEveryQuestion.toggle() }
 
 
     /// The node browser layer checks this file before animating its ghost cursor.
@@ -1618,6 +1901,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         CrashReporter.markCleanExit()
         sessions.values.forEach { $0.stop() }
         whisper?.stop()
+        parakeet?.stop()
         kokoro.stop()
         log("quit")
         NSApp.terminate(nil)
@@ -1630,6 +1914,23 @@ app.delegate = delegate
 app.run()
 
 enum MenuLabels {
+    /// Claude Code model aliases (`claude --model <alias>`), so new versions are picked up without an app update.
+    static let claudeModels: [(String, String)] = [
+        ("default", "Default (your Claude Code setting)"),
+        ("fable", "Fable (most capable)"),
+        ("opus", "Opus (deep reasoning)"),
+        ("sonnet", "Sonnet (fast, balanced)"),
+        ("haiku", "Haiku (fastest, cheapest)"),
+        ("opusplan", "Opus to plan, Sonnet to do"),
+        ("fable[1m]", "Fable, 1M context"),
+        ("opus[1m]", "Opus, 1M context"),
+        ("sonnet[1m]", "Sonnet, 1M context"),
+    ]
+
+    static func claudeModel(_ alias: String) -> String {
+        claudeModels.first { $0.0 == alias }.map { $0.1.components(separatedBy: " (").first! } ?? alias
+    }
+
     static func effort(_ level: String?) -> String {
         switch level {
         case "low": return "Low (fastest)"

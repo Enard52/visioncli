@@ -200,7 +200,8 @@ final class CrashWatcher {
     private let dir = home.appendingPathComponent("Library/Logs/DiagnosticReports")
     /// System noise that isn't the user's app.
     private let ignored = ["VisionCLI", "whisper-server", "python", "ReportCrash", "mdworker", "com.apple.", "Safari", "WebKit",
-                           "Google Chrome", "Brave", "Slack", "zoom", "Spotify", "Music", "Mail", "Finder", "Dock"]
+                           "Google Chrome", "Brave", "Slack", "zoom", "Spotify", "Music", "Mail", "Finder", "Dock",
+                           "SourceKitService", "Service", "Agent", "daemon", "XPC", "Helper"]
 
     func start() {
         seen = Set(files().map(\.lastPathComponent))

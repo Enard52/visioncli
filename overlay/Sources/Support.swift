@@ -180,7 +180,7 @@ enum Settings {
         set { d.set(newValue, forKey: "speak") }
     }
 
-    /// "sonnet" (fast, default) or "opus" (deeper). A --model launch flag overrides.
+    /// A Claude Code model alias (fable, opus, sonnet, haiku, …; see MenuLabels.claudeModels). A --model launch flag overrides.
     static var model: String {
         get { d.string(forKey: "model") ?? "sonnet" }
         set { d.set(newValue, forKey: "model") }
@@ -267,6 +267,24 @@ enum Settings {
     static var quickCommands: Bool {
         get { d.object(forKey: "quickCommands") as? Bool ?? true }
         set { d.set(newValue, forKey: "quickCommands") }
+    }
+
+    /// Attach a screenshot to every voice question. Off: only ⌥⇧Space attaches one (the assistant can still call `look`).
+    static var screenshotEveryQuestion: Bool {
+        get { d.object(forKey: "screenshotEveryQuestion") as? Bool ?? false }
+        set { d.set(newValue, forKey: "screenshotEveryQuestion") }
+    }
+
+    /// Show Claude's session / weekly usage next to the project name in the menu bar.
+    static var usageInMenuBar: Bool {
+        get { d.object(forKey: "usageInMenuBar") as? Bool ?? true }
+        set { d.set(newValue, forKey: "usageInMenuBar") }
+    }
+
+    /// Also show the weekly ring in the menu bar (the 5-hour session ring is always shown when usage is on).
+    static var weeklyInMenuBar: Bool {
+        get { d.bool(forKey: "weeklyInMenuBar") }
+        set { d.set(newValue, forKey: "weeklyInMenuBar") }
     }
 
     /// A project chosen in the menu; nil = Auto (follow the window under the pointer).

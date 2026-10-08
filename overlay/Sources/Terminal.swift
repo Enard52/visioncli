@@ -93,6 +93,40 @@ final class TerminalSession {
 
     // MARK: Asking
 
+    /// Type a slash command (/model haiku, /effort high…) into the running CLI as-is: no voice context, no waiting
+    /// for an answer. Uses the attached tab, else one the user runs for this project. False if none is running.
+    @discardableResult
+    func command(_ cmd: String) -> Bool {
+        if let id = termId, send(cmd, to: id) { log("terminal: sent \(cmd) to \(assistant.binary) for \(project)"); return true }
+        if let found = TerminalProbe.find(assistant, forProject: project), let tab = found.itermSession {
+            claudeCwd = found.cwd
+            attach(itermSession: tab, sessionId: found.sessionId)
+            if send(cmd, to: tab) { log("terminal: sent \(cmd) to \(assistant.binary) for \(project)"); return true }
+        }
+        return false
+    }
+
+    /// Attach to the CLI the user runs for this project, if any (without typing anything).
+    func findRunning() {
+        guard termId == nil, let found = TerminalProbe.find(assistant, forProject: project), let tab = found.itermSession else { return }
+        claudeCwd = found.cwd
+        attach(itermSession: tab, sessionId: found.sessionId)
+    }
+
+    /// The model the CLI used for its latest reply (e.g. "claude-haiku-5-5"), read from its transcript.
+    var lastModel: String? {
+        guard assistant == .claude, let url = transcriptURL, let h = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? h.close() }
+        let size = (try? h.seekToEnd()) ?? 0
+        try? h.seek(toOffset: size > 200_000 ? size - 200_000 : 0)
+        guard let data = try? h.readToEnd(), let text = String(data: data, encoding: .utf8) else { return nil }
+        for line in text.split(separator: "\n").reversed() where line.contains("\"assistant\"") && line.contains("\"model\"") {
+            if let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+               let model = (obj["message"] as? [String: Any])?["model"] as? String, model.hasPrefix("claude") { return model }
+        }
+        return nil
+    }
+
     func ask(_ text: String) {
         // One line: a newline would submit early. The marker lets us find this turn in the transcript.
         let line = text.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "  ", with: " ")
@@ -169,6 +203,7 @@ final class TerminalSession {
             command = """
             \(quote(cfg.claude)) --append-system-prompt "$(cat \(quote(promptFile.path)))" \\
               --allowedTools \(autoAllowedTools.joined(separator: " ")) \(Settings.effort.map { "--effort \($0)" } ?? "") \\
+              \(Settings.model == "default" ? "" : "--model \(quote(Settings.model))") \\
               \(resume ? "--resume" : "--session-id") \(sessionId)
             """
         } else if assistant == .antigravity {

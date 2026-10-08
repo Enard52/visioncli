@@ -394,7 +394,7 @@ extension AppDelegate {
         crashWatcher.onCrash = { [weak self] crash in
             guard let self, self.state.phase == .hidden else { return }
             self.state.question = "💥 \(crash.app) crashed"
-            self.flash("\(crash.app) just crashed. Hold ⌥Space and ask \"why did it crash?\", or pick 👁 → Recipes → Explain the last crash.", seconds: 9)
+            self.flash("\(crash.app) just crashed. Hold ⌃ and ask \"why did it crash?\", or pick 👁 → Recipes → Explain the last crash.", seconds: 9)
         }
         if Settings.watchCrashes { crashWatcher.start() }
     }

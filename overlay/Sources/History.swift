@@ -14,7 +14,7 @@ final class HistoryStore: ObservableObject {
     @Published private(set) var entries: [HistoryEntry] = []
     private let file = supportDir.appendingPathComponent("history.jsonl")
     let shotsDir = supportDir.appendingPathComponent("screenshots")
-    private let keep = 300
+    private let keep = 200 // per project, so a busy project doesn't push out the others
 
     init() {
         try? FileManager.default.createDirectory(at: shotsDir, withIntermediateDirectories: true)
@@ -34,19 +34,28 @@ final class HistoryStore: ObservableObject {
 
     func add(_ e: HistoryEntry) {
         entries.insert(e, at: 0)
-        if entries.count > keep {
-            for old in entries[keep...] { old.screenshots.forEach { try? FileManager.default.removeItem(atPath: $0) } }
-            entries = Array(entries.prefix(keep))
+        let same = entries.filter { $0.project == e.project }
+        if same.count > keep {
+            let dropped = Set(same[keep...].map(\.id))
+            for old in same[keep...] { old.screenshots.forEach { try? FileManager.default.removeItem(atPath: $0) } }
+            entries.removeAll { dropped.contains($0.id) }
             persistAll()
         } else if let data = try? encoder.encode(e) {
             append(data + Data([0x0A]))
         }
     }
 
-    func clear() {
-        entries.forEach { $0.screenshots.forEach { try? FileManager.default.removeItem(atPath: $0) } }
-        entries = []
-        try? FileManager.default.removeItem(at: file)
+    /// Clear everything, or one project's history.
+    func clear(project: String? = nil) {
+        let gone = entries.filter { project == nil || $0.project == project }
+        gone.forEach { $0.screenshots.forEach { try? FileManager.default.removeItem(atPath: $0) } }
+        if let project {
+            entries.removeAll { $0.project == project }
+            persistAll()
+        } else {
+            entries = []
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 
     private let encoder: JSONEncoder = { let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; return e }()
@@ -73,13 +82,27 @@ final class HistoryStore: ObservableObject {
     }
 }
 
+/// Which project the History window shows ("" = all). Opening History selects the current project.
+final class HistoryFilter: ObservableObject {
+    @Published var project = ""
+}
+
 struct HistoryView: View {
     @ObservedObject var store: HistoryStore
+    @ObservedObject var filter: HistoryFilter
     @State private var query = ""
 
+    /// Projects with history, most recently used first.
+    var projects: [String] {
+        var seen = Set<String>()
+        return store.entries.sorted { $0.date > $1.date }.map(\.project).filter { seen.insert($0).inserted }
+    }
+
     var filtered: [HistoryEntry] {
-        guard !query.isEmpty else { return store.entries }
-        return store.entries.filter { "\($0.question) \($0.answer) \($0.project)".localizedCaseInsensitiveContains(query) }
+        store.entries.filter { e in
+            (filter.project.isEmpty || e.project == filter.project)
+                && (query.isEmpty || "\(e.question) \(e.answer) \(e.project)".localizedCaseInsensitiveContains(query))
+        }
     }
 
     var body: some View {
@@ -88,13 +111,19 @@ struct HistoryView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Search questions and answers", text: $query).textFieldStyle(.plain)
                 Spacer()
-                Button("Clear History") { store.clear() }.disabled(store.entries.isEmpty)
+                Picker("", selection: $filter.project) {
+                    Text("All Projects").tag("")
+                    ForEach(projects, id: \.self) { p in Text((p as NSString).lastPathComponent).tag(p) }
+                }
+                .frame(maxWidth: 200)
+                Button(filter.project.isEmpty ? "Clear History" : "Clear Project") { store.clear(project: filter.project.isEmpty ? nil : filter.project) }
+                    .disabled(filtered.isEmpty)
             }
             .padding(12)
             Divider()
             if filtered.isEmpty {
                 Spacer()
-                Text(store.entries.isEmpty ? "No questions yet. Hold ⌥ Space and ask about your screen." : "No matches")
+                Text(store.entries.isEmpty ? "No questions yet. Hold ⌃ and ask about your screen." : "No matches")
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
@@ -115,7 +144,9 @@ struct HistoryView: View {
                                 Spacer()
                                 Text(e.date, style: .relative).font(.caption).foregroundStyle(.secondary)
                             }
-                            Text((e.project as NSString).lastPathComponent).font(.caption).foregroundStyle(.secondary)
+                            if filter.project.isEmpty {
+                                Text((e.project as NSString).lastPathComponent).font(.caption).foregroundStyle(.secondary)
+                            }
                             Text(Markup.display(e.answer)).font(.body).textSelection(.enabled)
                             HStack {
                                 Button("Copy") {
@@ -136,14 +167,17 @@ struct HistoryView: View {
 
 final class HistoryWindow {
     private var window: NSWindow?
+    private let filter = HistoryFilter()
 
-    func show(store: HistoryStore) {
+    /// `project`: show that project's history (falls back to all projects when it has none yet).
+    func show(store: HistoryStore, project: String? = nil) {
+        if let project { filter.project = store.entries.contains { $0.project == project } ? project : "" }
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 560),
                              styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-            w.title = "visioncli History"
+            w.title = "VisionCLI History"
             w.isReleasedWhenClosed = false
-            w.contentView = NSHostingView(rootView: HistoryView(store: store))
+            w.contentView = NSHostingView(rootView: HistoryView(store: store, filter: filter))
             w.center()
             window = w
         }

@@ -15,7 +15,7 @@ by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or
 ---
 
 - **"What is this file for?"** Your assistant looks at the window under your mouse, finds the real file in your project and answers with `file:line` references.
-- **Hold ⌥ Space and ask out loud.** A loader rides on your cursor while it thinks; the answer appears in the top-right corner and is read aloud.
+- **Hold ⌃ and ask out loud.** A loader rides on your cursor while it thinks; the answer appears in the top-right corner and is read aloud.
 - **Claude or Gemini, your choice.** Uses your own `claude` or `agy` sign-in (no API keys) and the session already running for that project, so you can type and talk in the same conversation. Pick the model and effort from the menu.
 - **Uses your computer.** "Open Xcode and run the app", "fill this form", "switch the dropdown to Production": it clicks, types, presses shortcuts and opens apps, one checked step at a time, reading each app's real buttons and fields through Accessibility. You approve each action (or allow all), passwords and System Settings always ask, a task panel shows every step with Pause/Stop, and **Esc stops it instantly**.
 - **Recipes.** Saved routines like *Run the tests*, *Review my changes*, *Explain the last crash*, *Run on the simulator*. Pick from the menu or say the name. Edit your own in `recipes.json`.
@@ -52,7 +52,7 @@ macOS will ask for three permissions. VisionCLI needs all of them:
 
 | Permission | Why |
 |---|---|
-| **Microphone** and **Speech Recognition** | to hear your question while you hold ⌥ Space |
+| **Microphone** and **Speech Recognition** | to hear your question while you hold ⌃ |
 | **Screen & System Audio Recording** for **VisionCLI** | to see the window you're asking about in voice mode. After allowing it, quit and reopen VisionCLI. |
 | **Screen & System Audio Recording** for **your terminal app** (iTerm, Terminal, Warp…) | when you *type* to Claude Code, the screenshot is taken by the terminal running `claude`. Without it, Claude only sees the wallpaper. Restart the terminal after allowing it. |
 | **Automation** (iTerm, Chrome/Brave) | asked the first time it types into your terminal or controls the browser |
@@ -63,6 +63,8 @@ If something doesn't work, check System Settings → Privacy & Security, and �
 
 | Add | Get | How |
 |---|---|---|
+| **Parakeet** | Fastest local transcription (~0.3s on the Neural Engine) that spells your project's class names right. Apple Silicon | 👁 → Voice & Audio → Speech Recognition → **Parakeet** (downloads ~600 MB on first use) |
+| **Wispr Flow** | Use your own Wispr Flow account: hold ⌃ and speak as usual | Have Flow running with its push-to-talk key on fn, then pick **Wispr Flow** in Speech Recognition |
 | **Whisper** | More accurate transcription of names and jargon (~0.7s, local) | 👁 → Voice & Audio → Speech Recognition → **Download Whisper** (installs `whisper-cpp` via Homebrew, then downloads the ~490 MB model) |
 | **Kokoro** | Natural voices for spoken answers (local) | 👁 → Voice & Audio → Voice → **Download Natural Voices** (installs [`uv`](https://docs.astral.sh/uv/) if needed, then downloads ~350 MB) |
 | **TypeSafe Jev** | Instant browser commands | add your key via 👁 → Settings → *API Keys*, or set `TYPESAFE_API_KEY` |
@@ -99,12 +101,15 @@ VisionCLI works with Gemini as well as Claude, using your own sign-in, the same 
 
 | Keys | What happens |
 |---|---|
-| **Hold ⌥ Space**, speak, let go | Ask about what's under the mouse (or tap to start, tap again to send) |
-| **Hold ⌥ ⇧ Space** | Ask, and drag a box around exactly what you mean |
+| **Hold ⌃**, speak, let go | Ask as text, no screenshot (cheap). The assistant knows which window you're over and takes a look itself if it needs to. Tap to start, tap again to send |
+| **Hold ⌃ ⌥** | Ask with a screenshot of the window under the mouse |
+| **Hold ⌥ ⇧ Space** | Ask with a screenshot of just an area: drag a box around exactly what you mean, or tap ⌥ ⇧ Space again for the whole window |
 | **⌥ P** | Pin the answer: scroll, select text, click `file:line` links, toolbar (copy, read aloud, history) |
 | **⌥ O** | Open the first `file:line` in your editor (JetBrains IDEs, Xcode, VS Code, Cursor) |
 | **⌥ ↩ / esc** | Approve or deny an edit or command (background mode) |
 | **esc** | Dismiss, or stop the answer |
+
+To attach a screenshot to every question instead, turn on **👁 → Settings → Screenshot Every Question**.
 
 **Which project?** By default VisionCLI follows the window under your mouse. PhpStorm `myshop – payments` maps to `~/PhpstormProjects/myshop`, and a terminal running `claude` maps to its folder. With several projects open, pick one in **👁 → Project**. The menu bar shows the current project, with 📌 when you've chosen one.
 

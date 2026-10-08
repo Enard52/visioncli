@@ -77,6 +77,15 @@ else
   [ "${VISIONCLI_BUNDLE_SERVER:-}" = "1" ] && bundle_server
 fi
 
+# Parakeet speech-to-text helper (Apple Silicon). Optional: the app falls back to Whisper / Apple without it.
+if [ "${VISIONCLI_NO_PARAKEET:-}" != "1" ] && [ "$(uname -m)" = "arm64" ]; then
+  if scripts/build-parakeet.sh && [ -f overlay/helpers/parakeet/.build/parakeet-server ]; then
+    cp overlay/helpers/parakeet/.build/parakeet-server "$APP/Contents/MacOS/"
+  else
+    echo "Parakeet helper not built (continuing without it)"
+  fi
+fi
+
 # Signing: one stable identity for every build ("VisionCLI Release", see scripts/setup-signing.sh / the release
 # workflow), so macOS keeps Screen Recording / Microphone permissions across upgrades. An ad-hoc signature changes
 # with every build, which makes macOS ask again after each update. Falls back to the older local identity, then ad-hoc.

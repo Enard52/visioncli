@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.2
+
+- **New keys, no Space:** hold **⌃** to ask as text only (no screenshot, far fewer tokens; the assistant takes its own look if it needs to), hold **⌃⌥** to ask with a screenshot of the window under the mouse (adding ⌥ while holding ⌃ also works). ⌥⇧Space still lets you drag an area. Other ⌃ shortcuts (⌃C, ⌃-click) keep working. Without the Accessibility permission the keys fall back to ⌃Space / ⌃⌥Space. 👁 → Settings → *Screenshot Every Question* brings back the old behaviour.
+- **See what it sees:** while a screenshot question is held, the display under the mouse dims except the window that will be captured (cyan outline).
+- **Parakeet speech recognition:** NVIDIA Parakeet TDT runs locally on the Neural Engine (Apple Silicon), about 0.2–0.3 s per question, and gets your project's names right (class names from the window title, your vocabulary list, common tools). Choose it in 👁 → Voice & Audio → Speech Recognition; the model (~600 MB) downloads on first use.
+- **Wispr Flow:** use your own Wispr Flow account as the speech engine. Hold ⌃ and speak as usual; VisionCLI holds Flow's push-to-talk key for you and takes Flow's text as the question.
+- **Claude usage in the menu bar:** a coloured ring with your current 5-hour session usage (optionally the week too), and a usage card in 👁 → Claude Usage with session and weekly limits, reset times and today's tokens across all Claude Code sessions.
+- **All Claude models:** Fable, Opus, Sonnet, Haiku, Opus-plan and the 1M-context variants. Changing Model or Effort in the menu is sent to the Claude running in your terminal (`/model`, `/effort`), and the menu follows a model you pick in the terminal. Saying "slash compact" (or any "slash …") runs it as a real command.
+- **History per project:** History opens on the current project, with a project picker, *Clear Project*, and 200 questions kept per project.
+- Fixes: Bluetooth headsets (AirPods, Sony…) no longer record silence when they switch to their call mode mid-question; the crash watcher ignores Xcode's background services.
+
 ## 0.7.1
 
 - **Fix: browser tasks opened lots of tabs and windows.** `browser_open` now switches to a tab already showing the page, otherwise reuses the assistant's own working tab, and opens at most one new tab. In Chrome/Brave, keyboard navigation (⌘L/⌘T/⌘N) from computer control is refused in favour of the browser tools, so keys can't land in the wrong window.
