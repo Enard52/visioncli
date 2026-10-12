@@ -76,6 +76,7 @@ function siteUrl(name: string): string {
 
 const MIN_INTENT = 0.7;
 const MIN_TARGET = 0.55;
+const MAX_ELEMENTS = 60; // page elements offered to Jev (in page order): enough for a screenful, keeps the request fast
 
 export async function quick(utterance: string): Promise<QuickResult> {
   const started = Date.now();
@@ -84,26 +85,28 @@ export async function quick(utterance: string): Promise<QuickResult> {
   if (utterance.split(/\s+/).length > 25) return { handled: false, reason: "too long for a quick command" };
 
   let b: browser.BrowserName;
+  let inFront: boolean;
   try {
-    b = await browser.pick();
+    ({ browser: b, front: inFront } = await browser.pickWithFront());
   } catch {
     return { handled: false, reason: "no supported browser running" };
   }
 
   // Candidates the answers can point at. Page elements only when the browser is in front (it's what "this page" means).
-  const [tabList, inFront] = await Promise.all([browser.tabs(b).catch(() => []), browser.frontmostIsBrowser()]);
-  let els: browser.Element[] = [];
-  if (inFront) els = await browser.elements(b).catch(() => []);
+  const [tabList, allEls] = await Promise.all([
+    browser.tabs(b).catch(() => [] as browser.Tab[]),
+    inFront ? browser.elements(b).catch(() => [] as browser.Element[]) : ([] as browser.Element[]),
+  ]);
+  const els = allEls.slice(0, MAX_ELEMENTS);
   const active = tabList.find((t) => t.active);
 
+  // The candidates go to Jev once, as the choice criteria (not repeated in the state), to keep the request small.
   const state = {
     spoken_command: utterance,
     note: "The command came from speech-to-text, so words may be misheard.",
     browser: b,
     browser_is_front_app: inFront,
-    current_tab: active ? { title: active.title, url: active.url } : null,
-    open_tabs: tabList.map((t) => ({ id: t.id, title: t.title.slice(0, 80), url: t.url.slice(0, 100) })),
-    page_elements: els.map((e) => ({ id: e.id, kind: e.kind, text: e.text, ...(e.href ? { href: e.href } : {}) })),
+    current_tab: active ? { title: active.title.slice(0, 80), url: active.url.slice(0, 100) } : null,
   };
 
   const questions: Record<string, unknown> = {
@@ -116,15 +119,15 @@ export async function quick(utterance: string): Promise<QuickResult> {
   if (tabList.length) {
     questions.tab = {
       type: "choice",
-      instructions: "Suppose the user wants to switch to an already-open tab: which tab in `open_tabs` do they mean (by title, site or topic)?",
+      instructions: "Suppose the user wants to switch to an already-open browser tab: which of these open tabs do they mean (by title, site or topic)?",
       criteria: { ...Object.fromEntries(tabList.map((t) => [t.id, `${t.title.slice(0, 80)} (${t.url.slice(0, 80)})`])), none: "None of the open tabs matches." },
     };
   }
   if (els.length) {
     questions.element = {
       type: "choice",
-      instructions: "Suppose the user wants to click something on the current page: which item in `page_elements` do they mean?",
-      criteria: { ...Object.fromEntries(els.map((e) => [e.id, `${e.kind}: ${e.text}`])), none: "None of these elements matches." },
+      instructions: "Suppose the user wants to click something on the current web page: which of these page elements do they mean?",
+      criteria: { ...Object.fromEntries(els.map((e) => [e.id, `${e.kind}: ${e.text}${e.href ? ` (${e.href})` : ""}`])), none: "None of these elements matches." },
     };
   }
 
@@ -155,7 +158,7 @@ export async function quick(utterance: string): Promise<QuickResult> {
         const t = a.tab;
         if (!t?.choice || t.choice === "none" || (t.confidence ?? 0) < MIN_TARGET) {
           // Not open yet: treat as opening the site.
-          await browser.open(siteUrl(phrase(utterance)), true, b);
+          await browser.open(siteUrl(phrase(utterance)), true, b, tabList);
           message = `Opened ${phrase(utterance)}`;
           break;
         }
@@ -164,12 +167,12 @@ export async function quick(utterance: string): Promise<QuickResult> {
         break;
       }
       case "open_site":
-        await browser.open(siteUrl(phrase(utterance)), true, b);
+        await browser.open(siteUrl(phrase(utterance)), true, b, tabList);
         message = `Opened ${phrase(utterance)}`;
         break;
       case "web_search": {
         const query = phrase(utterance);
-        await browser.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, true, b);
+        await browser.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, true, b, tabList);
         message = `Searching for “${query}”`;
         break;
       }

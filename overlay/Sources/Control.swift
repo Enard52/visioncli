@@ -14,7 +14,12 @@ final class ControlServer {
     private let token = UUID().uuidString + UUID().uuidString
     static let infoFile = supportDir.appendingPathComponent("control.json")
 
-    /// handler(request, reply): reply exactly once with a JSON-able dictionary.
+    /// Requests are read and handled here, not on the main thread: listing a big app's controls walks its whole
+    /// accessibility tree, and actions wait for apps to come forward and type character by character. The handler hops
+    /// to main only for UI and app state.
+    static let queue = DispatchQueue(label: "dev.visioncli.control", qos: .userInitiated)
+
+    /// handler(request, reply): called on `queue`; reply exactly once (from any queue) with a JSON-able dictionary.
     var handler: (_ request: [String: Any], _ reply: @escaping ([String: Any]) -> Void) -> Void = { _, reply in reply(["error": "not ready"]) }
 
     func start() {
@@ -33,7 +38,7 @@ final class ControlServer {
                 log("control: listening on 127.0.0.1:\(port)")
             }
             l.newConnectionHandler = { [weak self] conn in self?.accept(conn) }
-            l.start(queue: .main)
+            l.start(queue: Self.queue)
             listener = l
         } catch {
             log("control: couldn't start server: \(error)")
@@ -46,7 +51,7 @@ final class ControlServer {
     }
 
     private func accept(_ conn: NWConnection) {
-        conn.start(queue: .main)
+        conn.start(queue: Self.queue)
         var buffer = Data()
         func receive() {
             conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, done, error in
@@ -250,6 +255,7 @@ enum Computer {
 // MARK: - Accessibility elements
 
 /// The front app's UI as a list of labelled, clickable/typeable elements (buttons, fields, menus, links, text…).
+/// Used only on ControlServer.queue.
 final class UIElements {
     private var elements: [Int: AXUIElement] = [:]
     private(set) var appName = ""
@@ -276,13 +282,20 @@ final class UIElements {
         self.app = app
         appName = app.localizedName ?? ""
         let root = AXUIElementCreateApplication(app.processIdentifier)
+        // A hung app would otherwise stall each call for the default ~6s (and the control queue with it).
+        AXUIElementSetMessagingTimeout(root, 0.5)
         var start: CFTypeRef?
         let window = AXUIElementCopyAttributeValue(root, kAXFocusedWindowAttribute as CFString, &start) == .success
             ? (start as! AXUIElement) : root
         var items: [Item] = []
         var nextId = 1
+        var visited = 0
+        let deadline = Date().addingTimeInterval(4)
         func walk(_ el: AXUIElement, _ depth: Int) {
-            guard depth < 30, items.count < 350 else { return }
+            // Huge trees (big web pages, long tables) mostly hold uninteresting nodes: cap the nodes visited too.
+            guard depth < 30, items.count < 350, visited < 5000, visited % 64 != 0 || Date() < deadline else { return }
+            visited += 1
+            AXUIElementSetMessagingTimeout(el, 0.5)
             let role = Self.string(el, kAXRoleAttribute) ?? ""
             if Self.interesting.contains(role), let frame = Self.frame(el), frame.width > 1, frame.height > 1 {
                 let label = [Self.string(el, kAXTitleAttribute), Self.string(el, kAXDescriptionAttribute),
@@ -329,12 +342,16 @@ final class UIElements {
     /// Press via Accessibility (no mouse needed); false if the element doesn't support it.
     func press(_ id: Int) -> Bool {
         guard let el = elements[id] else { return false }
+        // Back to the normal timeout: a press that opens a dialog can take a while to return, and a timeout here would
+        // fall back to a real click and press it twice.
+        AXUIElementSetMessagingTimeout(el, 0)
         return AXUIElementPerformAction(el, kAXPressAction as CFString) == .success
     }
 
     /// Focus a text field and set its value directly.
     func setText(_ id: Int, _ text: String) -> Bool {
         guard let el = elements[id] else { return false }
+        AXUIElementSetMessagingTimeout(el, 0)
         AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         return AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFString) == .success
     }
@@ -394,7 +411,7 @@ extension AppDelegate {
         crashWatcher.onCrash = { [weak self] crash in
             guard let self, self.state.phase == .hidden else { return }
             self.state.question = "💥 \(crash.app) crashed"
-            self.flash("\(crash.app) just crashed. Hold ⌃ and ask \"why did it crash?\", or pick 👁 → Recipes → Explain the last crash.", seconds: 9)
+            self.flash("\(crash.app) just crashed. Hold ⌥ and ask \"why did it crash?\", or pick 👁 → Recipes → Explain the last crash.", seconds: 9)
         }
         if Settings.watchCrashes { crashWatcher.start() }
     }
@@ -430,6 +447,8 @@ extension AppDelegate {
         }
     }
 
+    /// Called on ControlServer.queue. Accessibility reads and the actions themselves run there; app state (stop,
+    /// approvals, the task panel, hotkeys, the bubble) is only touched on the main thread.
     func handleControl(_ r: [String: Any], reply: @escaping ([String: Any]) -> Void) {
         let action = r["action"] as? String ?? ""
         func num(_ k: String) -> CGFloat? { (r[k] as? NSNumber).map { CGFloat($0.doubleValue) } }
@@ -441,43 +460,59 @@ extension AppDelegate {
         // Read-only requests: no approval, work even when control is off.
         switch action {
         case "status":
-            reply(["trusted": Computer.isTrusted, "mode": Settings.computerControl,
-                   "frontApp": Computer.frontApp?.localizedName ?? "", "stopped": controlStopped != nil])
+            DispatchQueue.main.async {
+                reply(["trusted": Computer.isTrusted, "mode": Settings.computerControl,
+                       "frontApp": Computer.frontApp?.localizedName ?? "", "stopped": self.controlStopped != nil])
+            }
             return
         case "displays":
-            let primary = Geometry.primaryHeight
-            reply(["displays": NSScreen.screens.map { s in
-                ["x": s.frame.minX, "y": primary - s.frame.maxY, "width": s.frame.width, "height": s.frame.height]
-            }])
+            DispatchQueue.main.async {
+                let primary = Geometry.primaryHeight
+                let mouse = Geometry.pointer // top-left points
+                var out: [String: Any] = ["displays": NSScreen.screens.map { s in
+                    ["x": s.frame.minX, "y": primary - s.frame.maxY, "width": s.frame.width, "height": s.frame.height]
+                }, "pointer": ["x": mouse.x, "y": mouse.y]]
+                // `look` asks for the window list here too, instead of a slower osascript call.
+                if (r["windows"] as? Bool) == true {
+                    out["windows"] = Screen.windows().map { w in // front-most first
+                        ["id": Int(w.id), "app": w.app, "title": w.title, "pid": Int(w.pid),
+                         "bounds": ["x": w.bounds.minX, "y": w.bounds.minY, "width": w.bounds.width, "height": w.bounds.height]]
+                    }
+                }
+                reply(out)
+            }
+            return
+        case "autopilot_check":
+            DispatchQueue.main.async {
+                guard Settings.autopilot else { reply(["error": "Autopilot is off"]); return }
+                self.autopilot.checkNow()
+                reply(["ok": true])
+            }
             return
         case "capture":
             // Fast screenshot for the `look` tool (ScreenCaptureKit, in memory). window_id, or x/y/width/height
             // (top-left points, e.g. a whole display).
             let windowId = (r["window_id"] as? NSNumber).map { CGWindowID($0.uint32Value) }
             let rect = num("width").map { w in CGRect(x: num("x") ?? 0, y: num("y") ?? 0, width: w, height: num("height") ?? 0) }
-            DispatchQueue.global(qos: .userInitiated).async {
-                let image: CGImage?
-                if let windowId {
-                    let bounds = Screen.windows().first { $0.id == windowId }?.bounds ?? .zero
-                    image = FastCapture.window(windowId, bounds: bounds)
-                } else if let rect {
-                    image = FastCapture.area(rect)
-                } else {
-                    image = nil
-                }
-                guard let image, let jpeg = Screen.jpeg(image) else {
-                    DispatchQueue.main.async { reply(["error": "capture unavailable"]) }
-                    return
-                }
-                DispatchQueue.main.async {
-                    reply(["data": jpeg.0.base64EncodedString(), "width": Int(jpeg.1.width), "height": Int(jpeg.1.height)])
-                }
+            let window = windowId.flatMap { id in Screen.windows().first { $0.id == id } }
+            let what = window?.app ?? "the screen"
+            DispatchQueue.main.async { ActivityBadge.shared.show("camera.viewfinder", "Taking a screenshot of \(what)") }
+            let image: CGImage?
+            if let windowId {
+                image = FastCapture.window(windowId, bounds: window?.bounds ?? .zero)
+            } else if let rect {
+                image = FastCapture.area(rect)
+            } else {
+                image = nil
             }
+            guard let image, let jpeg = Screen.jpeg(image) else { reply(["error": "capture unavailable"]); return }
+            reply(["data": jpeg.0.base64EncodedString(), "width": Int(jpeg.1.width), "height": Int(jpeg.1.height)])
             return
         case "elements":
             guard Computer.isTrusted else { reply(needTrust()); return }
             let (app, items) = uiElements.list(appNamed: r["app"] as? String)
-            controlTarget = uiElements.app
+            let target = uiElements.app
+            DispatchQueue.main.async { self.controlTarget = target }
             reply(["app": app, "elements": items.map {
                 ["id": $0.id, "role": $0.role, "label": $0.label,
                  "x": Int($0.frame.midX), "y": Int($0.frame.midY), "w": Int($0.frame.width), "h": Int($0.frame.height)]
@@ -489,21 +524,38 @@ extension AppDelegate {
         if Settings.computerControl == "off" {
             reply(["error": "Computer control is turned off in VisionCLI (👁 → Computer Control). Ask the user to turn it on."]); return
         }
+        guard Computer.isTrusted else { reply(needTrust()); return }
+
+        // Resolve the target here (Accessibility calls into other apps can be slow), then decide on main.
+        let element = (r["element"] as? NSNumber)?.intValue
+        var target = point()
+        if let element { target = uiElements.center(element) }
+        let elementApp = element != nil ? uiElements.app : nil
+        let elementLabel = element.map { uiElements.label($0) }
+        let secureTarget = (element.map { uiElements.isSecure($0) } ?? false)
+            || (action == "type" && focusedIsSecure())
+            || (target.map { isSecure(at: $0) } ?? false)
+        let resolvedTarget = target
+        DispatchQueue.main.async {
+            self.decideControl(action, r, target: resolvedTarget, element: element, elementApp: elementApp,
+                               elementLabel: elementLabel, secureTarget: secureTarget, reply: reply)
+        }
+    }
+
+    /// Main thread: refuse after an Esc stop, describe the action, ask for approval when needed, then run it.
+    private func decideControl(_ action: String, _ r: [String: Any], target: CGPoint?, element: Int?, elementApp: NSRunningApplication?,
+                               elementLabel: String?, secureTarget: Bool, reply: @escaping ([String: Any]) -> Void) {
+        func num(_ k: String) -> CGFloat? { (r[k] as? NSNumber).map { CGFloat($0.doubleValue) } }
         if let stopped = controlStopped, Date().timeIntervalSince(stopped) < 120 {
             reply(["error": "The user pressed Esc to stop you using the computer. Stop and ask them how to continue."]); return
         }
         controlStopped = nil
-        guard Computer.isTrusted else { reply(needTrust()); return }
 
-        // Resolve the target and describe the action for the approval card / status.
-        let element = (r["element"] as? NSNumber)?.intValue
-        var target = point()
-        if let element { target = uiElements.center(element) }
         // Keys and typing go to the app the assistant is working in (an Accessibility press doesn't bring it
         // forward, so otherwise they'd land in whatever is in front, e.g. the terminal).
         if action == "type" || action == "key" {
             if let name = r["app"] as? String, !name.isEmpty { controlTarget = Computer.runningApp(named: name) ?? controlTarget }
-            if element != nil, let a = uiElements.app { controlTarget = a }
+            if element != nil, let a = elementApp { controlTarget = a }
         }
         let keyboardTarget = (action == "type" || action == "key") ? controlTarget.flatMap { $0.isTerminated ? nil : $0 } : nil
         let app = keyboardTarget ?? Computer.frontApp
@@ -519,7 +571,7 @@ extension AppDelegate {
         }
         let appName = app?.localizedName ?? "the front app"
         let what: String = {
-            let on = element.map { uiElements.label($0) } ?? target.map { "(\(Int($0.x)), \(Int($0.y)))" } ?? ""
+            let on = elementLabel ?? target.map { "(\(Int($0.x)), \(Int($0.y)))" } ?? ""
             switch action {
             case "click":
                 let kind = (r["button"] as? String) == "right" ? "right-click" : ((r["count"] as? Int ?? 1) >= 2 ? "double-click" : "click")
@@ -537,10 +589,7 @@ extension AppDelegate {
             }
         }()
 
-        let sensitive = sensitiveApps.contains(app?.bundleIdentifier ?? "")
-            || (element.map { uiElements.isSecure($0) } ?? false)
-            || (action == "type" && focusedIsSecure())
-            || (target.map { isSecure(at: $0) } ?? false)
+        let sensitive = sensitiveApps.contains(app?.bundleIdentifier ?? "") || secureTarget
         let allowed = Settings.computerControl == "auto" || (controlAllowUntil.map { Date() < $0 } ?? false)
 
         let label = what.prefix(1).uppercased() + what.dropFirst()
@@ -558,21 +607,32 @@ extension AppDelegate {
             self.hotkeys.set(.dismiss, true) // Esc = stop, while the assistant is acting
             let step = self.taskHUD.begin(label)
             self.showControlStatus(label + "…")
-            if let k = keyboardTarget, Computer.frontApp?.processIdentifier != k.processIdentifier {
-                k.activate()
-                for _ in 0..<20 where Computer.frontApp?.processIdentifier != k.processIdentifier { usleep(50_000) }
-                usleep(150_000)
-            }
-            let error = self.perform(action, r, target: target, element: element)
-            if error == nil, ["open_app", "focus_app"].contains(action), let name = r["name"] as? String {
-                self.controlTarget = Computer.runningApp(named: name)
-            }
-            self.controlLastAction = Date()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { // let the UI react before the next look
-                self.taskHUD.update(step, error == nil ? .done : .failed)
-                if let error { reply(["error": error]) }
-                else { reply(["ok": true, "done": what, "frontApp": Computer.frontApp?.localizedName ?? ""]) }
-                self.releaseEscIfIdle()
+            // Our own Esc hotkey would swallow a synthetic Escape.
+            let isEsc = action == "key" && (r["keys"] as? String ?? "").lowercased().contains("esc")
+            if isEsc { self.hotkeys.set(.dismiss, false) }
+            // The action itself (waiting for the app to come forward, typing, dragging…) runs off the main thread.
+            ControlServer.queue.async {
+                if let k = keyboardTarget, Computer.frontApp?.processIdentifier != k.processIdentifier {
+                    k.activate()
+                    for _ in 0..<20 where Computer.frontApp?.processIdentifier != k.processIdentifier { usleep(50_000) }
+                    usleep(150_000)
+                }
+                let error = self.perform(action, r, target: target, element: element)
+                var opened: NSRunningApplication??
+                if error == nil, ["open_app", "focus_app"].contains(action), let name = r["name"] as? String {
+                    opened = .some(Computer.runningApp(named: name))
+                }
+                DispatchQueue.main.async {
+                    if isEsc { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.hotkeys.set(.dismiss, true) } }
+                    if let opened { self.controlTarget = opened }
+                    self.controlLastAction = Date()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { // let the UI react before the next look
+                        self.taskHUD.update(step, error == nil ? .done : .failed)
+                        if let error { reply(["error": error]) }
+                        else { reply(["ok": true, "done": what, "frontApp": Computer.frontApp?.localizedName ?? ""]) }
+                        self.releaseEscIfIdle()
+                    }
+                }
             }
         }
 
@@ -589,6 +649,7 @@ extension AppDelegate {
         return ["error": "VisionCLI needs the Accessibility permission to use the computer. macOS just asked the user; they should turn VisionCLI on in System Settings → Privacy & Security → Accessibility, then try again."]
     }
 
+    /// Runs on ControlServer.queue (it waits between events, and uiElements belongs to that queue).
     private func perform(_ action: String, _ r: [String: Any], target: CGPoint?, element: Int?) -> String? {
         switch action {
         case "click":
@@ -607,14 +668,10 @@ extension AppDelegate {
             Computer.type(text)
         case "key":
             guard let keys = r["keys"] as? String else { return "Missing keys." }
-            // Our own Esc hotkey would swallow a synthetic Escape.
-            let isEsc = keys.lowercased().contains("esc")
-            if isEsc { hotkeys.set(.dismiss, false) }
             for combo in keys.split(separator: " ") {
                 if let err = Computer.press(String(combo)) { return err }
                 usleep(60_000)
             }
-            if isEsc { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.hotkeys.set(.dismiss, true) } }
         case "scroll":
             Computer.scroll(at: target, dx: (r["dx"] as? NSNumber)?.intValue ?? 0, dy: (r["dy"] as? NSNumber)?.intValue ?? -5)
         case "drag":
@@ -672,6 +729,8 @@ extension AppDelegate {
     private func showControlStatus(_ text: String) {
         log("control: \(text)")
         activity.text("\n🖱 \(text)\n")
+        ActivityBadge.shared.show("cursorarrow.motionlines", text.prefix(1).uppercased() + text.dropFirst() + " · esc stops", tint: .purple, seconds: 4)
+        ActivityBadge.shared.controlling()
         switch state.phase {
         case .thinking, .listening: state.status = text
         case .answering: state.toast = text
@@ -689,18 +748,32 @@ extension AppDelegate {
         }
     }
 
+    /// An app's accessibility root with a short timeout, so a hung app can't stall the control queue for seconds.
+    /// (A timeout set on the system-wide element would change it for every Accessibility call VisionCLI makes.)
+    private func axApp(_ pid: pid_t) -> AXUIElement {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.5)
+        return app
+    }
+
     private func focusedIsSecure() -> Bool {
-        let system = AXUIElementCreateSystemWide()
+        guard let front = Computer.frontApp else { return false }
         var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success else { return false }
+        guard AXUIElementCopyAttributeValue(axApp(front.processIdentifier), kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+              let focused else { return false }
+        let el = focused as! AXUIElement
+        AXUIElementSetMessagingTimeout(el, 0.5)
         var sub: CFTypeRef?
-        AXUIElementCopyAttributeValue(focused as! AXUIElement, kAXSubroleAttribute as CFString, &sub)
+        AXUIElementCopyAttributeValue(el, kAXSubroleAttribute as CFString, &sub)
         return (sub as? String) == "AXSecureTextField"
     }
 
     private func isSecure(at p: CGPoint) -> Bool {
+        // Hit-test in the app that owns the window there (the front app if it's a menu, sheet or other small window).
+        guard let pid = Screen.windows().first(where: { $0.bounds.contains(p) })?.pid ?? Computer.frontApp?.processIdentifier else { return false }
         var el: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(p.x), Float(p.y), &el) == .success, let el else { return false }
+        guard AXUIElementCopyElementAtPosition(axApp(pid), Float(p.x), Float(p.y), &el) == .success, let el else { return false }
+        AXUIElementSetMessagingTimeout(el, 0.5)
         var sub: CFTypeRef?
         AXUIElementCopyAttributeValue(el, kAXSubroleAttribute as CFString, &sub)
         return (sub as? String) == "AXSecureTextField"

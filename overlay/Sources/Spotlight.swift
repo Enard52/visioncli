@@ -8,8 +8,11 @@ final class Spotlight {
     private var timer: Timer?
     private var lastHole: CGRect?
     private var screenFrame: CGRect?
+    private var lastPointer: CGPoint?
+    private var lastLookup = Date.distantPast
 
-    func show() {
+    /// `window`: the window under the pointer if the caller already looked it up (saves a window-server query).
+    func show(window: WinInfo? = nil) {
         hide()
         guard let screen = Self.pointerScreen else { return }
         screenFrame = screen.frame
@@ -27,7 +30,7 @@ final class Spotlight {
             p.orderFrontRegardless()
             panels.append(p)
         }
-        update()
+        update(known: window)
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.18
             panels.forEach { $0.animator().alphaValue = 1 }
@@ -46,13 +49,14 @@ final class Spotlight {
         timer = nil
         lastHole = nil
         screenFrame = nil
+        lastPointer = nil
         panels.forEach { $0.orderOut(nil) }
         panels = []
     }
 
     var isShown: Bool { !panels.isEmpty }
 
-    private func update() {
+    private func update(known: WinInfo? = nil) {
         // Pointer moved to another display: dim that one instead.
         if let screen = Self.pointerScreen, screen.frame != screenFrame, let p = panels.first {
             screenFrame = screen.frame
@@ -60,7 +64,13 @@ final class Spotlight {
             p.contentView?.frame = NSRect(origin: .zero, size: screen.frame.size)
             lastHole = nil
         }
-        let hole = Screen.windowUnderPointer().map { Geometry.toAppKit($0.bounds) }
+        // The window list is a window-server round trip: skip it while the pointer is still, apart from a check every
+        // second (windows can move or come forward under a still pointer).
+        let pointer = NSEvent.mouseLocation
+        if known == nil, lastHole != nil, pointer == lastPointer, Date().timeIntervalSince(lastLookup) < 1 { return }
+        lastPointer = pointer
+        lastLookup = Date()
+        let hole = (known ?? Screen.windowUnderPointer()).map { Geometry.toAppKit($0.bounds) }
         guard hole != lastHole else { return }
         lastHole = hole
         for p in panels {

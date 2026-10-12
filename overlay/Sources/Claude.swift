@@ -81,6 +81,40 @@ struct PermissionRequest {
 
 enum DiffKind { case added, removed, context }
 
+/// Splits a byte stream (a pipe's readabilityHandler chunks) into lines in one pass per chunk. Removing each line from
+/// the front of the buffer re-copied the rest every time, which is quadratic when a big chunk holds many lines.
+/// Not thread-safe: use one per stream, fed from that stream's handler only.
+final class LineSplitter {
+    private var buffer = Data()
+
+    func feed(_ chunk: Data, _ line: (Data) -> Void) {
+        guard !chunk.isEmpty else { return }
+        buffer.append(chunk)
+        var start = buffer.startIndex
+        while let nl = buffer[start...].firstIndex(of: 0x0A) {
+            line(buffer[start..<nl])
+            start = buffer.index(after: nl)
+        }
+        if start != buffer.startIndex { buffer = Data(buffer[start...]) }
+    }
+}
+
+/// The tail of a process's stderr, appended from its readability handler and read from its termination handler
+/// (different threads), so behind a lock.
+final class TailText {
+    private let lock = NSLock()
+    private var text = ""
+
+    func append(_ data: Data) {
+        let s = String(decoding: data, as: UTF8.self)
+        lock.lock(); defer { lock.unlock() }
+        text += s
+        if text.count > 4000 { text = String(text.suffix(2000)) }
+    }
+
+    var value: String { lock.lock(); defer { lock.unlock() }; return text }
+}
+
 /// What the app needs from a background assistant session (Claude Code or Gemini CLI).
 protocol AssistantSession: AnyObject {
     var cwd: String { get }
@@ -143,12 +177,15 @@ final class ClaudeSession: AssistantSession {
         let wanted = cfg.model ?? Settings.model
         if wanted != model || Settings.effort != effort { model = wanted; effort = Settings.effort; restart() }
         if !isRunning { start() }
-        var content: [[String: Any]] = shots.map {
-            ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": $0.jpeg.base64EncodedString()]]
-        }
-        content.append(["type": "text", "text": text])
         busy = true
-        write(["type": "user", "message": ["role": "user", "content": content]])
+        // Built on the write queue: base64 of the screenshots is a megabyte or more.
+        write(building: {
+            var content: [[String: Any]] = shots.map {
+                ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": $0.jpeg.base64EncodedString()]]
+            }
+            content.append(["type": "text", "text": text])
+            return ["type": "user", "message": ["role": "user", "content": content]]
+        })
         log("ask (\(cwd)): \(text.prefix(300))")
     }
 
@@ -211,29 +248,22 @@ final class ClaudeSession: AssistantSession {
         p.standardError = err
         p.standardInput = inp
 
-        var buffer = Data()
-        var errText = ""
+        let lines = LineSplitter()
+        let stderrTail = TailText()
         out.fileHandleForReading.readabilityHandler = { [weak self] h in
-            let chunk = h.availableData
-            guard !chunk.isEmpty else { return }
-            buffer.append(chunk)
-            while let nl = buffer.firstIndex(of: 0x0A) {
-                let line = buffer.subdata(in: buffer.startIndex..<nl)
-                buffer.removeSubrange(buffer.startIndex...nl)
-                guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+            lines.feed(h.availableData) { line in
+                guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }
                 DispatchQueue.main.async {
                     guard let self, self.proc === p else { return }
                     self.handle(obj)
                 }
             }
         }
-        err.fileHandleForReading.readabilityHandler = { h in
-            errText += String(decoding: h.availableData, as: UTF8.self)
-            if errText.count > 4000 { errText = String(errText.suffix(2000)) }
-        }
+        err.fileHandleForReading.readabilityHandler = { h in stderrTail.append(h.availableData) }
         p.terminationHandler = { [weak self] proc in
             out.fileHandleForReading.readabilityHandler = nil
             err.fileHandleForReading.readabilityHandler = nil
+            let errText = stderrTail.value
             log("claude exited \(proc.terminationStatus)\(errText.isEmpty ? "" : ": " + errText.suffix(400))")
             DispatchQueue.main.async {
                 guard let self, self.proc === proc else { return }
@@ -257,10 +287,19 @@ final class ClaudeSession: AssistantSession {
         }
     }
 
-    private func write(_ obj: [String: Any]) {
-        guard let stdin, var data = try? JSONSerialization.data(withJSONObject: obj) else { return }
-        data.append(0x0A)
-        do { try stdin.write(contentsOf: data) } catch { log("write to claude failed: \(error)") }
+    /// Writes to claude's stdin happen here, in order: a screenshot message is far bigger than the 64 KB pipe buffer,
+    /// so a write blocks until claude has read it, which must not be the main thread.
+    private let writer = DispatchQueue(label: "dev.visioncli.claude.stdin", qos: .userInitiated)
+
+    private func write(_ obj: [String: Any]) { write(building: { obj }) }
+
+    private func write(building make: @escaping () -> [String: Any]) {
+        guard let stdin else { return }
+        writer.async {
+            guard var data = try? JSONSerialization.data(withJSONObject: make()) else { return }
+            data.append(0x0A)
+            do { try stdin.write(contentsOf: data) } catch { log("write to claude failed: \(error)") }
+        }
     }
 
     private func handle(_ obj: [String: Any]) {

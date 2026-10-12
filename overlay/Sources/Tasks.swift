@@ -203,9 +203,18 @@ final class CrashWatcher {
                            "Google Chrome", "Brave", "Slack", "zoom", "Spotify", "Music", "Mail", "Finder", "Dock",
                            "SourceKitService", "Service", "Agent", "daemon", "XPC", "Helper"]
 
+    /// The folder is listed on a background queue; `seen`, `last` and onCrash stay on main.
+    private let queue = DispatchQueue(label: "dev.visioncli.crashwatcher", qos: .utility)
+    private var primed = false
+
     func start() {
-        seen = Set(files().map(\.lastPathComponent))
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.check() }
+        primed = false
+        queue.async { [weak self] in
+            guard let self else { return }
+            let names = Set(self.files().map(\.lastPathComponent))
+            DispatchQueue.main.async { self.seen = names; self.primed = true }
+        }
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.poll() }
     }
 
     func stop() { timer?.invalidate(); timer = nil }
@@ -221,8 +230,18 @@ final class CrashWatcher {
             .filter { ["ips", "crash"].contains($0.pathExtension) } ?? []
     }
 
-    private func check() {
-        for f in files() where !seen.contains(f.lastPathComponent) {
+    private func poll() {
+        guard primed else { return }
+        queue.async { [weak self] in
+            guard let self else { return }
+            let found = self.files()
+            DispatchQueue.main.async { self.check(found) }
+        }
+    }
+
+    private func check(_ found: [URL]) {
+        guard timer != nil else { return } // stopped meanwhile
+        for f in found where !seen.contains(f.lastPathComponent) {
             seen.insert(f.lastPathComponent)
             let name = f.deletingPathExtension().lastPathComponent
             // e.g. "MyApp-2026-10-05-153012" → "MyApp"

@@ -19,9 +19,9 @@ export interface Element { id: string; kind: string; text: string; href?: string
 const JS_HELP =
   'turn on View → Developer → "Allow JavaScript from Apple Events" in the browser (needed to read, click and type in pages)';
 
-async function osa(script: string, timeout = 8000): Promise<string> {
+async function osa(script: string, timeout = 8000, jxa = false): Promise<string> {
   try {
-    const { stdout } = await run("/usr/bin/osascript", ["-e", script], { timeout, maxBuffer: 16 * 1024 * 1024 });
+    const { stdout } = await run("/usr/bin/osascript", [...(jxa ? ["-l", "JavaScript"] : []), "-e", script], { timeout, maxBuffer: 16 * 1024 * 1024 });
     return stdout.replace(/\n$/, "");
   } catch (err: any) {
     const msg = String(err?.stderr || err?.message || err);
@@ -35,59 +35,71 @@ async function osa(script: string, timeout = 8000): Promise<string> {
 
 const q = (s: string) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
 
-async function isRunning(name: string) {
+/**
+ * One browser action at a time: element ids (data-vcli) are reset by each listing and "window 1 / active tab" can
+ * change under a concurrent call, so tool calls queue up here.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+export function serial<T>(fn: () => Promise<T>): Promise<T> {
+  const next = queue.then(fn, fn);
+  queue = next.catch(() => {});
+  return next;
+}
+
+/** Display name of the front-most app ("" if unknown). VISIONCLI_FRONT_APP (set by the app) skips the lookup. */
+export async function frontApp(): Promise<string> {
+  if (process.env.VISIONCLI_FRONT_APP !== undefined) return process.env.VISIONCLI_FRONT_APP;
   try {
-    await run("/usr/bin/pgrep", ["-xq", name === "Brave Browser" ? "Brave Browser" : "Google Chrome"]);
-    return true;
+    const { stdout } = await run("/usr/bin/lsappinfo", ["info", "-only", "name", "front"]);
+    return /"LSDisplayName"="([^"]+)"/.exec(stdout)?.[1] ?? "";
   } catch {
-    return false;
+    return "";
   }
+}
+
+async function firstRunning(): Promise<BrowserName | undefined> {
+  try {
+    const { stdout } = await run("/usr/bin/pgrep", ["-xl", BROWSERS.join("|")]);
+    return BROWSERS.find((b) => stdout.split("\n").some((l) => l.replace(/^\d+\s+/, "") === b));
+  } catch {
+    return undefined; // pgrep exits 1 when nothing matches
+  }
+}
+
+/** The browser to act on (the front-most supported browser, else the first one running) and whether it's in front. */
+export async function pickWithFront(): Promise<{ browser: BrowserName; front: boolean }> {
+  const front = await frontApp();
+  if ((BROWSERS as readonly string[]).includes(front)) return { browser: front as BrowserName, front: true };
+  const running = await firstRunning();
+  if (running) return { browser: running, front: false };
+  throw new Error("Neither Brave nor Chrome is running.");
 }
 
 /** The browser to act on: the front-most supported browser, else the first one running. */
 export async function pick(): Promise<BrowserName> {
-  let front = "";
-  try {
-    const { stdout } = await run("/usr/bin/lsappinfo", ["info", "-only", "name", (await run("/usr/bin/lsappinfo", ["front"])).stdout.trim()]);
-    front = /"LSDisplayName"="([^"]+)"/.exec(stdout)?.[1] ?? "";
-  } catch {}
-  if ((BROWSERS as readonly string[]).includes(front)) return front as BrowserName;
-  for (const b of BROWSERS) if (await isRunning(b)) return b;
-  throw new Error("Neither Brave nor Chrome is running.");
+  return (await pickWithFront()).browser;
 }
 
 export async function frontmostIsBrowser(): Promise<boolean> {
-  try {
-    const { stdout } = await run("/usr/bin/lsappinfo", ["info", "-only", "name", (await run("/usr/bin/lsappinfo", ["front"])).stdout.trim()]);
-    return BROWSERS.some((b) => stdout.includes(`"${b}"`));
-  } catch {
-    return false;
-  }
+  return (BROWSERS as readonly string[]).includes(await frontApp());
 }
 
 export async function tabs(b?: BrowserName): Promise<Tab[]> {
   const browser = b ?? (await pick());
-  const out = await osa(`
-    set out to ""
-    set sep to character id 9 -- not "tab": inside the tell block that means the browser's tab class
-    set nl to character id 10
-    tell application ${q(browser)}
-      set wi to 0
-      repeat with w in windows
-        set wi to wi + 1
-        set ai to active tab index of w
-        set ti to 0
-        repeat with t in tabs of w
-          set ti to ti + 1
-          set out to out & wi & sep & ti & sep & (ti = ai and wi = 1) & sep & (title of t) & sep & (URL of t) & nl
-        end repeat
-      end repeat
-    end tell
-    return out`);
-  return out.split("\n").filter(Boolean).map((line) => {
-    const [w, i, active, title, url] = line.split("\t");
-    return { id: `t${w}.${i}`, window: Number(w), index: Number(i), active: active === "true", title: title ?? "", url: url ?? "" };
-  });
+  // Three Apple events for all windows at once (per-tab property reads are what made this slow).
+  const out = await osa(`const a = Application(${JSON.stringify(browser)});
+    JSON.stringify([a.windows.activeTabIndex(), a.windows.tabs.title(), a.windows.tabs.url()])`, 8000, true);
+  const [active, titles, urls]: [number[], (string | null)[][], (string | null)[][]] = JSON.parse(out || "[[],[],[]]");
+  return titles.flatMap((ts, w) =>
+    ts.map((title, i) => ({
+      id: `t${w + 1}.${i + 1}`,
+      window: w + 1,
+      index: i + 1,
+      active: w === 0 && active[0] === i + 1, // only the front window's tab counts as "the" active tab
+      title: title ?? "",
+      url: urls[w]?.[i] ?? "",
+    })),
+  );
 }
 
 export async function activeTab(b?: BrowserName): Promise<Tab | undefined> {
@@ -116,10 +128,10 @@ const sameUrl = (a: string, b: string) => {
  * Open a URL without spamming tabs: switch to a tab that already shows it; otherwise navigate the assistant's own tab
  * (if it's still open); otherwise make one new tab in the front window. `newTab: false` loads it in the current tab.
  */
-export async function open(url: string, newTab = true, b?: BrowserName): Promise<string> {
+export async function open(url: string, newTab = true, b?: BrowserName, knownTabs?: Tab[]): Promise<string> {
   const browser = b ?? (await pick());
   if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = "https://" + url;
-  const existing = (await tabs(browser).catch(() => [] as Tab[])).find((t) => sameUrl(t.url, url));
+  const existing = (knownTabs ?? (await tabs(browser).catch(() => [] as Tab[]))).find((t) => sameUrl(t.url, url));
   if (existing) {
     await switchTo(existing.id, browser);
     return `Switched to the tab already showing ${url}`;
@@ -137,8 +149,9 @@ export async function open(url: string, newTab = true, b?: BrowserName): Promise
   if (agent.browser === browser && agent.id) {
     const r = await osa(`tell application ${q(browser)}
       repeat with w in windows
-        repeat with i from 1 to (count of tabs of w)
-          if (id of tab i of w as text) is ${q(agent.id)} then
+        set ids to id of tabs of w -- one Apple event per window, not per tab
+        repeat with i from 1 to (count of ids)
+          if (item i of ids as text) is ${q(agent.id)} then
             set URL of tab i of w to ${q(url)}
             set active tab index of w to i
             set index of w to 1
@@ -218,6 +231,12 @@ const ELEMENTS_JS = `(() => {
   const sel = 'a[href], button, input, textarea, select, label, summary, [onclick], [aria-haspopup], [contenteditable=true], ' +
     '[role=button], [role=link], [role=tab], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=option], ' +
     '[role=checkbox], [role=switch], [role=radio], [role=combobox], [role=listbox], [role=slider], [role=treeitem]';
+  // Links as a short path (same site) or host + path: full URLs with tracking params cost a lot of tokens.
+  const shortHref = el => { if (typeof el.href !== 'string' || !el.href) return undefined;
+    try { const u = new URL(el.href); if (!/^https?:$/.test(u.protocol)) return undefined;
+      const here = el.ownerDocument.location;
+      return ((u.host === here.host ? '' : u.host) + u.pathname + (u.search.length < 40 ? u.search : '')).slice(0, 80);
+    } catch (e) { return undefined; } };
   const out = []; let n = 0;
   __qa('[data-vcli]').forEach(el => el.removeAttribute('data-vcli')); // ids from an earlier listing
   for (const el of __qa(sel)) {
@@ -233,7 +252,7 @@ const ELEMENTS_JS = `(() => {
       role === 'option' ? 'option' : role === 'slider' ? 'slider' :
       (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') ? 'field:' + (type || 'text') :
       el.isContentEditable ? 'field:editor' : el.tagName === 'LABEL' ? 'label' : 'button';
-    const item = { id, kind, text: text || '(empty ' + kind + ')', href: el.href ? String(el.href).slice(0, 120) : undefined };
+    const item = { id, kind, text: text || '(empty ' + kind + ')', href: shortHref(el) };
     if (kind === 'toggle') item.state = (el.checked ?? (el.getAttribute('aria-checked') === 'true')) ? 'on' : 'off';
     if (el.hasAttribute('aria-expanded')) item.expanded = el.getAttribute('aria-expanded') === 'true';
     if (el.tagName === 'SELECT') {
@@ -379,7 +398,7 @@ export async function scroll(where: "down" | "up" | "top" | "bottom", b?: Browse
 }
 
 /** Readable text of the current page (title, URL, main content), capped. */
-export async function read(maxChars = 12000, b?: BrowserName): Promise<string> {
+export async function read(maxChars = 6000, b?: BrowserName): Promise<string> {
   const code = `(() => {
     ${FRAMES}
     const main = document.querySelector('main, article, [role=main]') || document.body;

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.4
+
+- **New keys:** hold **⌥** to ask as text, hold **⌥⌘** to ask with a screenshot of the window under the mouse (adding ⌘ while holding ⌥ also works). ⌥⇧Space still lets you drag an area.
+- **Meet Visi:** a little robot peeks in from the right edge of the screen while you hold ⌥. It blinks, talks along with you, pulls a face now and then (wink, laugh, surprise, wave), and its antenna glows while the answer is on its way.
+- **Autopilot (off by default):** in the apps you pick (👁 → Autopilot), VisionCLI glances at the window when you switch to it or pause, and shows a small suggestion card when it has something useful; in chat apps it drafts a reply you can put in the reply box. Nothing is ever sent for you. Uses Claude Haiku (about 1k tokens a look, at most 30 an hour); password fields and password managers are never read. *Check Now* asks for a suggestion right away.
+- **See when it's looking or acting:** a small pill at the top of the screen shows when a screenshot is taken or Autopilot is reading, and the screen edges glow while the assistant is using your computer.
+- **Wispr Flow:** your words now show live while you speak (Apple's on-device recognizer runs alongside Flow for the preview), and if Flow returns nothing the live text is used instead of failing. ⌥⌘ works with Flow.
+- **Terminal mode:** questions go to the Claude you already have open for the project (the most recent one), or open your latest conversation like `claude -c`. The question is always submitted (Return is pressed again if Claude swallowed it), and the note added to it is now short: `[voice · mouse over …]`, only naming the window when the mouse is really over another app.
+- **Much faster and lighter:**
+  - No more freezes: the terminal, computer control, microphone, transcript reading and screenshot saving all run off the main thread (one long session used to freeze the bubble for 10 seconds per question).
+  - Idle CPU went from ~9% to ~0%.
+  - Parakeet starts the moment you let go.
+  - Short questions skip the quick-command check (~1 s faster).
+  - The MCP server starts in ~45 ms (bundled), `look` gets the window list from the app (7 ms instead of ~120 ms), browser tabs are read in one go, and database connections are reused.
+  - The log rotates at 5 MB, and history keeps at most 30 days or 300 MB of screenshots, with thumbnails.
+
 ## 0.7.3
 
 - **Parakeet is included in the download.** 0.7.2 was built without it (the release build's compiler was too old); the release build now uses the latest Xcode.

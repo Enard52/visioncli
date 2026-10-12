@@ -84,14 +84,12 @@ final class GeminiSession: AssistantSession {
         p.standardError = err
         p.standardInput = FileHandle.nullDevice
 
-        var buffer = Data(), errText = "", gotResult = false
+        let lines = LineSplitter(), stderrTail = TailText()
+        var gotResult = false
         answer = ""
         out.fileHandleForReading.readabilityHandler = { [weak self] h in
-            buffer.append(h.availableData)
-            while let nl = buffer.firstIndex(of: 0x0A) {
-                let line = buffer.subdata(in: buffer.startIndex..<nl)
-                buffer.removeSubrange(buffer.startIndex...nl)
-                guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+            lines.feed(h.availableData) { line in
+                guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }
                 DispatchQueue.main.async {
                     guard let self, self.proc === p else { return }
                     if obj["type"] as? String == "result" { gotResult = true }
@@ -99,13 +97,11 @@ final class GeminiSession: AssistantSession {
                 }
             }
         }
-        err.fileHandleForReading.readabilityHandler = { h in
-            errText += String(decoding: h.availableData, as: UTF8.self)
-            if errText.count > 4000 { errText = String(errText.suffix(2000)) }
-        }
+        err.fileHandleForReading.readabilityHandler = { h in stderrTail.append(h.availableData) }
         p.terminationHandler = { [weak self] proc in
             out.fileHandleForReading.readabilityHandler = nil
             err.fileHandleForReading.readabilityHandler = nil
+            let errText = stderrTail.value
             log("gemini exited \(proc.terminationStatus)\(errText.isEmpty ? "" : ": " + errText.suffix(300))")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 guard let self, self.proc === proc else { return }

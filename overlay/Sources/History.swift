@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 
 struct HistoryEntry: Codable, Identifiable {
@@ -15,29 +16,44 @@ final class HistoryStore: ObservableObject {
     private let file = supportDir.appendingPathComponent("history.jsonl")
     let shotsDir = supportDir.appendingPathComponent("screenshots")
     private let keep = 200 // per project, so a busy project doesn't push out the others
+    /// Screenshots of all projects together: older than this, or past this total size (oldest go first), are deleted.
+    private let shotsMaxAge: TimeInterval = 30 * 24 * 3600
+    private let shotsMaxBytes = 300 * 1024 * 1024
+    /// Disk writes and deletes, in order, off the main thread.
+    private let io = DispatchQueue(label: "visioncli.history", qos: .utility)
 
     init() {
         try? FileManager.default.createDirectory(at: shotsDir, withIntermediateDirectories: true)
         load()
+        pruneShots()
     }
 
-    /// Save screenshots for an entry and return their paths (also referenced in the question sent to Claude).
+    /// Save screenshots for an entry and return their paths (also referenced in the question sent to Claude). The
+    /// paths are returned right away and the files written in the background; `waitForWrites()` waits for them.
     func save(_ shots: [Shot]) -> [Shot] {
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         return shots.enumerated().map { i, shot in
             var s = shot
             let url = shotsDir.appendingPathComponent("\(stamp)-\(i + 1).jpg")
-            if (try? shot.jpeg.write(to: url)) != nil { s.file = url }
+            let jpeg = shot.jpeg
+            io.async {
+                do { try jpeg.write(to: url) } catch { log("history: can't save \(url.lastPathComponent): \(error.localizedDescription)") }
+            }
+            s.file = url
             return s
         }
     }
 
+    /// Blocks until the screenshots (and history) queued so far are on disk.
+    func waitForWrites() { io.sync {} }
+
     func add(_ e: HistoryEntry) {
         entries.insert(e, at: 0)
+        defer { pruneShots() }
         let same = entries.filter { $0.project == e.project }
         if same.count > keep {
             let dropped = Set(same[keep...].map(\.id))
-            for old in same[keep...] { old.screenshots.forEach { try? FileManager.default.removeItem(atPath: $0) } }
+            remove(same[keep...].flatMap(\.screenshots))
             entries.removeAll { dropped.contains($0.id) }
             persistAll()
         } else if let data = try? encoder.encode(e) {
@@ -48,13 +64,42 @@ final class HistoryStore: ObservableObject {
     /// Clear everything, or one project's history.
     func clear(project: String? = nil) {
         let gone = entries.filter { project == nil || $0.project == project }
-        gone.forEach { $0.screenshots.forEach { try? FileManager.default.removeItem(atPath: $0) } }
+        remove(gone.flatMap(\.screenshots))
         if let project {
             entries.removeAll { $0.project == project }
             persistAll()
         } else {
             entries = []
-            try? FileManager.default.removeItem(at: file)
+            let file = file
+            io.async { try? FileManager.default.removeItem(at: file) }
+        }
+    }
+
+    private func remove(_ paths: [String]) {
+        guard !paths.isEmpty else { return }
+        io.async { paths.forEach { try? FileManager.default.removeItem(atPath: $0) } }
+    }
+
+    /// Deletes screenshots past the age or total-size cap, oldest first, in the background.
+    private func pruneShots() {
+        let dir = shotsDir, maxAge = shotsMaxAge, maxBytes = shotsMaxBytes
+        io.async {
+            let keys: [URLResourceKey] = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
+            guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys) else { return }
+            var shots: [(url: URL, date: Date, size: Int)] = files.compactMap { url in
+                guard let v = try? url.resourceValues(forKeys: Set(keys)), v.isRegularFile == true else { return nil }
+                return (url, v.contentModificationDate ?? .distantPast, v.fileSize ?? 0)
+            }
+            shots.sort { $0.date < $1.date }
+            var total = shots.reduce(0) { $0 + $1.size }
+            let cutoff = Date().addingTimeInterval(-maxAge)
+            var removed = 0
+            for shot in shots where shot.date < cutoff || total > maxBytes {
+                guard (try? FileManager.default.removeItem(at: shot.url)) != nil else { continue }
+                total -= shot.size
+                removed += 1
+            }
+            if removed > 0 { log("history: pruned \(removed) old screenshot(s)") }
         }
     }
 
@@ -68,16 +113,20 @@ final class HistoryStore: ObservableObject {
 
     private func persistAll() {
         let data = entries.reversed().compactMap { try? encoder.encode($0) }.reduce(Data()) { $0 + $1 + Data([0x0A]) }
-        try? data.write(to: file)
+        let file = file
+        io.async { try? data.write(to: file) }
     }
 
     private func append(_ data: Data) {
-        if let h = try? FileHandle(forWritingTo: file) {
-            h.seekToEndOfFile()
-            h.write(data)
-            try? h.close()
-        } else {
-            try? data.write(to: file)
+        let file = file
+        io.async {
+            if let h = try? FileHandle(forWritingTo: file) {
+                h.seekToEndOfFile()
+                h.write(data)
+                try? h.close()
+            } else {
+                try? data.write(to: file)
+            }
         }
     }
 }
@@ -123,20 +172,14 @@ struct HistoryView: View {
             Divider()
             if filtered.isEmpty {
                 Spacer()
-                Text(store.entries.isEmpty ? "No questions yet. Hold ⌃ and ask about your screen." : "No matches")
+                Text(store.entries.isEmpty ? "No questions yet. Hold ⌥ and ask about your screen." : "No matches")
                     .foregroundStyle(.secondary)
                 Spacer()
             } else {
                 List(filtered) { e in
                     HStack(alignment: .top, spacing: 12) {
-                        if let first = e.screenshots.first, let img = NSImage(contentsOfFile: first) {
-                            Image(nsImage: img)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 96, height: 64)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                                .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: first)) }
-                                .help("Open screenshot")
+                        if let first = e.screenshots.first {
+                            HistoryThumbnail(path: first)
                         }
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
@@ -162,6 +205,61 @@ struct HistoryView: View {
             }
         }
         .frame(minWidth: 560, minHeight: 420)
+    }
+}
+
+/// A row's screenshot, decoded small in the background and cached (full screenshots are several MB each).
+private struct HistoryThumbnail: View {
+    let path: String
+    @State private var image: NSImage?
+    @State private var missing = false
+
+    private static let cache: NSCache<NSString, NSImage> = { let c = NSCache<NSString, NSImage>(); c.countLimit = 300; return c }()
+    private static let decode = DispatchQueue(label: "visioncli.history.thumbs", qos: .userInitiated, attributes: .concurrent)
+
+    init(path: String) {
+        self.path = path
+        _image = State(initialValue: Self.cache.object(forKey: path as NSString))
+    }
+
+    var body: some View {
+        if !missing {
+            Group {
+                if let image {
+                    Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    Color.white.opacity(0.05)
+                }
+            }
+            .frame(width: 96, height: 64)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+            .help("Open screenshot")
+            .task(id: path) { await load() }
+        }
+    }
+
+    private func load() async {
+        if let hit = Self.cache.object(forKey: path as NSString) { image = hit; return }
+        let path = path
+        let thumb: NSImage? = await withCheckedContinuation { done in
+            Self.decode.async { done.resume(returning: Self.thumbnail(path)) }
+        }
+        if let thumb {
+            Self.cache.setObject(thumb, forKey: path as NSString)
+            image = thumb
+        } else {
+            missing = true
+        }
+    }
+
+    private static func thumbnail(_ path: String) -> NSImage? {
+        guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                     kCGImageSourceCreateThumbnailWithTransform: true,
+                                     kCGImageSourceThumbnailMaxPixelSize: 320] // fills 96x64 pt at 2x
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 }
 

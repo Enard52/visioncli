@@ -1,6 +1,6 @@
 import AppKit
 
-// "Wispr Flow" speech engine. It works like the built-in engines: hold ⌃, speak, let go. While ⌃ is held VisionCLI
+// "Wispr Flow" speech engine. It works like the built-in engines: hold ⌥, speak, let go. While ⌥ is held VisionCLI
 // holds Flow's own push-to-talk key (fn) for it; when you let go, Flow transcribes with your account, dictionary and
 // formatting and types the text, which lands in a hidden field in VisionCLI and goes out as the question.
 // Nothing of Flow is accessed directly: it only sees a key held down and a text field to type into.
@@ -72,9 +72,9 @@ final class FlowDictation: NSObject, NSTextFieldDelegate {
             e.post(tap: .cghidEventTap)
         }
         if down {
-            // Flow maps ⌃+fn (and other combos) to other actions, so first tell it ⌃ and ⌥ are up: it then sees fn
-            // alone, its push-to-talk. (Left/right Control 59/62, Option 58/61.)
-            for key: CGKeyCode in [59, 62, 58, 61] { post(key, false, []) }
+            // Flow maps ⌃+fn, ⌘+fn (and other combos) to other actions, so first tell it ⌃, ⌥ and ⌘ are up: it then
+            // sees fn alone, its push-to-talk. (Left/right Control 59/62, Option 58/61, Command 55/54.)
+            for key: CGKeyCode in [59, 62, 58, 61, 55, 54] { post(key, false, []) }
             post(63, true, .maskSecondaryFn)
         } else {
             post(63, false, [])

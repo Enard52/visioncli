@@ -7,7 +7,7 @@ final class OverlayState: ObservableObject {
     @Published var phase: Phase = .hidden
     @Published var question = ""
     @Published var status = ""
-    @Published var raw = ""            // answer as streamed, with markers
+    @Published var raw = "" { didSet { derived = nil } } // answer as streamed, with markers
     @Published var level: CGFloat = 0
     @Published var below = false        // bubble flipped under the pointer (no room above)
     @Published var pinned = false
@@ -19,7 +19,35 @@ final class OverlayState: ObservableObject {
     /// Screenshots with the answer's drawings on them, shown in the bubble.
     @Published var annotated: [AnnotatedShot] = []
 
-    var answer: String { Markup.display(raw) }
+    /// Display text and segments, computed once per change of `raw` (the bubble's body runs far more often than that).
+    private var derived: (answer: String, segments: [AnswerSegment])?
+    /// Parsed markdown per text segment: while an answer streams only the last segment changes, the rest are reused.
+    private var renderedCache: [String: AttributedString] = [:]
+
+    var answer: String { derive().answer }
+    var segments: [AnswerSegment] { derive().segments }
+
+    private func derive() -> (answer: String, segments: [AnswerSegment]) {
+        if let derived { return derived }
+        let answer = Markup.display(raw)
+        let d = (answer: answer, segments: Diagrams.segments(answer))
+        derived = d
+        let live = Set(d.segments.compactMap { if case .text(let t) = $0 { return t } else { return nil } })
+        renderedCache = renderedCache.filter { live.contains($0.key) }
+        return d
+    }
+
+    func rendered(_ text: String) -> AttributedString {
+        if let a = renderedCache[text] { return a }
+        let opts = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        var a = (try? AttributedString(markdown: Markup.linked(text), options: opts)) ?? AttributedString(text)
+        for run in a.runs where run.link != nil {
+            a[run.range].foregroundColor = .cyan
+            a[run.range].underlineStyle = .single
+        }
+        renderedCache[text] = a
+        return a
+    }
 }
 
 /// Things the bubble's buttons can do (implemented by the app delegate).
@@ -41,21 +69,33 @@ let accent = AngularGradient(colors: [.cyan, .blue, .purple, .pink, .cyan], cent
 
 struct Spinner: View {
     var size: CGFloat = 22
-    @State private var spin = false
+    @State private var visible = false
     var body: some View {
         ZStack {
             Circle().stroke(Color.white.opacity(0.1), lineWidth: 2.5)
-            Circle()
-                .trim(from: 0, to: 0.72)
-                .stroke(accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                .rotationEffect(.degrees(spin ? 360 : 0))
-                .animation(.linear(duration: 0.85).repeatForever(autoreverses: false), value: spin)
+            // Only spins while its window is on screen (a hidden panel would keep animating).
+            if visible { SpinnerArc() } else { SpinnerArc.arc }
             Image(systemName: "eye.fill")
                 .font(.system(size: size * 0.36, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
         }
         .frame(width: size, height: size)
-        .onAppear { spin = true }
+        .trackingWindowVisibility($visible)
+    }
+}
+
+private struct SpinnerArc: View {
+    @State private var spin = false
+    static var arc: some View {
+        Circle()
+            .trim(from: 0, to: 0.72)
+            .stroke(accent, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+    }
+    var body: some View {
+        Self.arc
+            .rotationEffect(.degrees(spin ? 360 : 0))
+            .animation(.linear(duration: 0.85).repeatForever(autoreverses: false), value: spin)
+            .onAppear { spin = true }
     }
 }
 
@@ -142,16 +182,6 @@ struct AnswerBubble: View {
     @ObservedObject var s: OverlayState
     weak var actions: BubbleActions?
 
-    func rendered(_ text: String) -> AttributedString {
-        let opts = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        var a = (try? AttributedString(markdown: Markup.linked(text), options: opts)) ?? AttributedString(text)
-        for run in a.runs where run.link != nil {
-            a[run.range].foregroundColor = .cyan
-            a[run.range].underlineStyle = .single
-        }
-        return a
-    }
-
     var header: some View {
         HStack(spacing: 7) {
             if s.phase == .answering { Spinner(size: 13) } else {
@@ -178,10 +208,10 @@ struct AnswerBubble: View {
     /// Text and rendered mermaid diagrams, in order.
     var answerText: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(Diagrams.segments(s.answer).enumerated()), id: \.offset) { _, segment in
+            ForEach(Array(s.segments.enumerated()), id: \.offset) { _, segment in
                 switch segment {
                 case .text(let t):
-                    Text(rendered(t))
+                    Text(s.rendered(t))
                         .font(.system(size: 13.5))
                         .foregroundStyle(.white.opacity(0.95))
                         .lineSpacing(2.5)

@@ -51,16 +51,27 @@ enum VoiceModels {
     }
 
     /// Kill helpers left over from a previous run (only if they're still whisper-server / kokoro processes).
+    /// The list is read (and the file removed) right away, so helpers started from now on aren't touched; the `ps`
+    /// checks run in the background (one per pid, too slow for launch on the main thread).
     static func killStrays() {
         guard let text = try? String(contentsOf: pidFile, encoding: .utf8) else { return }
-        for pid in text.split(separator: "\n").compactMap({ Int32($0) }) {
-            let (_, cmd, _) = shell("/bin/ps", ["-o", "command=", "-p", String(pid)])
-            if cmd.contains("whisper-server") || cmd.contains("parakeet-server") || cmd.contains("kokoro_server") || cmd.contains("kokoro-onnx") {
-                kill(pid, SIGKILL)
-                log("killed stray helper \(pid)")
+        try? FileManager.default.removeItem(at: pidFile)
+        let pids = text.split(separator: "\n").compactMap { Int32($0) }
+        guard !pids.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async {
+            let (_, ps, _) = shell("/bin/ps", ["-o", "pid=,ppid=,command=", "-p", pids.map(String.init).joined(separator: ",")])
+            let me = ProcessInfo.processInfo.processIdentifier
+            for line in ps.split(separator: "\n") {
+                let f = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+                // Skip our own children: a helper this launch just started may have reused an old pid.
+                guard f.count == 3, let pid = Int32(f[0]), Int32(f[1]) != me else { continue }
+                let cmd = f[2]
+                if cmd.contains("whisper-server") || cmd.contains("parakeet-server") || cmd.contains("kokoro_server") || cmd.contains("kokoro-onnx") {
+                    kill(pid, SIGKILL)
+                    log("killed stray helper \(pid)")
+                }
             }
         }
-        try? FileManager.default.removeItem(at: pidFile)
     }
 
     /// Stop a helper for sure: SIGKILL it (and, for `uv run`, its python child) right away.
@@ -237,9 +248,11 @@ final class ParakeetEngine {
 
     private func received(_ data: Data) {
         buffer.append(data)
-        while let nl = buffer.firstIndex(of: 0x0A) {
-            var line = buffer[buffer.startIndex..<nl]
-            buffer.removeSubrange(buffer.startIndex...nl)
+        var start = buffer.startIndex
+        defer { if start != buffer.startIndex { buffer = Data(buffer[start...]) } }
+        while let nl = buffer[start...].firstIndex(of: 0x0A) {
+            var line = buffer[start..<nl]
+            start = buffer.index(after: nl)
             // CoreML prints warnings to stdout without a newline, so they can prefix a reply: start at the JSON.
             if let brace = line.firstIndex(of: 0x7B) { line = line[brace...] }
             guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
@@ -307,13 +320,10 @@ final class KokoroEngine {
         p.standardError = FileHandle.nullDevice
         p.standardInput = inp
 
-        var buffer = Data()
+        let lines = LineSplitter()
         out.fileHandleForReading.readabilityHandler = { [weak self] h in
-            buffer.append(h.availableData)
-            while let nl = buffer.firstIndex(of: 0x0A) {
-                let line = buffer.subdata(in: buffer.startIndex..<nl)
-                buffer.removeSubrange(buffer.startIndex...nl)
-                guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+            lines.feed(h.availableData) { line in
+                guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }
                 DispatchQueue.main.async { self?.handle(obj) }
             }
         }

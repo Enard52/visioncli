@@ -92,16 +92,17 @@ enum Screen {
         }
     }
 
-    /// The window directly under the pointer, terminals included.
-    static func rawWindowUnderPointer() -> WinInfo? {
+    /// The window directly under the pointer, terminals included. `all`: a windows() list already taken.
+    static func rawWindowUnderPointer(in all: [WinInfo]? = nil) -> WinInfo? {
         let p = Geometry.pointer
-        return windows().first { $0.bounds.contains(p) }
+        return (all ?? windows()).first { $0.bounds.contains(p) }
     }
 
     /// The window under the pointer, or (if that's a terminal / nothing) the front-most non-terminal window.
-    static func windowUnderPointer() -> WinInfo? {
+    /// `all`: a windows() list already taken (one window-server query per hotkey press instead of several).
+    static func windowUnderPointer(in all: [WinInfo]? = nil) -> WinInfo? {
         let p = Geometry.pointer
-        let all = windows()
+        let all = all ?? windows()
         if let hit = all.first(where: { $0.bounds.contains(p) }), !hit.isTerminal { return hit }
         return all.first { !$0.isTerminal }
     }

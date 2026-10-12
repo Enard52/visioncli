@@ -1,11 +1,13 @@
 {
   "name": "visioncli",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "AI co-assistant for developers that sees your screen and uses your Mac: ask about what you're looking at or have it do the task, by typing or voice, with Claude Code or Gemini (Antigravity).",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc && sh scripts/build-overlay.sh",
-    "prepare": "tsc",
+    "build": "npm run typecheck && npm run bundle && sh scripts/build-overlay.sh",
+    "bundle": "node scripts/bundle.mjs",
+    "typecheck": "tsc --noEmit",
+    "prepare": "node scripts/bundle.mjs",
     "start": "node dist/index.js",
     "voice": "node dist/index.js voice",
     "setup-signing": "sh scripts/setup-signing.sh",
@@ -31,6 +33,7 @@
   "devDependencies": {
     "@types/node": "^26.6.4",
     "@types/pg": "^8.23.1",
+    "esbuild": "^0.25.12",
     "typescript": "^7.0.2"
   },
   "type": "module",

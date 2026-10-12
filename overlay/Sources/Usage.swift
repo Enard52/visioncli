@@ -71,7 +71,7 @@ final class UsageTracker {
     func scanToday() {
         if let t = todayScanned, Date().timeIntervalSince(t) < 60 { return }
         todayScanned = Date()
-        DispatchQueue.global(qos: .utility).async {
+        Self.scanQueue.async {
             let result = Self.countToday()
             DispatchQueue.main.async {
                 self.today = result
@@ -80,31 +80,78 @@ final class UsageTracker {
         }
     }
 
+    /// Today's usage lines already read from one transcript: how far it was read, and per message id the counts
+    /// (in, out, cached) of its first occurrence.
+    private struct FileScan {
+        var offset: UInt64 = 0
+        var ids: [String] = [] // first-seen order
+        var counts: [String: (Int, Int, Int)] = [:]
+    }
+
+    /// Transcripts only grow, so each scan reads just the bytes appended since the last one. Only touched on `scanQueue`.
+    private static let scanQueue = DispatchQueue(label: "visioncli.usage", qos: .utility)
+    private static var scans: [String: FileScan] = [:]
+    private static var scansDay: Date?
+
     private static func countToday() -> Today {
         let root = home.appendingPathComponent(".claude/projects")
         let start = Calendar.current.startOfDay(for: Date())
+        if scansDay != start { scans = [:]; scansDay = start }
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         var t = Today()
         var seen = Set<String>() // a streamed reply is written several times with the same message id
-        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return t }
+        var kept: [String: FileScan] = [:]
+        defer { scans = kept } // drops files no longer modified today (or gone)
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]) else { return t }
         for case let url as URL in walker where url.pathExtension == "jsonl" {
-            guard let mod = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, mod >= start,
-                  let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            for line in text.split(separator: "\n") where line.contains("\"usage\"") && line.contains("\"assistant\"") {
-                guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                      let ts = (obj["timestamp"] as? String).flatMap(iso.date(from:)), ts >= start,
-                      let msg = obj["message"] as? [String: Any], let usage = msg["usage"] as? [String: Any] else { continue }
-                let id = (msg["id"] as? String) ?? (obj["uuid"] as? String) ?? UUID().uuidString
-                guard seen.insert(id).inserted else { continue }
-                func n(_ k: String) -> Int { (usage[k] as? NSNumber)?.intValue ?? 0 }
+            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+                  let mod = values.contentModificationDate, mod >= start else { continue }
+            var scan = scans[url.path] ?? FileScan()
+            if let size = values.fileSize, UInt64(size) < scan.offset { scan = FileScan() } // rewritten: start over
+            read(url, into: &scan, start: start, iso: iso)
+            kept[url.path] = scan
+            for id in scan.ids where seen.insert(id).inserted {
+                guard let c = scan.counts[id] else { continue }
                 t.requests += 1
-                t.input += n("input_tokens") + n("cache_creation_input_tokens")
-                t.output += n("output_tokens")
-                t.cached += n("cache_read_input_tokens")
+                t.input += c.0
+                t.output += c.1
+                t.cached += c.2
             }
         }
         return t
+    }
+
+    /// Reads complete lines appended after `scan.offset`, a few MB at a time (transcripts can be tens of MB).
+    private static func read(_ url: URL, into scan: inout FileScan, start: Date, iso: ISO8601DateFormatter) {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return }
+        defer { try? h.close() }
+        do { try h.seek(toOffset: scan.offset) } catch { return }
+        var carry = Data()
+        while true {
+            let chunk: Data
+            do { chunk = try h.read(upToCount: 4 << 20) ?? Data() } catch { break }
+            if chunk.isEmpty { break }
+            carry.append(chunk)
+            guard let lastNewline = carry.lastIndex(of: 0x0A) else { continue }
+            let complete = carry[carry.startIndex...lastNewline]
+            scan.offset += UInt64(complete.count)
+            parse(String(decoding: complete, as: UTF8.self), into: &scan, start: start, iso: iso)
+            carry = Data(carry[(lastNewline + 1)...]) // an unfinished last line is read again next time
+        }
+    }
+
+    private static func parse(_ text: String, into scan: inout FileScan, start: Date, iso: ISO8601DateFormatter) {
+        for line in text.split(separator: "\n") where line.contains("\"usage\"") && line.contains("\"assistant\"") {
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let ts = (obj["timestamp"] as? String).flatMap(iso.date(from:)), ts >= start,
+                  let msg = obj["message"] as? [String: Any], let usage = msg["usage"] as? [String: Any] else { continue }
+            let id = (msg["id"] as? String) ?? (obj["uuid"] as? String) ?? UUID().uuidString
+            guard scan.counts[id] == nil else { continue }
+            func n(_ k: String) -> Int { (usage[k] as? NSNumber)?.intValue ?? 0 }
+            scan.ids.append(id)
+            scan.counts[id] = (n("input_tokens") + n("cache_creation_input_tokens"), n("output_tokens"), n("cache_read_input_tokens"))
+        }
     }
 
     // MARK: Labels

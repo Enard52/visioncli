@@ -88,74 +88,133 @@ function format(rows: Record<string, unknown>[]) {
   return lines.join("\n");
 }
 
-export async function query(sql: string, dir = process.cwd()): Promise<string> {
-  const stmt = assertReadOnly(sql);
-  const c = connection(dir);
+// One pool per process (per connection settings), opened on first use: no reconnect + handshake per query.
+type Runner = { key: string; rows: (sql: string) => Promise<Record<string, unknown>[]>; end: () => Promise<void> };
+let runner: Runner | null = null;
+const CONNECT_TIMEOUT = 8000;
+const QUERY_TIMEOUT = 10000;
+
+async function open(c: Exclude<Conn, { kind: "sqlite" }>): Promise<Runner> {
+  const key = JSON.stringify(c);
+  if (runner?.key === key) return runner;
+  const old = runner;
+  runner = null;
+  old?.end().catch(() => {});
   if (c.kind === "mysql") {
     const mysql = await import("mysql2/promise");
-    const db = await mysql.createConnection({ host: c.host, port: c.port, user: c.user, password: c.password, database: c.database, connectTimeout: 8000 });
-    try {
-      await db.query("SET SESSION TRANSACTION READ ONLY");
-      await db.query("START TRANSACTION READ ONLY");
-      const [rows] = await db.query({ sql: stmt, timeout: 10000 });
-      await db.query("ROLLBACK");
-      return format(rows as Record<string, unknown>[]);
-    } finally {
-      await db.end();
-    }
-  }
-  if (c.kind === "postgres") {
+    const pool = mysql.createPool({
+      host: c.host, port: c.port, user: c.user, password: c.password, database: c.database,
+      connectTimeout: CONNECT_TIMEOUT, connectionLimit: 2, maxIdle: 1, idleTimeout: 60_000,
+    });
+    runner = {
+      key,
+      end: () => pool.end(),
+      rows: async (sql) => {
+        const db = await pool.getConnection();
+        try {
+          await db.query("SET SESSION TRANSACTION READ ONLY");
+          await db.query("START TRANSACTION READ ONLY");
+          const [rows] = await db.query({ sql, timeout: QUERY_TIMEOUT });
+          return rows as Record<string, unknown>[];
+        } finally {
+          await db.query("ROLLBACK").catch(() => {});
+          db.release();
+        }
+      },
+    };
+  } else {
     const { default: pg } = await import("pg");
-    const db = new pg.Client(c.url ? { connectionString: c.url } : { host: c.host, port: c.port, user: c.user, password: c.password, database: c.database });
-    await db.connect();
-    try {
-      await db.query("BEGIN READ ONLY");
-      await db.query("SET LOCAL statement_timeout = 10000");
-      const res = await db.query(stmt);
-      await db.query("ROLLBACK");
-      return format(res.rows);
-    } finally {
-      await db.end();
-    }
+    const pool = new pg.Pool({
+      ...(c.url ? { connectionString: c.url } : { host: c.host, port: c.port, user: c.user, password: c.password, database: c.database }),
+      connectionTimeoutMillis: CONNECT_TIMEOUT, max: 2, idleTimeoutMillis: 60_000,
+    });
+    pool.on("error", () => {}); // an idle client dropped by the server: the pool replaces it
+    runner = {
+      key,
+      end: () => pool.end(),
+      rows: async (sql) => {
+        const db = await pool.connect();
+        try {
+          await db.query("BEGIN READ ONLY");
+          await db.query(`SET LOCAL statement_timeout = ${QUERY_TIMEOUT}`);
+          return (await db.query(sql)).rows;
+        } finally {
+          await db.query("ROLLBACK").catch(() => {});
+          db.release();
+        }
+      },
+    };
   }
-  const { stdout } = await run("sqlite3", ["-readonly", "-json", c.file, stmt], { timeout: 10000 });
-  return format(stdout.trim() ? JSON.parse(stdout) : []);
+  return runner!;
 }
 
-/** Tables with columns, and foreign keys, for the whole database or one table. */
+async function rows(sql: string, c: Conn): Promise<Record<string, unknown>[]> {
+  if (c.kind === "sqlite") {
+    const { stdout } = await run("sqlite3", ["-readonly", "-json", c.file, sql], { timeout: QUERY_TIMEOUT });
+    return stdout.trim() ? JSON.parse(stdout) : [];
+  }
+  const r = await open(c);
+  try {
+    return await r.rows(sql);
+  } catch (err: any) {
+    // Can't connect (server down, .env changed): drop the pool so the next call starts fresh.
+    if (!err?.sqlMessage && !err?.severity) {
+      if (runner === r) runner = null;
+      r.end().catch(() => {});
+    }
+    throw err;
+  }
+}
+
+export async function query(sql: string, dir = process.cwd()): Promise<string> {
+  const stmt = assertReadOnly(sql);
+  return format(await rows(stmt, connection(dir)));
+}
+
+const MAX_SCHEMA = 8000;
+
+/** Tables with columns, and foreign keys, for the whole database or one table (capped; pass a table for the rest). */
 export async function schema(table?: string, dir = process.cwd()): Promise<string> {
   const c = connection(dir);
   const t = table?.replace(/[^A-Za-z0-9_.$]/g, "");
+  let tables: Record<string, unknown>[];
+  let fks: Record<string, unknown>[];
   if (c.kind === "mysql") {
     const where = `table_schema = DATABASE()${t ? ` AND table_name = '${t}'` : ""}`;
-    const cols = await query(
-      `SELECT table_name, GROUP_CONCAT(CONCAT(column_name, ' ', column_type, IF(column_key='PRI',' PK',''), IF(is_nullable='YES',' null','')) ORDER BY ordinal_position SEPARATOR ', ') AS columns FROM information_schema.columns WHERE ${where} GROUP BY table_name ORDER BY table_name`,
-      dir,
-    );
-    const fks = await query(
-      `SELECT table_name, column_name, referenced_table_name, referenced_column_name FROM information_schema.key_column_usage WHERE ${where} AND referenced_table_name IS NOT NULL ORDER BY table_name`,
-      dir,
-    );
-    return `TABLES\n${cols}\n\nFOREIGN KEYS\n${fks}`;
-  }
-  if (c.kind === "postgres") {
+    [tables, fks] = await Promise.all([
+      rows(`SELECT table_name AS t, GROUP_CONCAT(CONCAT(column_name, ' ', column_type, IF(column_key='PRI',' PK',''), IF(is_nullable='YES',' null','')) ORDER BY ordinal_position SEPARATOR ', ') AS cols FROM information_schema.columns WHERE ${where} GROUP BY table_name ORDER BY table_name`, c),
+      rows(`SELECT table_name AS t, CONCAT(column_name, ' -> ', referenced_table_name, '.', referenced_column_name) AS fk FROM information_schema.key_column_usage WHERE ${where} AND referenced_table_name IS NOT NULL ORDER BY table_name`, c),
+    ]);
+  } else if (c.kind === "postgres") {
     const where = `c.table_schema = 'public'${t ? ` AND c.table_name = '${t}'` : ""}`;
-    const cols = await query(
-      `SELECT c.table_name, string_agg(c.column_name || ' ' || c.data_type || CASE WHEN c.is_nullable='YES' THEN ' null' ELSE '' END, ', ' ORDER BY c.ordinal_position) AS columns FROM information_schema.columns c WHERE ${where} GROUP BY c.table_name ORDER BY c.table_name`,
-      dir,
+    [tables, fks] = await Promise.all([
+      rows(`SELECT c.table_name AS t, string_agg(c.column_name || ' ' || c.data_type || CASE WHEN c.is_nullable='YES' THEN ' null' ELSE '' END, ', ' ORDER BY c.ordinal_position) AS cols FROM information_schema.columns c WHERE ${where} GROUP BY c.table_name ORDER BY c.table_name`, c),
+      rows(`SELECT tc.table_name AS t, kcu.column_name || ' -> ' || ccu.table_name || '.' || ccu.column_name AS fk FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name WHERE tc.constraint_type = 'FOREIGN KEY'${t ? ` AND tc.table_name = '${t}'` : ""} ORDER BY tc.table_name`, c),
+    ]);
+  } else {
+    // One sqlite3 run for every table (pragma table-valued functions), instead of two per table.
+    const all = await rows(
+      `SELECT m.name AS t,
+        (SELECT group_concat(p.name || ' ' || p.type || CASE WHEN p.pk THEN ' PK' ELSE '' END || CASE WHEN p."notnull" OR p.pk THEN '' ELSE ' null' END, ', ') FROM pragma_table_info(m.name) p) AS cols,
+        (SELECT group_concat(f."from" || ' -> ' || f."table" || '.' || f."to", char(10)) FROM pragma_foreign_key_list(m.name) f) AS fk
+      FROM sqlite_master m WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite_%'${t ? ` AND m.name = '${t}'` : ""} ORDER BY m.name`,
+      c,
     );
-    const fks = await query(
-      `SELECT tc.table_name, kcu.column_name, ccu.table_name AS referenced_table, ccu.column_name AS referenced_column FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name WHERE tc.constraint_type = 'FOREIGN KEY'${t ? ` AND tc.table_name = '${t}'` : ""} ORDER BY tc.table_name`,
-      dir,
-    );
-    return `TABLES\n${cols}\n\nFOREIGN KEYS\n${fks}`;
+    tables = all;
+    fks = all.flatMap((r) => (r.fk ? String(r.fk).split("\n").map((fk) => ({ t: r.t, fk })) : []));
   }
-  const tables = t ? [t] : (await run("sqlite3", ["-readonly", c.file, ".tables"])).stdout.split(/\s+/).filter(Boolean);
-  const parts: string[] = [];
-  for (const name of tables) {
-    parts.push(`${name}\n${await query(`PRAGMA table_info(${name})`, dir)}\nforeign keys:\n${await query(`PRAGMA foreign_key_list(${name})`, dir)}`);
+  if (!tables.length) return t ? `(no table ${t})` : "(no tables)";
+  const val = (r: Record<string, unknown>, k: string) => String(r[k] ?? r[k.toUpperCase()] ?? "");
+  const lines = ["TABLES", ...tables.map((r) => `${val(r, "t")}: ${val(r, "cols")}`), "", "FOREIGN KEYS",
+    ...(fks.length ? fks.map((r) => `${val(r, "t")}.${val(r, "fk")}`) : ["(none)"])];
+  let out = "";
+  for (const [i, line] of lines.entries()) {
+    if (out.length + line.length > MAX_SCHEMA) {
+      return `${out}… truncated (${lines.length - i} more lines, ${tables.length} tables). Pass \`table\` to see one table in full.`;
+    }
+    out += line + "\n";
   }
-  return parts.join("\n\n") || "(no tables)";
+  return out.trimEnd();
 }
 
 export function describeConnection(dir = process.cwd()) {

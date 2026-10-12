@@ -16,6 +16,7 @@ APP=overlay/build/VisionCLI.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp overlay/Resources/AppIcon.icns overlay/Resources/kokoro_server.py overlay/Resources/mermaid.min.js "$APP/Contents/Resources/"
+cp -R overlay/Resources/mascot "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -53,7 +54,7 @@ compile() { # arch out
 
 bundle_server() {
   # Bundle the MCP server so the app works without the repo (Node.js is still needed at runtime).
-  [ -f dist/index.js ] || npx tsc
+  [ -f dist/index.js ] || node scripts/bundle.mjs
   SERVER="$APP/Contents/Resources/server"
   mkdir -p "$SERVER"
   cp -R dist "$SERVER/dist"

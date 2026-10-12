@@ -66,9 +66,42 @@ enum TerminalProbe {
                                sessionId: found.flatMap { newestSession($0.assistant, cwd: cwd) })
     }
 
+    // MARK: Recent finds
+
+    /// find() is a few hundred ms of `ps`, `lsof` and AppleScript, and one question used to run it two or three times
+    /// (at key-down, then again when sending). Tabs found in the last few seconds are reused; a tab that has closed
+    /// since shows up as a failed send, and the caller then calls forget() and looks again.
+    private static let cacheLock = NSLock()
+    private static var cache: [String: (context: TerminalContext, at: Date)] = [:]
+    private static let cacheTTL: TimeInterval = 6
+
+    private static func cacheKey(_ assistant: Assistant, _ project: String) -> String { "\(assistant.rawValue):\(project)" }
+
+    /// The tab find() returned for this project within the last few seconds, if any (no `ps`/AppleScript). Only found
+    /// tabs are remembered: "none running" is always checked again, since the user may have just started one.
+    static func recent(_ assistant: Assistant, forProject project: String) -> TerminalContext? {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        guard let hit = cache[cacheKey(assistant, project)], Date().timeIntervalSince(hit.at) < cacheTTL else { return nil }
+        return hit.context
+    }
+
+    static func forget(_ assistant: Assistant, forProject project: String) {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        cache[cacheKey(assistant, project)] = nil
+    }
+
     /// An assistant the user already has running in iTerm for this project (any tab). The most recently active wins.
     /// One `ps` for all processes, `lsof` only on matching ones, one AppleScript call for iTerm's tabs.
+    /// Always looks afresh (and remembers what it found for recent()).
     static func find(_ assistant: Assistant, forProject project: String) -> TerminalContext? {
+        let found = scan(assistant, forProject: project)
+        cacheLock.lock()
+        cache[cacheKey(assistant, project)] = found.map { ($0, Date()) }
+        cacheLock.unlock()
+        return found
+    }
+
+    private static func scan(_ assistant: Assistant, forProject project: String) -> TerminalContext? {
         let running = processes(["-A"]).filter { $0.tty != "??" && assistant.matches(args: $0.args) }
         var matches: [(cwd: String, tty: String)] = []
         for p in running {

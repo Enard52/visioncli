@@ -10,8 +10,24 @@ enum AnswerSegment: Hashable {
 }
 
 enum Diagrams {
-    /// Split an answer into text and mermaid blocks.
+    private static var lastSplit: (answer: String, segments: [AnswerSegment])?
+    private static let lastSplitLock = NSLock()
+
+    /// Split an answer into text and mermaid blocks. Remembers the last answer: while streaming, the bubble and the
+    /// speaker both ask for the same text.
     static func segments(_ answer: String) -> [AnswerSegment] {
+        lastSplitLock.lock()
+        let last = lastSplit
+        lastSplitLock.unlock()
+        if let last, last.answer == answer { return last.segments }
+        let out = split(answer)
+        lastSplitLock.lock()
+        lastSplit = (answer, out)
+        lastSplitLock.unlock()
+        return out
+    }
+
+    private static func split(_ answer: String) -> [AnswerSegment] {
         var out: [AnswerSegment] = []
         var rest = Substring(answer)
         while let open = rest.range(of: "```mermaid") {
@@ -40,22 +56,67 @@ enum Diagrams {
         }.joined(separator: "\n")
     }
 
-    /// The bundled mermaid.js, inlined into each diagram page (no network, no file-access rules to fight).
+    /// Fallback when the cache dir can't be set up: the bundled mermaid.js inlined into the page.
     static let script: String = {
         guard let url = Bundle.main.url(forResource: "mermaid.min", withExtension: "js"),
               let js = try? String(contentsOf: url, encoding: .utf8) else { return "" }
         return js.replacingOccurrences(of: "</script", with: "<\\/script")
     }()
 
-    static func page(for code: String) -> String {
+    /// A folder holding a copy of the bundled mermaid.js, where each diagram's page is written and loaded from, so
+    /// the 3.5 MB script isn't pasted into every page (read access is granted to just this folder). nil if unavailable.
+    static let pageDir: URL? = {
+        guard let js = Bundle.main.url(forResource: "mermaid.min", withExtension: "js") else { return nil }
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("visioncli-diagrams", isDirectory: true)
+        let copy = dir.appendingPathComponent("mermaid.min.js")
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            // Old pages from earlier runs.
+            for f in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] where f.pathExtension == "html" {
+                try? fm.removeItem(at: f)
+            }
+            let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey]
+            let src = try js.resourceValues(forKeys: keys)
+            let dst = try? copy.resourceValues(forKeys: keys)
+            if dst?.fileSize != src.fileSize || dst?.contentModificationDate != src.contentModificationDate {
+                try? fm.removeItem(at: copy)
+                try fm.copyItem(at: js, to: copy) // a copy, not a symlink: WebKit's sandbox checks the real path
+            }
+            return dir
+        } catch {
+            log("diagram: can't set up \(dir.path): \(error.localizedDescription); inlining mermaid.js")
+            return nil
+        }
+    }()
+
+    /// Writes the page for `code` next to the mermaid.js copy; nil if that isn't possible.
+    static func pageFile(for code: String) -> URL? {
+        guard let dir = pageDir else { return nil }
+        let url = dir.appendingPathComponent("d-\(String(UInt(bitPattern: code.hashValue), radix: 36)).html")
+        do { try Data(page(for: code, inline: false).utf8).write(to: url, options: .atomic) } catch { return nil }
+        return url
+    }
+
+    /// Shows `code` in `web`: from a file next to mermaid.js when possible, else with the script inlined.
+    static func load(_ code: String, in web: WKWebView) {
+        if let file = pageFile(for: code) {
+            web.loadFileURL(file, allowingReadAccessTo: file.deletingLastPathComponent())
+        } else {
+            web.loadHTMLString(page(for: code, inline: true), baseURL: nil)
+        }
+    }
+
+    static func page(for code: String, inline: Bool = true) -> String {
         let json = (try? JSONSerialization.data(withJSONObject: [code], options: [])).map { String(decoding: $0, as: UTF8.self) } ?? "[\"\"]"
+        let mermaid = inline ? "<script>\(script)</script>" : "<script src=\"mermaid.min.js\"></script>"
         return """
         <!doctype html><html><head><meta charset="utf-8"><style>
         html,body{margin:0;padding:0;background:transparent;color:#e6e6ea;font:13px -apple-system,system-ui}
         #d{display:flex;justify-content:center;padding:4px 0}
         #d svg{max-width:100%;height:auto}
         .err{color:#ff9b8a;font:12px ui-monospace,Menlo}
-        </style><script>\(script)</script></head><body><div id="d"></div><script>
+        </style>\(mermaid)</head><body><div id="d"></div><script>
         const d = document.getElementById('d');
         const report = () => requestAnimationFrame(() => window.webkit.messageHandlers.size.postMessage(Math.ceil(d.getBoundingClientRect().height)));
         mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict',
@@ -81,7 +142,7 @@ struct MermaidView: NSViewRepresentable {
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 420, height: height), configuration: config)
         web.setValue(false, forKey: "drawsBackground") // transparent, the bubble shows through
         context.coordinator.loaded = code
-        web.loadHTMLString(Diagrams.page(for: code), baseURL: nil)
+        Diagrams.load(code, in: web)
         return web
     }
 
@@ -89,7 +150,7 @@ struct MermaidView: NSViewRepresentable {
         context.coordinator.parent = self
         guard context.coordinator.loaded != code else { return }
         context.coordinator.loaded = code
-        web.loadHTMLString(Diagrams.page(for: code), baseURL: nil)
+        Diagrams.load(code, in: web)
     }
 
     final class Coordinator: NSObject, WKScriptMessageHandler {

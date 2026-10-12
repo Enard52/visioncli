@@ -9,7 +9,7 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 
 npm ci --no-audit --no-fund --loglevel=error
-npx tsc
+npm run bundle
 VISIONCLI_RELEASE=1 sh scripts/build-overlay.sh
 
 APP=overlay/build/VisionCLI.app

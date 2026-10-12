@@ -4,12 +4,20 @@ import AVFoundation
 import Speech
 
 /// On-device speech-to-text while the hotkey is held.
+///
+/// Threading: the public API and the recognition state belong to the main thread. Opening and closing the microphone
+/// (AVAudioEngine / AVCaptureSession start and stop, a few hundred ms) runs on `audio`, a serial queue, so the bubble
+/// appears at once; start, stop and cancel are queued there in the order they're called. The `audio*` state below is
+/// only touched on that queue.
 final class Listener {
+    private let audio = DispatchQueue(label: "dev.visioncli.audio", qos: .userInteractive)
     // Recreated for every question: a long-lived engine keeps a stale input format after the mic changes
     // (AirPods connect, Teams/Zoom grab the device, sample-rate switch), and installTap then aborts the app.
-    private var engine = AVAudioEngine()
-    private var configObserver: NSObjectProtocol?
-    private var tapped = false
+    private var engine = AVAudioEngine()            // audio queue
+    private var configObserver: NSObjectProtocol?   // audio queue
+    private var tapped = false                      // audio queue
+    private var recording = false                   // audio queue: a question's audio is being captured
+    private var generation = 0                      // main: bumped by every start/cancel, so stale callbacks are dropped
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private let recognizer: SFSpeechRecognizer?
@@ -32,7 +40,9 @@ final class Listener {
         else { recognizer = SFSpeechRecognizer() ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")) }
     }
 
-    func start() throws {
+    /// Start listening. Call on main. The microphone opens on the audio queue; if it can't, `failed` is called on
+    /// main (unless this listen was cancelled or replaced by then).
+    func start(failed: @escaping (Error) -> Void) {
         cancel()
         latest = ""
         lastIssue = nil
@@ -45,12 +55,32 @@ final class Listener {
         request = req
         box.set(req)
 
+        let onBuffer = handler(for: req)
+        let gen = generation
+        audio.async { [weak self] in
+            guard let self else { return }
+            do {
+                try self.startAudio(onBuffer)
+            } catch {
+                DispatchQueue.main.async {
+                    guard self.generation == gen else { return } // cancelled, or a newer listen started
+                    self.cancel() // no captions without audio either
+                    failed(error)
+                }
+            }
+        }
+        startRecognition(req)
+    }
+
+    /// Audio queue: open the picked mic, or the system default through AVAudioEngine.
+    private func startAudio(_ onBuffer: @escaping (AVAudioPCMBuffer) -> Void) throws {
+        recording = true
         // A specific mic picked in the menu is captured input-only (AVCaptureSession). AVAudioEngine drives input
         // and output as one unit, so it can't use e.g. the built-in mic, which is a separate device from the speakers.
         if let uid = Settings.inputDeviceUID, let device = AudioDevices.device(uid: uid) {
             if let mic = CaptureMic(uid: uid) {
                 recorder.begin()
-                mic.onBuffer = handler(for: req)
+                mic.onBuffer = onBuffer
                 if mic.start() {
                     capture = mic
                     log("listener: capturing from \(device.name)")
@@ -62,8 +92,13 @@ final class Listener {
                 log("listener: can't open \(device.name); using the system default mic")
             }
         }
-        if capture == nil { try startEngine(req: req) }
+        if capture == nil {
+            do { try startEngine(onBuffer) } catch { recording = false; throw error }
+        }
+    }
 
+    /// Main: live captions through Apple's recognizer (the audio is appended to `req` as it arrives).
+    private func startRecognition(_ req: SFSpeechAudioBufferRecognitionRequest) {
         // Live captions need Speech Recognition permission and an available recognizer. Without them we still
         // record (Whisper can transcribe on release) and say why captions are missing.
         switch SFSpeechRecognizer.authorizationStatus() {
@@ -130,7 +165,7 @@ final class Listener {
         onIssue(issue)
     }
 
-    private var capture: CaptureMic?
+    private var capture: CaptureMic?   // audio queue
 
     /// What to do with each microphone buffer: feed speech recognition, the WAV for Whisper, and the level meter.
     private func handler(for req: SFSpeechAudioBufferRecognitionRequest) -> (AVAudioPCMBuffer) -> Void {
@@ -147,8 +182,8 @@ final class Listener {
         }
     }
 
-    /// The system default mic through AVAudioEngine.
-    private func startEngine(req: SFSpeechAudioBufferRecognitionRequest) throws {
+    /// Audio queue: the system default mic through AVAudioEngine.
+    private func startEngine(_ onBuffer: @escaping (AVAudioPCMBuffer) -> Void) throws {
         if engine.isRunning { engine.stop() }
         engine = AVAudioEngine()
         let input = engine.inputNode
@@ -159,7 +194,6 @@ final class Listener {
                 "No microphone input right now (the audio device may be switching, or another app is using it). Try again in a moment"])
         }
         recorder.begin()
-        let onBuffer = handler(for: req)
         // format: nil = the node's own output format; an explicit format that disagrees with it aborts the app.
         input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buf, _ in onBuffer(buf) }
         tapped = true
@@ -175,56 +209,85 @@ final class Listener {
         // mid-question. Re-attach to the new input and keep recording into the same file.
         if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
         let current = engine
-        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: current, queue: .main) { [weak self] _ in
-            guard let self, self.engine === current, self.request != nil else { return }
-            let input = current.inputNode
-            let format = input.inputFormat(forBus: 0)
-            input.removeTap(onBus: 0)
-            guard format.sampleRate > 0, format.channelCount > 0 else { log("listener: input changed, no usable format yet"); return }
-            input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buf, _ in onBuffer(buf) }
-            current.prepare()
-            do { try current.start(); log("listener: input changed (\(Int(format.sampleRate)) Hz), resumed") }
-            catch { log("listener: input changed, couldn't resume: \(error.localizedDescription)") }
+        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: current, queue: nil) { [weak self] _ in
+            self?.audio.async { self?.inputChanged(current, onBuffer) }
         }
     }
 
-    /// Stop recording and hand back the final transcript (or whatever we have after a short grace period).
-    func stop(_ done: @escaping (String) -> Void) {
+    /// Audio queue: the input device changed under a running engine; re-attach to the new input.
+    private func inputChanged(_ current: AVAudioEngine, _ onBuffer: @escaping (AVAudioPCMBuffer) -> Void) {
+        guard engine === current, recording else { return }
+        let input = current.inputNode
+        let format = input.inputFormat(forBus: 0)
+        input.removeTap(onBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { log("listener: input changed, no usable format yet"); return }
+        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buf, _ in onBuffer(buf) }
+        current.prepare()
+        do { try current.start(); log("listener: input changed (\(Int(format.sampleRate)) Hz), resumed") }
+        catch { log("listener: input changed, couldn't resume: \(error.localizedDescription)") }
+    }
+
+    /// Stop recording. Call on main. `onRecording` gets the finished WAV (nil if nothing was recorded) as soon as the
+    /// microphone is closed, so a local engine can start transcribing right away; `done` gets Apple's final
+    /// transcript (or whatever it had after a short grace period), both on main.
+    func stop(onRecording: @escaping (URL?) -> Void = { _ in }, done: @escaping (String) -> Void) {
         finish = done
-        stopAudio()
-        request?.endAudio()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.complete() }
+        let req = request, gen = generation
+        audio.async { [weak self] in
+            guard let self else { return }
+            let url = self.stopAudio()
+            DispatchQueue.main.async {
+                self.recordingURL = url
+                req?.endAudio()
+                onRecording(url)
+                // Grace period for Apple's final result, from when its audio ended.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                    guard let self, self.generation == gen else { return } // not for a newer question's stop
+                    self.complete()
+                }
+            }
+        }
     }
 
     func cancel() {
+        generation += 1
         box.set(nil)
         finish = nil
-        stopAudio()
         task?.cancel()
         task = nil
         request = nil
+        audio.async { [weak self] in _ = self?.stopAudio() }
     }
 
-    private func stopAudio() {
+    /// Audio queue: close the microphone and the WAV; returns the WAV (nil if nothing was recorded).
+    private func stopAudio() -> URL? {
+        guard recording || capture != nil || tapped else { return nil }
+        recording = false
         capture?.stop()
         capture = nil
         if engine.isRunning { engine.stop() }
         // Touching inputNode when we never used it opens the mic (and flips Bluetooth headsets into call mode).
         if tapped { engine.inputNode.removeTap(onBus: 0); tapped = false }
         if let configObserver { NotificationCenter.default.removeObserver(configObserver); self.configObserver = nil }
-        recordingURL = recorder.finish()
-        let bytes = (recordingURL.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? Int }) ?? 0
+        let url = recorder.finish()
+        let bytes = (url.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? Int }) ?? 0
         log("listener: recorded \(String(format: "%.1f", Double(max(0, bytes - 44)) / 32000))s")
+        return url
     }
 
-    /// The WAV of the last question (for Whisper), available after stop().
+    /// The WAV of the last question (for Whisper), available once stop() has closed the microphone.
     private(set) var recordingURL: URL?
+
+    /// Stop waiting for Apple's final transcript (a local engine already has the question): `done` gets what Apple
+    /// had so far, and no more live text arrives.
+    func finishNow() { complete() }
 
     private func complete() {
         guard let done = finish else { return }
         finish = nil
         task?.cancel()
         task = nil
+        request = nil // results still queued for the main thread are dropped (they'd overwrite the question shown)
         done(latest.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }

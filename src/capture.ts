@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { displayBounds, send } from "./control.js";
+import { type AppWindow, displayBounds, displaysAndPointer, send } from "./control.js";
 
 const run = promisify(execFile);
 
@@ -70,17 +70,33 @@ async function screencapture(args: string[], out: string) {
   }
 }
 
-// Downscale to MAX_DIM and re-encode as JPEG to keep the payload small.
+/** Pixel size from a PNG header (all our sources are PNG); null if it isn't one. */
+async function pngSize(src: string): Promise<{ w: number; h: number } | null> {
+  const fh = await open(src, "r");
+  try {
+    const buf = Buffer.alloc(24);
+    await fh.read(buf, 0, 24, 0);
+    if (buf.readUInt32BE(0) !== 0x89504e47 || buf.toString("ascii", 12, 16) !== "IHDR") return null;
+    return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+  } finally {
+    await fh.close();
+  }
+}
+
+// Downscale to MAX_DIM and re-encode as JPEG to keep the payload small (one sips run).
 async function encode(dir: string, src: string): Promise<Capture> {
   if (!isMac) {
     return { data: (await readFile(src)).toString("base64"), mimeType: "image/png" };
   }
   const out = join(dir, "out.jpg");
-  const { stdout } = await run("sips", ["-g", "pixelWidth", "-g", "pixelHeight", src]);
-  const w = Number(/pixelWidth: (\d+)/.exec(stdout)?.[1] ?? 0);
-  const h = Number(/pixelHeight: (\d+)/.exec(stdout)?.[1] ?? 0);
+  let size = await pngSize(src).catch(() => null);
+  if (!size) {
+    const { stdout } = await run("sips", ["-g", "pixelWidth", "-g", "pixelHeight", src]);
+    size = { w: Number(/pixelWidth: (\d+)/.exec(stdout)?.[1] ?? 0), h: Number(/pixelHeight: (\d+)/.exec(stdout)?.[1] ?? 0) };
+  }
+  const { w, h } = size;
   const args = ["-s", "format", "jpeg", "-s", "formatOptions", "85"];
-  if (Math.max(w, h) > MAX_DIM) args.push("-Z", String(MAX_DIM));
+  if (Math.max(w, h) > MAX_DIM) args.push("-Z", String(MAX_DIM)); // -Z would also upscale smaller images
   await run("sips", [...args, src, "--out", out]);
   const scale = Math.max(w, h) > MAX_DIM ? MAX_DIM / Math.max(w, h) : 1;
   return {
@@ -105,13 +121,36 @@ function run() {
   })));
 }`;
 
+/** On-screen windows, front-most first, plus the mouse position when known: one request to the running app, else JXA. */
+export interface Snapshot {
+  windows: WindowInfo[];
+  pointer?: { x: number; y: number };
+  displays?: WindowInfo["bounds"][]; // from the running app (top-left points)
+}
+
+const fromApp = (w: AppWindow & Partial<WindowInfo["bounds"]>): WindowInfo => ({
+  id: Number(w.id),
+  app: w.app ?? "",
+  title: w.title ?? "",
+  bounds: w.bounds ?? { x: w.x ?? 0, y: w.y ?? 0, width: w.width ?? 0, height: w.height ?? 0 },
+});
+
+async function listWindowsJXA(): Promise<WindowInfo[]> {
+  const { stdout } = await run("osascript", ["-l", "JavaScript", "-e", LIST_WINDOWS_JXA]);
+  return JSON.parse(stdout);
+}
+
+export async function snapshot(): Promise<Snapshot> {
+  requireMac("Listing windows");
+  const fast = await displaysAndPointer({ windows: true });
+  const windows = Array.isArray(fast?.windows) ? fast.windows.map(fromApp) : await listWindowsJXA();
+  // Drop tiny utility windows (menu-bar helpers, tooltips, etc).
+  return { windows: windows.filter((w) => w.bounds.width >= 200 && w.bounds.height >= 150), pointer: fast?.pointer, displays: fast?.displays };
+}
+
 /** On-screen app windows, front-most first. */
 export async function listWindows(): Promise<WindowInfo[]> {
-  requireMac("Listing windows");
-  const { stdout } = await run("osascript", ["-l", "JavaScript", "-e", LIST_WINDOWS_JXA]);
-  const windows: WindowInfo[] = JSON.parse(stdout);
-  // Drop tiny utility windows (menu-bar helpers, tooltips, etc).
-  return windows.filter((w) => w.bounds.width >= 200 && w.bounds.height >= 150);
+  return (await snapshot()).windows;
 }
 
 export function isTerminal(w: WindowInfo) {
@@ -127,10 +166,13 @@ function run() {
 }`;
 
 /** Mouse position in global top-left-origin points (same space as window bounds). */
-export async function pointerLocation(): Promise<{ x: number; y: number }> {
+export async function pointerLocation(snap?: Snapshot): Promise<{ x: number; y: number }> {
   requireMac("Pointer location");
-  const { stdout } = await run("osascript", ["-l", "JavaScript", "-e", POINTER_JXA]);
-  return JSON.parse(stdout);
+  if (snap?.pointer) return snap.pointer;
+  const fast = (await displaysAndPointer())?.pointer; // the running app knows it instantly
+  const p = fast ?? JSON.parse((await run("osascript", ["-l", "JavaScript", "-e", POINTER_JXA])).stdout);
+  if (snap) snap.pointer = p;
+  return p;
 }
 
 function contains(w: WindowInfo, p: { x: number; y: number }) {
@@ -151,8 +193,12 @@ export function pointerInImage(w: WindowInfo, p: { x: number; y: number }, img: 
  * Pick the window the user most likely wants: by id, by app name, the window under the pointer
  * (when underCursor), or else the front-most non-terminal window.
  */
-export async function findWindow(opts: { app?: string; windowId?: number; underCursor?: boolean }): Promise<WindowInfo> {
-  const windows = await listWindows();
+export async function findWindow(
+  opts: { app?: string; windowId?: number; underCursor?: boolean },
+  snap?: Snapshot, // reuse an earlier snapshot()
+): Promise<WindowInfo> {
+  snap ??= await snapshot();
+  const { windows } = snap;
   if (opts.windowId !== undefined) {
     const w = windows.find((w) => w.id === opts.windowId);
     if (!w) throw new Error(`No on-screen window with id ${opts.windowId}. Call list_windows to see current ids.`);
@@ -168,7 +214,7 @@ export async function findWindow(opts: { app?: string; windowId?: number; underC
     return w;
   }
   if (opts.underCursor) {
-    const p = await pointerLocation();
+    const p = await pointerLocation(snap);
     const hit = windows.find((w) => contains(w, p));
     if (hit && !isTerminal(hit)) return hit;
   }
@@ -200,9 +246,10 @@ export async function captureWindow(w: WindowInfo): Promise<Capture> {
   });
 }
 
-export async function captureScreen(display?: number): Promise<Capture> {
+/** `bounds`: display's screen rect when the caller already has it (saves a request to the app). */
+export async function captureScreen(display?: number, bounds?: WindowInfo["bounds"] | null): Promise<Capture> {
   if (isMac) {
-    const b = await displayBounds(display ?? 1);
+    const b = bounds ?? (await displayBounds(display ?? 1));
     const fast = b && (await captureViaApp({ x: b.x, y: b.y, width: b.width, height: b.height }));
     if (fast) return fast;
   }

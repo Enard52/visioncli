@@ -8,15 +8,62 @@ let supportDir = home.appendingPathComponent("Library/Application Support/vision
 let logURL = home.appendingPathComponent("Library/Logs/visioncli.log")
 
 func log(_ message: String) {
-    let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)\n"
+    let line = "\(Log.stamp()) \(message)\n"
     CrashReporter.breadcrumb(String(line.dropLast()))
     guard let data = line.data(using: .utf8) else { return }
-    if let h = try? FileHandle(forWritingTo: logURL) {
-        h.seekToEndOfFile()
-        h.write(data)
-        try? h.close()
-    } else {
-        try? data.write(to: logURL)
+    Log.queue.async { Log.write(data) }
+}
+
+/// Appends log lines from any thread on one serial queue through a single open handle; rolls over to
+/// visioncli.log.1 past 5 MB.
+private enum Log {
+    static let queue = DispatchQueue(label: "visioncli.log", qos: .utility)
+    private static let formatter = ISO8601DateFormatter()
+    private static let formatterLock = NSLock()
+    private static let maxSize: UInt64 = 5 * 1024 * 1024
+    private static var handle: FileHandle?
+    private static var size: UInt64 = 0
+
+    /// ISO8601DateFormatter isn't documented as thread-safe, and log() runs on many threads.
+    static func stamp() -> String {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        return formatter.string(from: Date())
+    }
+
+    /// Only on `queue`.
+    static func write(_ data: Data) {
+        if handle == nil { open() }
+        guard let h = handle else { return }
+        do {
+            size = try h.seekToEnd() // another process (or a deleted file) may have moved the end
+            try h.write(contentsOf: data)
+            size += UInt64(data.count)
+        } catch {
+            try? h.close()
+            handle = nil
+            return
+        }
+        if size > maxSize { rotate() }
+    }
+
+    private static func open() {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: logURL.path) {
+            try? fm.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            fm.createFile(atPath: logURL.path, contents: nil)
+        }
+        handle = try? FileHandle(forWritingTo: logURL)
+        size = (try? handle?.seekToEnd()) ?? 0
+    }
+
+    private static func rotate() {
+        try? handle?.close()
+        handle = nil
+        let old = logURL.appendingPathExtension("1")
+        try? FileManager.default.removeItem(at: old)
+        try? FileManager.default.moveItem(at: logURL, to: old)
+        open()
     }
 }
 
@@ -275,6 +322,18 @@ enum Settings {
         set { d.set(newValue, forKey: "screenshotEveryQuestion") }
     }
 
+    /// Autopilot (off by default): suggestions while you work, only in the apps listed in `autopilotApps`.
+    static var autopilot: Bool {
+        get { d.bool(forKey: "autopilot") }
+        set { d.set(newValue, forKey: "autopilot") }
+    }
+
+    /// Bundle ids Autopilot may read. Every other app is ignored.
+    static var autopilotApps: [String] {
+        get { d.stringArray(forKey: "autopilotApps") ?? [] }
+        set { d.set(newValue, forKey: "autopilotApps") }
+    }
+
     /// Show Claude's session / weekly usage next to the project name in the menu bar.
     static var usageInMenuBar: Bool {
         get { d.object(forKey: "usageInMenuBar") as? Bool ?? true }
@@ -348,5 +407,46 @@ enum LoginItem {
         try FileManager.default.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
         try PropertyListSerialization.data(fromPropertyList: agent, format: .xml, options: 0).write(to: plist)
         log("start at login: \(on)")
+    }
+}
+
+/// Runs `work` and logs it when it took long enough to make the UI stutter (to find what to move off the main thread).
+@discardableResult func timed<T>(_ label: String, _ work: () throws -> T) rethrows -> T {
+    let start = Date()
+    defer {
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        if ms > 80 { log("slow: \(label) \(ms)ms") }
+    }
+    return try work()
+}
+
+/// Logs when the main thread (bubble, mascot, menus) is blocked for more than 250ms, so slow work that belongs on a
+/// background queue shows up in the log.
+enum MainThreadWatchdog {
+    private static let queue = DispatchQueue(label: "dev.visioncli.watchdog", qos: .utility)
+    private static let lock = NSLock()
+    private static var answered = true
+
+    static func start() {
+        queue.async { tick() }
+    }
+
+    private static var isAnswered: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return answered }
+        set { lock.lock(); answered = newValue; lock.unlock() }
+    }
+
+    private static func tick() {
+        let sent = Date()
+        isAnswered = false
+        DispatchQueue.main.async { isAnswered = true }
+        queue.asyncAfter(deadline: .now() + 0.25) {
+            if !isAnswered {
+                // Wait for it to come back, then report how long the main thread was stuck.
+                while !isAnswered { Thread.sleep(forTimeInterval: 0.02) }
+                log("watchdog: main thread blocked \(Int(Date().timeIntervalSince(sent) * 1000))ms")
+            }
+            queue.asyncAfter(deadline: .now() + 0.25) { tick() }
+        }
     }
 }

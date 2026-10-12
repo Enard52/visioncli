@@ -7,6 +7,7 @@
 
 import AppKit
 import AVFoundation
+import Combine
 import Carbon.HIToolbox
 import Speech
 import SwiftUI
@@ -45,7 +46,7 @@ final class HotKeys {
             }
             return noErr
         }, types.count, &types, nil, nil)
-        set(.point, true) // ⌃ / ⌃⌥ are held modifiers (ModifierHold); ⌃Space / ⌃⌥Space only without Accessibility
+        set(.point, true) // ⌥ / ⌥⌘ are held modifiers (ModifierHold); ⌃Space / ⌃⌥Space only without Accessibility
     }
 
     /// Esc, ⌥P, ⌥O and ⌥↩ are only grabbed while the overlay is visible, so they keep working in other apps otherwise.
@@ -61,12 +62,12 @@ final class HotKeys {
     }
 }
 
-/// Hold-to-talk on modifier keys alone, like a dictation app's fn key: hold ⌃ to ask (text only), ⌃⌥ to ask with a
+/// Hold-to-talk on modifier keys alone, like a dictation app's fn key: hold ⌥ to ask (text only), ⌥⌘ to ask with a
 /// screenshot. Needs Accessibility (VisionCLI has it for computer control). Any other key or a click while holding
 /// cancels it, so ⌃C, ⌃-click and friends keep working.
 final class ModifierHold {
     var onChange: (HotKey, Bool) -> Void = { _, _ in }
-    /// ⌥ added while ⌃ is already held: the question becomes a screenshot question.
+    /// ⌘ added while ⌥ is already held: the question becomes a screenshot question.
     var onUpgrade: () -> Void = {}
     /// While listening, a press counts at once (the tap that sends the question).
     var immediate: () -> Bool = { false }
@@ -89,11 +90,11 @@ final class ModifierHold {
         }
         let flags = e.modifierFlags.intersection([.control, .option, .command, .shift])
         if let held = active {
-            if !ModifierHold.controlDown { active = nil; onChange(held, false); return }
-            if held == .talk, flags == [.control, .option] { active = .screen; onUpgrade() }
+            if !ModifierHold.keyDown { active = nil; onChange(held, false); return }
+            if held == .talk, flags == [.option, .command] { active = .screen; onUpgrade() }
             return
         }
-        guard let key: HotKey = flags == [.control] ? .talk : flags == [.control, .option] ? .screen : nil else { cancel(); return }
+        guard let key: HotKey = flags == [.option] ? .talk : flags == [.option, .command] ? .screen : nil else { cancel(); return }
         candidate = key
         pending?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -112,9 +113,9 @@ final class ModifierHold {
         candidate = nil
     }
 
-    /// The physical Control keys (left or right), unaffected by key events VisionCLI posts.
-    static var controlDown: Bool {
-        CGEventSource.keyState(.hidSystemState, key: 59) || CGEventSource.keyState(.hidSystemState, key: 62)
+    /// The physical Option keys (left or right), unaffected by key events VisionCLI posts.
+    static var keyDown: Bool {
+        CGEventSource.keyState(.hidSystemState, key: 58) || CGEventSource.keyState(.hidSystemState, key: 61)
     }
 }
 
@@ -139,10 +140,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     var parakeet: ParakeetEngine?
     let flow = FlowDictation()
     let spotlight = Spotlight()
+    let autopilot = Autopilot()
+    let mascot = Mascot()
     var installer: ModelInstaller!
     let updater = Updater()
     var sigterm: DispatchSourceSignal?
-    let activity = ActivityLog()
+    let activity = BufferedActivity()
     var activityShown = false
     var lastCost: Double?
     var kokoro: KokoroEngine!
@@ -186,6 +189,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     var keyPoll: Timer?
     var followTimer: Timer?
     var hideWork: DispatchWorkItem?
+    // Answers don't follow the pointer, so their size is only re-measured when the bubble's content changes.
+    var stateChanges: AnyCancellable?
+    var layoutDirtyUntil = Date.distantPast
+    var lastLayout = Date.distantPast
 
     override init() {
         currentProject = ""
@@ -194,6 +201,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        MainThreadWatchdog.start()
+        // Writes to a helper that just exited (claude's stdin is written on a background queue) must fail with an
+        // error, not kill the app with SIGPIPE.
+        signal(SIGPIPE, SIG_IGN)
         if CrashReporter.isCrashLooping() {
             log("crash loop detected; not restarting")
             NSApp.activate(ignoringOtherApps: true)
@@ -253,7 +264,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         refreshCandidates()
         AgyModels.refresh(cfg: cfg)
         if Config.isFirstRun { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showWelcome() } }
-        Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.refreshCandidates() }
+        // Candidates are refreshed when the menu opens (menuNeedsUpdate), not on a timer: each refresh runs `ps` and
+        // an `lsof` per running CLI.
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
             log("project candidates: running=\(self.candidates.running.map { "\($0.assistant.binary):\($0.project)" }) windows=\(self.candidates.windows)")
         }
@@ -273,13 +285,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             func round(_ n: Int) {
                 guard n > 0 else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                    do { try self.listener.start(); log("listen-test: started") } catch { log("listen-test: \(error.localizedDescription)"); return }
+                    self.listener.start { error in log("listen-test: \(error.localizedDescription)") }
+                    log("listen-test: started")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        self.listener.stop { text in
+                        self.listener.stop(done: { text in
                             let size = (self.listener.recordingURL.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? Int }) ?? 0
                             log("listen-test: stopped, wav \(size) bytes, heard \"\(text)\"")
                             round(n - 1)
-                        }
+                        })
                     }
                 }
             }
@@ -366,6 +379,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         sigterm = term
 
         flow.onText = { [weak self] text in self?.state.question = text }
+        mascot.level = { [weak self] in self?.state.level ?? 0 }
+        autopilot.claudePath = cfg.claude
+        autopilot.isBusy = { [weak self] in self?.state.phase != .hidden }
+        if Settings.autopilot { autopilot.start() }
         hotkeys = HotKeys()
         HotKeys.handler = { [weak self] key, pressed in self?.hotkey(key, pressed: pressed) }
         if Computer.isTrusted {
@@ -413,6 +430,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         hosting = NSHostingView(rootView: OverlayView(s: state, actions: self))
         hosting.sizingOptions = [.intrinsicContentSize]
         panel.contentView = hosting
+        // SwiftUI lays the change out shortly after it's published: keep measuring for a moment after each one.
+        stateChanges = state.objectWillChange.sink { [weak self] _ in self?.layoutDirtyUntil = Date().addingTimeInterval(0.3) }
     }
 
     var frozen: Bool { state.pinned || state.phase == .approval }
@@ -421,6 +440,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         state.phase = phase
         hideWork?.cancel()
         if phase != .listening { spotlight.hide() }
+        switch phase {
+        case .listening: mascot.show(.listening)
+        case .thinking: mascot.show(.thinking)
+        default: mascot.hide()
+        }
         if phase == .hidden {
             followTimer?.invalidate()
             followTimer = nil
@@ -436,6 +460,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         hotkeys.set(.allow, phase == .approval)
         panel.interactive = frozen
         panel.ignoresMouseEvents = !frozen
+        layoutDirtyUntil = Date().addingTimeInterval(0.3)
+        lastLayout = .distantPast // place it for the new phase right away
         if followTimer == nil {
             followTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.follow() }
             RunLoop.main.add(followTimer!, forMode: .common)
@@ -448,6 +474,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     /// When pinned (or asking approval) it stays put and only resizes.
     func follow() {
         if state.speaking != speaker.isSpeaking { state.speaking = speaker.isSpeaking }
+        // Only the listening/thinking loader rides the pointer (every frame). Measuring an answer (markdown, diagrams)
+        // is the expensive part: do it when its content changed (at most 20 times a second while it streams), else
+        // twice a second so it still moves to the screen the pointer is on.
+        if frozen || !(state.phase == .listening || state.phase == .thinking) {
+            let now = Date(), since = now.timeIntervalSince(lastLayout)
+            guard (now < layoutDirtyUntil && since >= 0.05) || since >= 0.5 else { return }
+            lastLayout = now
+        }
         let size = hosting.fittingSize
         guard size.width > 2 else { return }
         if frozen {
@@ -533,39 +567,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         region = nil
         withScreen = point || screen || Settings.screenshotEveryQuestion
         let external = Settings.sttEngine == "external" // Wispr Flow listens instead of our mic (see FlowDictation)
-        if !external { do {
-            try listener.start()
-        } catch {
+        // One look at the window list for this press: it decides the project, the spotlight and the screenshot.
+        let windows = timed("Screen.windows") { Screen.windows() }
+        let window = Screen.windowUnderPointer(in: windows)
+        // The bubble and mascot show at once; the microphone opens on the listener's audio queue meanwhile.
+        timed("set(.listening)") { set(.listening) }
+        pressedAt = Date()
+        let started = pressedAt
+        listener.start { [weak self] error in
+            guard let self else { return }
+            if external {
+                // Flow only hands over its text when you let go, so Apple's on-device recognizer runs alongside it for
+                // the live text near the pointer (and as a fallback if Flow returns nothing).
+                log("listener (live preview for Flow) failed: \(error)")
+                return
+            }
+            // Still this press (listening, or already let go and waiting for the transcript).
+            guard self.pressedAt == started, self.state.phase == .listening || self.state.phase == .thinking else { return }
             log("listener failed: \(error)")
-            state.question = "Voice"
+            self.keyPoll?.invalidate()
+            self.keyPoll = nil
+            if self.selector.isActive { self.selector.cancel() }
+            self.state.question = "Voice"
             // Only blame permissions when macOS actually denied them.
             let micDenied = AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
             let speechDenied = SFSpeechRecognizer.authorizationStatus() != .authorized
             if micDenied || speechDenied {
-                flash("VisionCLI needs \([micDenied ? "Microphone" : nil, speechDenied ? "Speech Recognition" : nil].compactMap { $0 }.joined(separator: " and ")) access: System Settings → Privacy & Security.", seconds: 10)
+                self.flash("VisionCLI needs \([micDenied ? "Microphone" : nil, speechDenied ? "Speech Recognition" : nil].compactMap { $0 }.joined(separator: " and ")) access: System Settings → Privacy & Security.", seconds: 10)
             } else {
-                flash("Couldn't start the microphone (\(error.localizedDescription)). Try again, or pick another mic in 👁 → Microphone.", seconds: 10)
+                self.flash("Couldn't start the microphone (\(error.localizedDescription)). Try again, or pick another mic in 👁 → Microphone.", seconds: 10)
             }
-            return
-        } }
-        set(.listening)
-        pressedAt = Date()
-        warmQuick()
+        }
+        timed("warmQuick") { warmQuick() }
         // Screenshot questions: dim everything but the window that will be captured (point mode has its own dimming).
-        if withScreen && !point { spotlight.show() }
+        if withScreen && !point { spotlight.show(window: window) }
 
         // Work out the project now and warm up its Claude session while the user is still talking.
-        let window = Screen.windowUnderPointer()
         terminalContext = nil
         existingClaude = nil
         if let pinned = Settings.pinnedProject { currentProject = pinned }
-        else if let raw = Screen.rawWindowUnderPointer(), raw.isTerminal {
+        else if let raw = Screen.rawWindowUnderPointer(in: windows), raw.isTerminal {
             // Pointing at a terminal: use that tab's folder, and its claude session if one is running there.
             let app = raw.app
             DispatchQueue.global().async {
                 let ctx = TerminalProbe.probe(app: app)
                 DispatchQueue.main.async {
-                    guard let ctx, self.state.phase == .listening || self.state.phase == .thinking else { return }
+                    guard let ctx, self.pressedAt == started, self.state.phase == .listening || self.state.phase == .thinking else { return }
                     self.terminalContext = ctx
                     self.currentProject = ctx.project
                     self.state.project = (ctx.project as NSString).lastPathComponent
@@ -573,12 +620,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 }
             }
         }
-        if Settings.pinnedProject == nil { currentProject = projects.project(for: window) ?? currentProject }
+        if Settings.pinnedProject == nil { currentProject = timed("project(for:)") { projects.project(for: window) } ?? currentProject }
         if Settings.terminalMode {
             let project = currentProject
             DispatchQueue.global().async {
+                // Also remembered by TerminalProbe, so sending the question moments later doesn't scan again.
                 let found = TerminalProbe.find(Settings.assistant, forProject: project)
-                DispatchQueue.main.async { self.existingClaude = found.map { (project, $0) } }
+                DispatchQueue.main.async { if self.pressedAt == started { self.existingClaude = found.map { (project, $0) } } }
             }
         }
         state.project = (currentProject as NSString).lastPathComponent
@@ -592,7 +640,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
 
         if external {
             state.status = "Listening with Wispr Flow…"
-            flow.begin()
+            timed("flow.begin") { flow.begin() }
         }
 
         if point {
@@ -613,12 +661,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         keyPoll?.invalidate()
         keyPoll = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { [weak self] _ in
             let space = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(kVK_Space))
-            // ⌥⇧Space holds Space and Option; ⌃ / ⌃⌥ are held on their own (⌃Space without Accessibility).
-            let held = point ? space && NSEvent.modifierFlags.contains(.option) : ModifierHold.controlDown
+            // ⌥⇧Space holds Space and Option; ⌥ / ⌥⌘ are held on their own (⌃Space without Accessibility).
+            let held = point ? space && NSEvent.modifierFlags.contains(.option) : ModifierHold.keyDown
             if !held { self?.keysReleased() }
         }
         RunLoop.main.add(keyPoll!, forMode: .common)
-        let started = pressedAt
         DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak self] in
             guard let self, self.state.phase == .listening, self.pressedAt == started else { return }
             self.finishListening()
@@ -639,7 +686,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         if selector.isActive && region == nil { return }
         if Date().timeIntervalSince(pressedAt) < 0.35 {
             // Quick tap: keep listening until the next tap.
-            if state.question.isEmpty { state.status = "Listening… tap ⌃ to send" }
+            if state.question.isEmpty { state.status = "Listening… tap ⌥ to send" }
             return
         }
         finishListening()
@@ -653,14 +700,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             if selector.isActive { selector.cancel() }
             set(.thinking)
             state.status = "Wispr Flow is transcribing…"
+            var preview = state.question.trimmingCharacters(in: .whitespacesAndNewlines)
+            listener.stop(done: { final in if !final.isEmpty { preview = final } })
             flow.end { [weak self] text in
                 guard let self, self.state.phase == .thinking else { return }
-                if text.isEmpty {
+                if !text.isEmpty { log("transcript: apple=\"\(preview)\" flow=\"\(text)\"") }
+                let best = text.isEmpty ? preview : text
+                if best.isEmpty {
                     self.flash("Wispr Flow didn't type anything. Make sure Flow is running and its push-to-talk key is fn.", seconds: 8)
                     return
                 }
-                self.state.question = text
-                self.questionReady(text)
+                if text.isEmpty { log("flow: no text, using the live preview \"\(preview)\"") }
+                self.state.question = best
+                self.questionReady(best)
             }
             return
         }
@@ -668,31 +720,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         state.status = "Thinking…"
         set(.thinking)
         let heard = state.question
-        listener.stop { [weak self] final in
-            guard let self, self.state.phase == .thinking else { return }
-            let apple = final.isEmpty ? heard.trimmingCharacters(in: .whitespacesAndNewlines) : final
-            // Re-transcribe the recording with local Whisper (better with names and jargon); fall back to Apple's text.
-            if let parakeet = self.parakeet, parakeet.ready, let wav = self.listener.recordingURL {
+        let press = pressedAt
+        // Local Parakeet/Whisper (better with names and jargon) starts on the WAV as soon as the mic is closed, while
+        // Apple's recognizer finishes in parallel; Apple's text is only the fallback when the local engine has nothing.
+        let useLocal = (parakeet?.ready ?? false) || (whisper?.ready ?? false)
+        var localPending = useLocal       // a local transcription may still come
+        var local: (engine: String, text: String?)?
+        var apple: String?                // Apple's final, once it's in
+        var settled = false
+        func decide() {
+            guard !settled, state.phase == .thinking, pressedAt == press, !localPending else { return }
+            if let local, let text = local.text, !text.isEmpty {
+                settled = true
+                listener.finishNow() // Apple's late final mustn't replace the question in the bubble
+                log("transcript: apple=\"\(apple ?? heard.trimmingCharacters(in: .whitespacesAndNewlines))\" \(local.engine)=\"\(text)\"")
+                questionReady(text)
+                return
+            }
+            guard let apple else { return } // the local engine had nothing: wait for Apple's final
+            settled = true
+            if let local { log("transcript: apple=\"\(apple)\" \(local.engine)=\"\(local.text ?? "nil")\"") } else { log("transcript: \(apple)") }
+            questionReady(apple)
+        }
+        listener.stop(onRecording: { [weak self] wav in
+            guard let self, useLocal else { return }
+            guard let wav, self.state.phase == .thinking, self.pressedAt == press else { localPending = false; decide(); return }
+            if let parakeet = self.parakeet, parakeet.ready {
                 self.state.status = "Transcribing…"
-                parakeet.transcribe(wav, vocabulary: self.vocabularyWords()) { [weak self] text in
-                    guard let self, self.state.phase == .thinking else { return }
-                    let best = (text?.isEmpty == false) ? text! : apple
-                    log("transcript: apple=\"\(apple)\" parakeet=\"\(text ?? "nil")\"")
-                    self.questionReady(best)
+                parakeet.transcribe(wav, vocabulary: self.vocabularyWords()) { text in
+                    local = ("parakeet", text)
+                    localPending = false
+                    decide()
                 }
-            } else if let whisper = self.whisper, whisper.ready, let wav = self.listener.recordingURL {
+            } else if let whisper = self.whisper, whisper.ready {
                 self.state.status = "Transcribing…"
-                whisper.transcribe(wav, prompt: self.vocabularyPrompt()) { [weak self] text in
-                    guard let self, self.state.phase == .thinking else { return }
-                    let best = (text?.isEmpty == false) ? text! : apple
-                    log("transcript: apple=\"\(apple)\" whisper=\"\(text ?? "nil")\"")
-                    self.questionReady(best)
+                whisper.transcribe(wav, prompt: self.vocabularyPrompt()) { text in
+                    local = ("whisper", text)
+                    localPending = false
+                    decide()
                 }
             } else {
-                log("transcript: \(apple)")
-                self.questionReady(apple)
+                localPending = false
+                decide()
             }
-        }
+        }, done: { final in
+            apple = final.isEmpty ? heard.trimmingCharacters(in: .whitespacesAndNewlines) : final
+            decide()
+        })
     }
 
     func questionReady(_ text: String) {
@@ -703,13 +777,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             if let issue = listener.lastIssue {
                 flash(issue + (whisper == nil ? " Or install Whisper in 👁 → Voice & Audio → Speech Recognition." : ""), seconds: 12)
             } else {
-                flash("Didn't catch that. Hold ⌃ while you speak.")
+                flash("Didn't catch that. Hold ⌥ while you speak.")
             }
             return
         }
         state.question = text
         state.status = withScreen ? "Looking at your screen…" : "Thinking…"
-        guard Settings.quickCommands else { captureAndAsk(text); return }
+        guard Settings.quickCommands, Self.looksLikeQuickCommand(text) else { captureAndAsk(text); return }
         // Jev first (fast path for simple browser commands); Claude if it isn't a confident quick action.
         let started = Date()
         runQuick(text, timeout: 3) { [weak self] result in
@@ -727,6 +801,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
     }
 
+    /// Quick (Jev) commands are short browser actions: "open github", "click sign in", "scroll down". Checking that
+    /// locally skips a ~1s classifier round trip for everything else, which goes straight to the assistant.
+    static func looksLikeQuickCommand(_ text: String) -> Bool {
+        var t = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        if text.trimmingCharacters(in: .whitespaces).hasSuffix("?") { return false }
+        for prefix in ["hey ", "ok ", "okay ", "please ", "can you ", "could you ", "would you ", "just ", "now "] where t.hasPrefix(prefix) {
+            t = String(t.dropFirst(prefix.count))
+        }
+        let words = t.split(separator: " ")
+        guard let first = words.first, words.count <= 12 else { return false }
+        let verbs: Set<Substring> = ["open", "go", "search", "google", "find", "click", "press", "tap", "scroll", "type",
+                                     "close", "switch", "reload", "refresh", "back", "forward", "play", "pause", "show",
+                                     "take", "visit", "launch", "navigate", "select", "choose", "fill", "enter", "submit",
+                                     "zoom", "new", "look", "watch", "download", "sign", "log"]
+        return verbs.contains(first)
+    }
+
     var quickProc: Process?
 
     /// `visioncli quick <text>` with a hard timeout (killed if slow, so it can't act after Claude took over).
@@ -738,6 +829,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         p.arguments = [server, "quick", text]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = cfg.path
+        env["VISIONCLI_FRONT_APP"] = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
         p.environment = env
         let out = Pipe()
         p.standardOutput = out
@@ -979,6 +1071,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         let saved = history.save(shots)
         currentShots = saved
         writeShotMap(saved)
+        history.waitForWrites() // screenshots are written in the background; the assistant reads them next
         controlStopped = nil // a new question re-enables computer control after an Esc stop
         currentWindow = saved.last?.window ?? window ?? currentWindow
         let noShot = "No screenshot attached (to save tokens it's only sent when asked for)" + (window.map { "; the mouse is over \($0.label)" } ?? "")
@@ -1006,26 +1099,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                     t.claudeCwd = ctx.cwd
                     t.attach(itermSession: tab, sessionId: ctx.sessionId)
                 }
-                if t.command(cmd) {
-                    state.raw = "Sent \(cmd) to \(assistant.name)."
-                    set(.done)
-                    scheduleHide(after: 3)
-                } else {
-                    finish(result: nil, error: "No \(assistant.name) is running in a terminal for this project, so \(cmd) wasn't sent.")
+                let asked = state.question
+                t.command(cmd) { [weak self] sent in
+                    // Esc or a new question while it was being sent: leave the bubble alone.
+                    guard let self, self.state.phase == .thinking, self.state.question == asked else { return }
+                    if sent {
+                        self.state.raw = "Sent \(cmd) to \(assistant.name)."
+                        self.set(.done)
+                        self.scheduleHide(after: 3)
+                    } else {
+                        self.finish(result: nil, error: "No \(assistant.name) is running in a terminal for this project, so \(cmd) wasn't sent.")
+                    }
                 }
                 return
             }
             let gemini = assistant == .gemini
             let briefInstructions = assistant != .claude // no system prompt in gemini/agy interactive mode
             let paths = gemini ? geminiAttachable(saved) : saved.compactMap { $0.file?.path }
-            var parts = ["Project: \(currentProject)."]
+            // A short tag the user sees in their terminal: the CLI already runs in the project, and VisionCLI's MCP
+            // instructions tell it when to `look`, so only what it can't know goes here.
+            var parts: [String] = []
             for (i, shot) in saved.enumerated() {
-                var p = "Screenshot \(i + 1): \(shot.label), \(Int(shot.pixelSize.width))x\(Int(shot.pixelSize.height)) px"
-                if let pt = shot.pointer { p += ", mouse pointer at (\(Int(pt.x)), \(Int(pt.y)))" }
-                if i < paths.count { p += gemini ? ", @\(paths[i]) " : ", file \(paths[i])" }
-                parts.append(p + ".")
+                var p = "screenshot \(i < paths.count ? (gemini ? "@\(paths[i]) " : paths[i]) : shot.label)"
+                if let pt = shot.pointer { p += " (mouse at \(Int(pt.x)),\(Int(pt.y)))" }
+                parts.append(p)
             }
-            if saved.isEmpty { parts.append(noShot) }
+            // Only when the mouse really is over another app: over the terminal itself there's nothing to point at
+            // (the fallback to the front-most other window is for screenshots, not for this hint).
+            if saved.isEmpty, let under = Screen.rawWindowUnderPointer(), !under.isTerminal { parts.append("mouse over \(under.label)") }
             // Gemini can't take a system prompt in its interactive mode, so the voice instructions ride along.
             if briefInstructions { parts.append(assistant == .antigravity && !saved.isEmpty ? "View the screenshot file(s) first. " : ""); parts.append("Asked out loud: the reply is also shown in a bubble on screen and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line; for flows or relationships you may add one small ```mermaid diagram; put any [[box/arrow/circle/step]] drawing markers on the last line.") }
             let t = terminal(for: currentProject, assistant: assistant)
@@ -1043,7 +1144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             state.raw = ""
             state.status = "Sending to \(assistant.name) in the terminal…"
             if state.phase != .thinking { set(.thinking) }
-            t.ask("\(question) [Voice question. \(parts.joined(separator: " "))]")
+            t.ask("\(question) [voice\(parts.isEmpty ? "" : " · ")\(parts.joined(separator: " · "))]")
             return
         }
         currentTerminal = nil
@@ -1241,7 +1342,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             item("Choose Folder…", #selector(chooseProjectFolder), in: m)
         }
         usageItems(in: menu, item: item)
-        item(Settings.screenshotEveryQuestion ? "Hold ⌃ to ask · ⌥⇧Space to point at an area" : "Hold ⌃ to ask (text) · ⌃⌥ with a screenshot · ⌥⇧Space to point at an area", nil, in: menu)
+        submenu(Settings.autopilot ? "Autopilot: On (\(autopilot.calls)/\(Autopilot.hourlyCap) checks this hour)" : "Autopilot: Off", in: menu) { m in
+            item(Settings.autopilot ? "Turn Off" : "Turn On…", #selector(toggleAutopilot), in: m)
+            item("Check Now", Settings.autopilot ? #selector(autopilotCheckNow) : nil, in: m)
+            m.addItem(.separator())
+            item("Watch only these apps:", nil, in: m)
+            let mine = Bundle.main.bundleIdentifier
+            var apps: [(String, String)] = NSWorkspace.shared.runningApplications.compactMap { a in
+                guard a.activationPolicy == .regular, let id = a.bundleIdentifier, id != mine,
+                      !Autopilot.skipBundles.contains(id), !terminalApps.contains((a.localizedName ?? "").lowercased()) else { return nil }
+                return (a.localizedName ?? id, id)
+            }
+            for id in Settings.autopilotApps where !apps.contains(where: { $0.1 == id }) { apps.append((id, id)) }
+            var seenIds = Set<String>()
+            apps = apps.filter { seenIds.insert($0.1).inserted }.sorted { $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending }
+            for (name, id) in apps {
+                item(name, #selector(toggleAutopilotApp(_:)), in: m, on: Settings.autopilotApps.contains(id), value: id)
+            }
+        }
+        item(Settings.screenshotEveryQuestion ? "Hold ⌥ to ask · ⌥⇧Space to point at an area" : "Hold ⌥ to ask (text) · ⌥⌘ with a screenshot · ⌥⇧Space to point at an area", nil, in: menu)
         if let status = updater.status { item("⏳ " + status, nil, in: menu) }
         else if let release = updater.available { item("⬆︎ Install Update (\(release.version))…", #selector(installUpdate), in: menu) }
         if !Screen.hasPermission { item("⚠︎ Grant Screen Recording…", #selector(openScreenSettings), in: menu) }
@@ -1377,7 +1496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         menu.addItem(.separator())
 
         submenu("Settings", in: menu) { m in
-            item("Set Up Claude Code (MCP tools)…", #selector(setupClaudeCode), in: m)
+            item("Set Up Claude Code (MCP tools)…", #selector(setupClaudeCode as () -> Void), in: m)
             item("Set Up Antigravity CLI (MCP tools)…", cfg.agy == nil ? nil : #selector(setupAgy), in: m)
             item("Start at Login", #selector(toggleLogin), in: m, on: LoginItem.isEnabled)
             item("Fix Permissions…", #selector(fixPermissions), in: m)
@@ -1492,11 +1611,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     /// Refresh the Project menu's candidates in the background (running claude/gemini sessions, open editor windows).
+    /// The process scan and the window list are taken off the main thread; mapping window titles to projects uses
+    /// the resolver's index, which belongs to main.
     func refreshCandidates() {
         DispatchQueue.global(qos: .utility).async {
             let running = TerminalProbe.runningProjects()
+            let windows = Screen.windows().filter { !$0.isTerminal }
             DispatchQueue.main.async {
-                self.candidates = (running, self.projects.openWindowProjects())
+                var open: [String] = []
+                for w in windows {
+                    if let p = self.projects.project(for: w), !open.contains(p) { open.append(p) }
+                }
+                self.candidates = (running, open)
             }
         }
     }
@@ -1604,17 +1730,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     /// Register the bundled MCP server with Claude Code for all projects (`claude mcp add --scope user`).
-    @objc func setupClaudeCode() {
+    /// `then` runs after the result alert is closed (the `claude mcp` commands run in the background first).
+    @objc func setupClaudeCode() { setupClaudeCode(then: {}) }
+
+    func setupClaudeCode(then: @escaping () -> Void) {
         let alert = NSAlert()
         if let node = cfg.node, let server = cfg.server, FileManager.default.isExecutableFile(atPath: cfg.claude) {
             var env = ProcessInfo.processInfo.environment
             env["PATH"] = cfg.path
-            shell(cfg.claude, ["mcp", "remove", "visioncli", "-s", "user"], env: env)
-            let (status, out, err) = shell(cfg.claude, ["mcp", "add", "visioncli", "--scope", "user", "--", node, server], env: env)
-            alert.messageText = status == 0 ? "Claude Code is set up" : "Couldn't set up Claude Code"
-            alert.informativeText = status == 0
-                ? "visioncli's tools (look at screen, browser, database…) are now available in every Claude Code project. Restart any running `claude` sessions to load them.\n\nFor screenshots when typing in Claude Code, give your terminal app Screen Recording access too (System Settings → Privacy & Security)."
-                : (err.isEmpty ? out : err)
+            let claude = cfg.claude
+            DispatchQueue.global(qos: .userInitiated).async {
+                shell(claude, ["mcp", "remove", "visioncli", "-s", "user"], env: env)
+                let (status, out, err) = shell(claude, ["mcp", "add", "visioncli", "--scope", "user", "--", node, server], env: env)
+                DispatchQueue.main.async {
+                    alert.messageText = status == 0 ? "Claude Code is set up" : "Couldn't set up Claude Code"
+                    alert.informativeText = status == 0
+                        ? "visioncli's tools (look at screen, browser, database…) are now available in every Claude Code project. Restart any running `claude` sessions to load them.\n\nFor screenshots when typing in Claude Code, give your terminal app Screen Recording access too (System Settings → Privacy & Security)."
+                        : (err.isEmpty ? out : err)
+                    NSApp.activate(ignoringOtherApps: true)
+                    alert.runModal()
+                    then()
+                }
+            }
+            return
         } else {
             alert.messageText = "Missing requirements"
             alert.informativeText = [
@@ -1625,6 +1763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
+        then()
     }
 
     @objc func chooseEffort(_ sender: NSMenuItem) {
@@ -1672,12 +1811,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         if let gemini = cfg.gemini, let node = cfg.node, let server = cfg.server {
             var env = ProcessInfo.processInfo.environment
             env["PATH"] = cfg.path
-            shell(gemini, ["mcp", "remove", "-s", "user", "visioncli"], env: env)
-            let (status, out, err) = shell(gemini, ["mcp", "add", "-s", "user", "--trust", "visioncli", node, server], env: env)
-            alert.messageText = status == 0 ? "Gemini CLI is set up" : "Couldn't set up Gemini CLI"
-            alert.informativeText = status == 0
-                ? "visioncli's tools are now available in every Gemini CLI project. Restart any running `gemini` sessions. To answer voice questions with Gemini, choose 👁 → Assistant → Gemini CLI.\n\nFor screenshots when typing in Gemini CLI, give your terminal app Screen Recording access too."
-                : (err.isEmpty ? out : err)
+            DispatchQueue.global(qos: .userInitiated).async {
+                shell(gemini, ["mcp", "remove", "-s", "user", "visioncli"], env: env)
+                let (status, out, err) = shell(gemini, ["mcp", "add", "-s", "user", "--trust", "visioncli", node, server], env: env)
+                DispatchQueue.main.async {
+                    alert.messageText = status == 0 ? "Gemini CLI is set up" : "Couldn't set up Gemini CLI"
+                    alert.informativeText = status == 0
+                        ? "visioncli's tools are now available in every Gemini CLI project. Restart any running `gemini` sessions. To answer voice questions with Gemini, choose 👁 → Assistant → Gemini CLI.\n\nFor screenshots when typing in Gemini CLI, give your terminal app Screen Recording access too."
+                        : (err.isEmpty ? out : err)
+                    NSApp.activate(ignoringOtherApps: true)
+                    alert.runModal()
+                }
+            }
+            return
         } else {
             alert.messageText = "Gemini CLI wasn't found"
             alert.informativeText = "Install it with `npm install -g @google/gemini-cli`, sign in once by running `gemini`, then choose Settings → Set Up Gemini CLI again."
@@ -1694,8 +1840,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         alert.informativeText = """
         Ask Claude about anything on your screen, by voice.
 
-        • Hold ⌃, ask, let go: the answer appears in the top-right corner.
-        • Hold ⌃ ⌥ to send a screenshot of the window too.
+        • Hold ⌥, ask, let go: the answer appears in the top-right corner.
+        • Hold ⌥ ⌘ to send a screenshot of the window too.
         • Hold ⌥ ⇧ Space to drag a box around what you mean.
         • The 👁 menu bar icon has projects, voices, models and settings.
         • Optional: 👁 → Voice & Audio can download Whisper (more accurate transcription) and natural Kokoro voices.
@@ -1709,9 +1855,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         alert.addButton(withTitle: "Set Up \([hasClaude ? "Claude Code" : nil, hasAgy ? "Antigravity" : nil].compactMap { $0 }.joined(separator: " + ").ifEmpty("Claude Code"))")
         alert.addButton(withTitle: "Later")
         if alert.runModal() == .alertFirstButtonReturn {
-            if hasClaude || !hasAgy { setupClaudeCode() }
-            if hasAgy { setupAgy() }
             if !hasClaude && hasAgy { Settings.assistant = .antigravity }
+            // One alert after the other, as before: Antigravity's once Claude Code's result is closed.
+            if hasClaude || !hasAgy { setupClaudeCode { if hasAgy { self.setupAgy() } } }
+            else if hasAgy { setupAgy() }
         }
     }
 
@@ -1764,9 +1911,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     func propagate(_ cmd: String) {
         guard Settings.terminalMode, Settings.assistant == .claude else { return }
         let t = terminal(for: currentProject, assistant: .claude)
-        DispatchQueue.global(qos: .userInitiated).async {
-            let ok = t.command(cmd)
-            DispatchQueue.main.async { if !ok { log("terminal: no running claude for \(self.currentProject); \(cmd) applies when one starts") } }
+        t.command(cmd) { ok in
+            if !ok { log("terminal: no running claude for \(t.project); \(cmd) applies when one starts") }
         }
     }
 
@@ -1774,10 +1920,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     func syncModelFromTerminal() {
         guard Settings.terminalMode, Settings.assistant == .claude, cfg.model == nil else { return }
         let t = terminal(for: currentProject, assistant: .claude)
-        DispatchQueue.global(qos: .utility).async {
-            t.findRunning()
-            guard let used = t.lastModel else { return }
-            DispatchQueue.main.async {
+        // Probe and transcript read run in the background; the session's state only changes on main.
+        t.findRunning {
+            t.lastModel { used in
+                guard let used else { return }
                 let family = ["fable", "opus", "sonnet", "haiku"].first { used.contains($0) }
                 let current = Settings.model.replacingOccurrences(of: "[1m]", with: "")
                 if let family, current != family, !(current == "opusplan" && (family == "opus" || family == "sonnet")) {
@@ -1795,6 +1941,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     @objc func toggleAutoActivity() { Settings.autoActivity.toggle() }
     @objc func toggleQuick() { Settings.quickCommands.toggle() }
     @objc func toggleScreenshotEvery() { Settings.screenshotEveryQuestion.toggle() }
+
+    @objc func toggleAutopilot() {
+        if Settings.autopilot {
+            Settings.autopilot = false
+            autopilot.stop()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Turn on Autopilot?"
+        alert.informativeText = """
+        While you work in the apps you tick under Autopilot, VisionCLI reads the front window's text (a small screenshot \
+        if there's almost no text) and sends it to Claude Haiku for a suggestion: about 1k tokens a look, at most \
+        \(Autopilot.hourlyCap) an hour. Password fields and password managers are skipped; other apps are never read.
+
+        In chat apps it can draft a reply. Nothing is ever sent: you choose Put in reply box or Copy, and press Enter yourself.
+        """
+        alert.addButton(withTitle: "Turn On")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Settings.autopilot = true
+        autopilot.start()
+        if Settings.autopilotApps.isEmpty { log("autopilot: on, but no apps picked yet") }
+    }
+
+    @objc func autopilotCheckNow() { autopilot.checkNow() }
+
+    @objc func toggleAutopilotApp(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        var apps = Settings.autopilotApps
+        if let i = apps.firstIndex(of: id) { apps.remove(at: i) } else { apps.append(id) }
+        Settings.autopilotApps = apps
+    }
 
 
     /// The node browser layer checks this file before animating its ghost cursor.
@@ -1906,6 +2085,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         log("quit")
         NSApp.terminate(nil)
     }
+}
+
+/// The activity feed with streamed answer text batched: ActivityLog opens the log file for every write, and answers
+/// stream a token at a time. Text is written a few times a second, and always before any other entry so the feed
+/// stays in order. Main thread only.
+final class BufferedActivity {
+    private let feed = ActivityLog()
+    private var pending = ""
+
+    func text(_ delta: String) {
+        if pending.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.flush() }
+        }
+        pending += delta
+    }
+
+    private func flush() {
+        guard !pending.isEmpty else { return }
+        let text = pending
+        pending = ""
+        feed.text(text)
+    }
+
+    func question(_ text: String, project: String, shots: [Shot]) { flush(); feed.question(text, project: project, shots: shots) }
+    func tool(_ name: String, _ input: [String: Any]) { flush(); feed.tool(name, input) }
+    func toolResult(_ text: String, isError: Bool, tool: String?) { flush(); feed.toolResult(text, isError: isError, tool: tool) }
+    func permission(_ title: String, allowed: Bool?) { flush(); feed.permission(title, allowed: allowed) }
+    func done(cost: Double?) { flush(); feed.done(cost: cost) }
+    func error(_ message: String) { flush(); feed.error(message) }
+    func note(_ message: String) { flush(); feed.note(message) }
 }
 
 let app = NSApplication.shared

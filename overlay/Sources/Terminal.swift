@@ -8,12 +8,18 @@ final class TerminalSession {
     let assistant: Assistant
     private let cfg: Config
     private(set) var sessionId: String
+    // Threading: everything here belongs to the main thread, except `offset`/`buffer` (owned by `reader`, which reads
+    // and parses the transcript). Process scans and AppleScript run on `work`, with results applied on main.
     private var termId: String?          // iTerm session unique id, or Terminal tab reference
-    private var usesITerm: Bool
-    private var offset: UInt64 = 0
-    private var buffer = Data()
+    private let usesITerm: Bool
+    private var offset: UInt64 = 0       // reader queue only
+    private var buffer = Data()          // reader queue only
     private var timer: Timer?
-    private var awaiting: String?        // marker of the voice question we're waiting on
+    private var reading = false          // a transcript read is in flight on the reader queue
+    /// Marker of the voice question we're waiting on. The transcript is only followed while there is one.
+    private var awaiting: String? {
+        didSet { if awaiting == nil { stopWatching() } }
+    }
     private var seenQuestion = false
     private var finalText = ""
     private var lastTool: String?
@@ -28,7 +34,7 @@ final class TerminalSession {
 
     static let scriptsDir = home.appendingPathComponent("Library/Caches/visioncli") // no spaces: iTerm runs the path as a command
     static let terminalPrompt = """
-    Some messages end with a "[Voice question …]" block: the user asked those out loud while looking at their screen, and your reply is also shown in a small bubble above their mouse pointer and may be read aloud. For those, first Read the screenshot file(s) listed in the block (the pointer position is given in image pixels; "this/here/that" means what's under the pointer), then follow the rest of these instructions.
+    Some messages end with a "[voice …]" tag: the user asked those out loud while looking at their screen, and your reply is also shown in a small bubble above their mouse pointer and may be read aloud. For those, first Read any screenshot file listed in the tag (the mouse position is in image pixels; "this/here/that" means what's under the pointer); with no screenshot, the tag says which window the mouse is over: call the visioncli `look` tool only if answering needs the screen. Then follow the rest of these instructions.
     """ + "\n" + voiceSystemPrompt
 
     init(project: String, cfg: Config, assistant: Assistant) {
@@ -77,45 +83,77 @@ final class TerminalSession {
         if let sessionId, sessionId != self.sessionId {
             self.sessionId = sessionId
             UserDefaults.standard.set(sessionId, forKey: defaultsKey)
-            offset = transcriptURL.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? UInt64 } ?? 0
-            buffer = Data()
+            follow(transcriptURL, fromStart: false)
         }
         log("terminal: attached to your \(assistant.binary) in iTerm (session \(self.sessionId)) for \(project)")
     }
 
     /// Start a fresh conversation next time (menu: New Conversation).
     func reset() {
+        awaiting = nil // the old conversation's answer won't be followed any more
         sessionId = UUID().uuidString.lowercased()
         UserDefaults.standard.set(sessionId, forKey: defaultsKey)
         termId = nil
-        offset = 0
+        follow(nil, fromStart: true)
     }
 
     // MARK: Asking
 
     /// Type a slash command (/model haiku, /effort high…) into the running CLI as-is: no voice context, no waiting
-    /// for an answer. Uses the attached tab, else one the user runs for this project. False if none is running.
-    @discardableResult
-    func command(_ cmd: String) -> Bool {
-        if let id = termId, send(cmd, to: id) { log("terminal: sent \(cmd) to \(assistant.binary) for \(project)"); return true }
-        if let found = TerminalProbe.find(assistant, forProject: project), let tab = found.itermSession {
-            claudeCwd = found.cwd
-            attach(itermSession: tab, sessionId: found.sessionId)
-            if send(cmd, to: tab) { log("terminal: sent \(cmd) to \(assistant.binary) for \(project)"); return true }
+    /// for an answer. Uses the attached tab, else one the user runs for this project. Call on main; `done` gets false
+    /// (on main) if none is running.
+    func command(_ cmd: String, done: @escaping (Bool) -> Void = { _ in }) {
+        let ours = termId
+        TerminalSession.work.async { [weak self] in
+            guard let self else { return }
+            if let id = ours, self.send(cmd, to: id) {
+                log("terminal: sent \(cmd) to \(self.assistant.binary) for \(self.project)")
+                DispatchQueue.main.async { done(true) }
+                return
+            }
+            let found = TerminalProbe.find(self.assistant, forProject: self.project)
+            DispatchQueue.main.async {
+                guard let found, let tab = found.itermSession else { done(false); return }
+                self.claudeCwd = found.cwd
+                self.attach(itermSession: tab, sessionId: found.sessionId)
+                TerminalSession.work.async {
+                    let ok = self.send(cmd, to: tab)
+                    if ok { log("terminal: sent \(cmd) to \(self.assistant.binary) for \(self.project)") }
+                    DispatchQueue.main.async { done(ok) }
+                }
+            }
         }
-        return false
     }
 
-    /// Attach to the CLI the user runs for this project, if any (without typing anything).
-    func findRunning() {
-        guard termId == nil, let found = TerminalProbe.find(assistant, forProject: project), let tab = found.itermSession else { return }
-        claudeCwd = found.cwd
-        attach(itermSession: tab, sessionId: found.sessionId)
+    /// Attach to the CLI the user runs for this project, if any (without typing anything). Call on main; `then` runs
+    /// on main once that's settled.
+    func findRunning(then: @escaping () -> Void = {}) {
+        guard termId == nil else { then(); return }
+        TerminalSession.work.async { [weak self] in
+            guard let self else { return }
+            let found = TerminalProbe.find(self.assistant, forProject: self.project)
+            DispatchQueue.main.async {
+                if self.termId == nil, let found, let tab = found.itermSession {
+                    self.claudeCwd = found.cwd
+                    self.attach(itermSession: tab, sessionId: found.sessionId)
+                }
+                then()
+            }
+        }
     }
 
-    /// The model the CLI used for its latest reply (e.g. "claude-haiku-5-5"), read from its transcript.
-    var lastModel: String? {
-        guard assistant == .claude, let url = transcriptURL, let h = try? FileHandle(forReadingFrom: url) else { return nil }
+    /// The model the CLI used for its latest reply (e.g. "claude-haiku-5-5"), read from its transcript in the
+    /// background. Call on main; `done` gets it on main.
+    func lastModel(_ done: @escaping (String?) -> Void) {
+        guard assistant == .claude, let url = transcriptURL else { done(nil); return }
+        DispatchQueue.global(qos: .utility).async {
+            let model = TerminalSession.lastModel(in: url)
+            DispatchQueue.main.async { done(model) }
+        }
+    }
+
+    private static func lastModel(in url: URL) -> String? {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? h.close() }
         let size = (try? h.seekToEnd()) ?? 0
         try? h.seek(toOffset: size > 200_000 ? size - 200_000 : 0)
@@ -136,38 +174,86 @@ final class TerminalSession {
         lastTool = nil
         seenToolIds = []
         agyDiscover = assistant == .antigravity
+        skipToEnd()
         startWatching()
-        if let id = termId, send(line, to: id) {
-            log("terminal: typed voice question into \(usesITerm ? "iTerm" : "Terminal") session")
-            return
-        }
-        // No live tab: use one the user already runs for this project before opening a new terminal.
-        if let found = TerminalProbe.find(assistant, forProject: project), let tab = found.itermSession {
-            claudeCwd = found.cwd
-            attach(itermSession: tab, sessionId: found.sessionId)
-            if send(line, to: tab) {
-                log("terminal: typed voice question into your existing \(assistant.binary)")
-                return
-            }
-        }
-        // None running: open one, wait for its prompt, then type.
-        onStatus("Opening \(assistant.name) in the terminal…")
-        guard let id = open() else {
-            awaiting = nil
-            onDone(nil, "Couldn't open a terminal. Allow VisionCLI to control \(usesITerm ? "iTerm" : "Terminal") in System Settings → Privacy & Security → Automation.")
-            return
-        }
-        termId = id
-        waitForPrompt(id, tries: assistant == .antigravity ? 90 : 40) { [weak self] in
+        // The assistant the user already runs for this project wins (the most recently active one), like `claude -c`
+        // in that terminal; then the tab VisionCLI opened; only then a new terminal. Process scans and AppleScript are
+        // slow, so they run on a background queue and the bubble and mascot keep animating. A tab found moments ago
+        // (when the key went down) is reused instead of scanning again.
+        let ours = termId
+        TerminalSession.work.async { [weak self] in
             guard let self else { return }
-            if !self.send(line, to: id) { self.awaiting = nil; self.onDone(nil, "Couldn't type into the terminal session.") }
+            let recent = TerminalProbe.recent(self.assistant, forProject: self.project)
+            let found = recent ?? TerminalProbe.find(self.assistant, forProject: self.project)
+            DispatchQueue.main.async { self.deliver(line, found: found, recent: recent != nil, ours: ours) }
         }
     }
 
+    /// Type the question into the tab that was found (attaching to it first), else the one VisionCLI opened, else open one.
+    private func deliver(_ line: String, found: TerminalContext?, recent: Bool, ours: String?) {
+        // Attach first, so the transcript is followed from before the question lands in it.
+        if let found, let tab = found.itermSession {
+            claudeCwd = found.cwd
+            attach(itermSession: tab, sessionId: found.sessionId)
+        }
+        skipToEnd()
+        TerminalSession.work.async {
+            var target: (id: String, existing: Bool)?
+            if let tab = found?.itermSession, self.send(line, to: tab) { target = (tab, true) }
+            else if recent {
+                // The remembered tab is gone (closed since): look again.
+                TerminalProbe.forget(self.assistant, forProject: self.project)
+                let fresh = TerminalProbe.find(self.assistant, forProject: self.project)
+                DispatchQueue.main.async { self.deliver(line, found: fresh, recent: false, ours: ours) }
+                return
+            }
+            else if let id = ours, self.send(line, to: id) { target = (id, false) }
+            DispatchQueue.main.async {
+                if let target {
+                    self.confirmSubmitted(target.id)
+                    log("terminal: typed voice question into \(target.existing ? "your existing \(self.assistant.binary)" : "\(self.usesITerm ? "iTerm" : "Terminal") session")")
+                } else {
+                    self.openAndAsk(line)
+                }
+            }
+        }
+    }
+
+    /// None running: open one, wait for its prompt, then type.
+    private func openAndAsk(_ line: String) {
+        onStatus("Opening \(assistant.name) in the terminal…")
+        open { [weak self] id in
+            guard let self else { return }
+            guard let id else {
+                self.awaiting = nil
+                self.onDone(nil, "Couldn't open a terminal. Allow VisionCLI to control \(self.usesITerm ? "iTerm" : "Terminal") in System Settings → Privacy & Security → Automation.")
+                return
+            }
+            self.termId = id
+            self.waitForPrompt(id, tries: self.assistant == .antigravity ? 90 : 40) { [weak self] in
+                guard let self else { return }
+                TerminalSession.work.async {
+                    let ok = self.send(line, to: id)
+                    DispatchQueue.main.async {
+                        if ok { self.confirmSubmitted(id) }
+                        else { self.awaiting = nil; self.onDone(nil, "Couldn't type into the terminal session.") }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Serial queue for the slow parts (AppleScript to iTerm, process scans), off the main thread.
+    static let work = DispatchQueue(label: "dev.visioncli.terminal", qos: .userInitiated)
+
     func bringToFront() {
-        guard let id = termId else { _ = open().map { termId = $0 }; return }
+        guard let id = termId else {
+            open { [weak self] id in if let id { self?.termId = id } }
+            return
+        }
+        let script: String
         if usesITerm {
-            _ = applescript("""
+            script = """
             tell application "iTerm2"
               repeat with w in windows
                 repeat with t in tabs of w
@@ -182,20 +268,46 @@ final class TerminalSession {
                 end repeat
               end repeat
             end tell
-            """)
+            """
         } else {
-            _ = applescript("tell application \"Terminal\"\nset frontmost of (first window whose tabs contains \(id)) to true\nactivate\nend tell")
+            script = "tell application \"Terminal\"\nset frontmost of (first window whose tabs contains \(id)) to true\nactivate\nend tell"
         }
+        TerminalSession.work.async { _ = self.applescript(script) }
     }
 
     // MARK: Terminal control
 
-    private func open() -> String? {
+    /// Open a new terminal window running the CLI for this project. Call on main; `done` gets the new session's id
+    /// (nil if the terminal couldn't be opened) on main. The session-folder scan and the AppleScript run on `work`.
+    private func open(_ done: @escaping (String?) -> Void) {
+        claudeCwd = nil
+        let project = self.project, assistant = self.assistant
+        TerminalSession.work.async { [weak self] in
+            // Continue the project's latest conversation (what `claude -c` would pick), not one VisionCLI remembered.
+            let latest = assistant == .claude ? TerminalProbe.newestSession(.claude, cwd: project) : nil
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let latest, latest != self.sessionId {
+                    self.sessionId = latest
+                    UserDefaults.standard.set(latest, forKey: self.defaultsKey)
+                }
+                let (script, url) = self.openScript()
+                self.follow(url, fromStart: false)
+                TerminalSession.work.async {
+                    let id = self.applescript(script)
+                    DispatchQueue.main.async { done(self.usesITerm ? id : id.map { _ in "selected tab of front window" }) }
+                }
+            }
+        }
+    }
+
+    /// Writes the launch script for the current session and returns the AppleScript that opens a window running it,
+    /// and the transcript to follow.
+    private func openScript() -> (String, URL?) {
         let fm = FileManager.default
         try? fm.createDirectory(at: TerminalSession.scriptsDir, withIntermediateDirectories: true)
         let promptFile = TerminalSession.scriptsDir.appendingPathComponent("voice-prompt.txt")
         try? TerminalSession.terminalPrompt.write(to: promptFile, atomically: true, encoding: .utf8)
-        claudeCwd = nil
         let resume = transcriptURL.map { fm.fileExists(atPath: $0.path) } ?? false
         let quote = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
         let command: String
@@ -231,19 +343,48 @@ final class TerminalSession {
         let file = TerminalSession.scriptsDir.appendingPathComponent("\(assistant.binary)-\(stable).sh")
         try? script.write(to: file, atomically: true, encoding: .utf8)
         try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
-        offset = transcriptURL.flatMap { try? fm.attributesOfItem(atPath: $0.path)[.size] as? UInt64 } ?? 0
-        buffer = Data()
         log("terminal: opening \(assistant.binary) (\(resume ? "resume" : "new") \(sessionId)) in \(project)")
         if usesITerm {
-            return applescript("""
+            return ("""
             tell application "iTerm2"
               set w to (create window with default profile command "\(file.path)")
               return unique id of current session of w
             end tell
-            """)
+            """, transcriptURL)
         }
-        return applescript("tell application \"Terminal\"\nset t to do script \"exec \(file.path)\"\nactivate\nreturn t as text\nend tell")
-            .map { _ in "selected tab of front window" }
+        return ("tell application \"Terminal\"\nset t to do script \"exec \(file.path)\"\nactivate\nreturn t as text\nend tell", transcriptURL)
+    }
+
+    /// Claude sometimes takes fast typing for a paste and swallows the Return that follows it. Once the question shows
+    /// up in the transcript it was submitted; until then press Return again (an extra Return on an empty prompt does
+    /// nothing).
+    private func confirmSubmitted(_ id: String, tries: Int = 4) {
+        guard usesITerm else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            guard let self, self.awaiting != nil, !self.seenQuestion, tries > 0 else { return }
+            log("terminal: question not submitted yet, pressing Return again")
+            let script = self.inSession(id, "tell s to write text (character id 13) newline NO")
+            TerminalSession.work.async { _ = self.applescript(script) }
+            self.confirmSubmitted(id, tries: tries - 1)
+        }
+    }
+
+    private func inSession(_ id: String, _ body: String) -> String {
+        """
+        tell application "iTerm2"
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                if unique id of s is "\(id)" then
+                  \(body)
+                  return "ok"
+                end if
+              end repeat
+            end repeat
+          end repeat
+          return "missing"
+        end tell
+        """
     }
 
     /// Type a line into the session; false if the session no longer exists.
@@ -258,7 +399,7 @@ final class TerminalSession {
                     if unique id of s is "\(id)" then
                       -- Type the text, then press Return: claude's input needs a real carriage return to submit.
                       tell s to write text "\(text)" newline NO
-                      delay 0.25
+                      delay 0.15
                       tell s to write text (character id 13) newline NO
                       return "ok"
                     end if
@@ -274,6 +415,14 @@ final class TerminalSession {
 
     /// Wait until claude's input prompt is on screen (so typed text isn't lost), up to ~12s.
     private func waitForPrompt(_ id: String, tries: Int, then: @escaping () -> Void) {
+        TerminalSession.work.async { [weak self] in
+            guard let self else { return }
+            let screen = self.screenContents(id)
+            DispatchQueue.main.async { self.promptChecked(id, screen: screen, tries: tries, then: then) }
+        }
+    }
+
+    private func screenContents(_ id: String) -> String {
         var screen = ""
         if usesITerm {
             screen = applescript("""
@@ -290,6 +439,10 @@ final class TerminalSession {
         } else {
             screen = applescript("tell application \"Terminal\" to return contents of \(id)") ?? ""
         }
+        return screen
+    }
+
+    private func promptChecked(_ id: String, screen: String, tries: Int, then: @escaping () -> Void) {
         let ready = screen.contains("shortcuts") || screen.contains("? for") || screen.contains("❯") || screen.contains("│ >")
             || screen.contains("Type your message") || screen.contains("How can I help")
         if ready || tries <= 0 {
@@ -300,44 +453,107 @@ final class TerminalSession {
         }
     }
 
+    /// Runs AppleScript in a separate osascript process. NSAppleScript always executes on the main thread (even when
+    /// called from a background queue), so a slow script, like typing with a `delay`, would freeze the bubble and
+    /// mascot; osascript doesn't touch our main thread at all.
     private func applescript(_ source: String) -> String? {
-        var error: NSDictionary?
-        let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
-        if let error { log("applescript error: \(error[NSAppleScript.errorMessage] ?? error)"); return nil }
-        return result?.stringValue ?? ""
+        let (status, out, err) = shell("/usr/bin/osascript", ["-e", source])
+        if status != 0 { log("applescript error: \(err.trimmingCharacters(in: .whitespacesAndNewlines))"); return nil }
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: Transcript watching
 
+    /// Reads and parses the transcript off the main thread; owns `offset` and `buffer`.
+    private let reader = DispatchQueue(label: "dev.visioncli.transcript", qos: .userInitiated)
+
+    /// Follows the transcript while a question is waiting for its answer (stopped when `awaiting` clears).
     private func startWatching() {
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.poll() }
     }
 
-    private func poll() {
-        if agyDiscover, let marker = awaiting {
-            guard let id = TerminalProbe.agyConversation(containing: marker) else { return }
-            agyDiscover = false
-            if id != sessionId {
-                sessionId = id
-                UserDefaults.standard.set(id, forKey: defaultsKey)
-            }
-            offset = 0 // read the whole transcript; only lines after the question count
-            buffer = Data()
-            log("terminal: following agy conversation \(id)")
+    private func stopWatching() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    /// Start following `url` at its current end (or from its start): on the reader queue, after any read in flight.
+    private func follow(_ url: URL?, fromStart: Bool) {
+        reader.async { [weak self] in
+            guard let self else { return }
+            self.offset = fromStart ? 0 : url.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? UInt64 } ?? 0
+            self.buffer = Data()
         }
-        guard let url = transcriptURL, let h = try? FileHandle(forReadingFrom: url) else { return }
+    }
+
+    private func poll() {
+        guard let marker = awaiting else { stopWatching(); return }
+        guard !reading else { return } // the last read is still going (a big burst of output); don't pile up
+        if agyDiscover {
+            reading = true
+            reader.async { [weak self] in
+                let id = TerminalProbe.agyConversation(containing: marker)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.reading = false
+                    guard let id, self.agyDiscover, self.awaiting == marker else { return }
+                    self.agyDiscover = false
+                    if id != self.sessionId {
+                        self.sessionId = id
+                        UserDefaults.standard.set(id, forKey: self.defaultsKey)
+                    }
+                    self.follow(nil, fromStart: true) // read the whole transcript; only lines after the question count
+                    log("terminal: following agy conversation \(id)")
+                }
+            }
+            return
+        }
+        guard let url = transcriptURL else { return }
+        reading = true
+        reader.async { [weak self] in
+            guard let self else { return }
+            let read = self.readNewLines(url)
+            DispatchQueue.main.async {
+                self.reading = false
+                guard let read else { return }
+                for obj in read.objects { self.handle(obj) }
+                if !read.grew { self.checkApprovalWait() }
+            }
+        }
+    }
+
+    /// Reader queue: the complete lines the transcript has grown by since last time, parsed. Nil if it can't be read.
+    private func readNewLines(_ url: URL) -> (objects: [[String: Any]], grew: Bool)? {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? h.close() }
         let size = h.seekToEndOfFile()
         if size < offset { offset = 0 } // file replaced
-        guard size > offset else { checkApprovalWait(); return }
+        guard size > offset else { return ([], false) }
         h.seek(toFileOffset: offset)
-        buffer.append(h.readDataToEndOfFile())
-        offset = size
-        while let nl = buffer.firstIndex(of: 0x0A) {
-            let line = buffer.subdata(in: buffer.startIndex..<nl)
-            buffer.removeSubrange(buffer.startIndex...nl)
-            if let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] { handle(obj) }
+        let data = h.readDataToEndOfFile()
+        offset += UInt64(data.count) // what was read, which can be past `size` if the file grew meanwhile
+        buffer.append(data)
+        // One pass over the new lines (removing each line from the front of the buffer re-copied the rest every
+        // time, which took seconds on a big transcript).
+        var objects: [[String: Any]] = []
+        var start = buffer.startIndex
+        while let nl = buffer[start...].firstIndex(of: 0x0A) {
+            if let obj = try? JSONSerialization.jsonObject(with: buffer[start..<nl]) as? [String: Any] { objects.append(obj) }
+            start = buffer.index(after: nl)
+        }
+        buffer = Data(buffer[start...])
+        return (objects, true)
+    }
+
+    /// Only what's written after the question matters: skip whatever the conversation has grown by since last time
+    /// (in a long session that's megabytes of earlier tool output).
+    private func skipToEnd() {
+        guard !agyDiscover, let url = transcriptURL else { return }
+        reader.async { [weak self] in
+            guard let self, let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? UInt64) else { return }
+            self.offset = size
+            self.buffer = Data()
         }
     }
 
