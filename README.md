@@ -9,7 +9,7 @@ by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or
 </p>
 
 <p align="center">
-<a href="https://github.com/thethirdsourcers/visioncli/releases/latest"><b>⬇︎ Download VisionCLI for macOS</b></a>
+<a href="https://github.com/thethirdsourcers/visioncli/releases/latest"><b>Download VisionCLI for macOS</b></a>
 </p>
 
 ---
@@ -18,7 +18,6 @@ by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or
 - **Hold ⌥ and ask out loud** (⌥⌘ to include a screenshot). Visi, a little robot, peeks in from the edge of the screen while it listens and thinks; the answer appears in the top-right corner and is read aloud.
 - **Claude or Gemini, your choice.** Uses your own `claude` or `agy` sign-in (no API keys) and the session already running for that project, so you can type and talk in the same conversation. Pick the model and effort from the menu.
 - **Uses your computer.** "Open Xcode and run the app", "fill this form", "switch the dropdown to Production": it clicks, types, presses shortcuts and opens apps, one checked step at a time, reading each app's real buttons and fields through Accessibility. You approve each action (or allow all), passwords and System Settings always ask, a task panel shows every step with Pause/Stop, and **Esc stops it instantly**.
-- **Recipes.** Saved routines like *Run the tests*, *Review my changes*, *Explain the last crash*, *Run on the simulator*. Pick from the menu or say the name. Edit your own in `recipes.json`.
 - **Autopilot (optional).** In the apps you choose, it offers a suggestion when it spots something useful, and drafts chat replies you can drop into the reply box. Nothing is sent for you.
 - **Notices crashes.** When your app (Mac or Simulator) crashes, VisionCLI offers to explain it, and the next question already knows which crash report to read.
 - **Points and draws.** Answers point at things on your real screen (boxes, circles, arrows, numbered steps) and can include **Mermaid diagrams** rendered in the bubble.
@@ -43,11 +42,11 @@ by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or
 
 ### Updates
 
-VisionCLI checks GitHub for new releases at launch and every 6 hours. When one is out, 👁 shows **Install Update**: it downloads the release, checks it's signed with the same certificate, replaces the app and restarts, keeping your permissions and settings. Use 👁 → Settings → *Check for Updates…* to check now, or turn automatic checks off there.
+VisionCLI checks GitHub for new releases at launch and every 6 hours. When one is out, the VisionCLI menu shows **Install Update**: it downloads the release, checks it's signed with the same certificate, replaces the app and restarts, keeping your permissions and settings. Use VisionCLI menu → Settings → *Check for Updates…* to check now, or turn automatic checks off there.
 
 ### 2. First launch
 
-The 👁 icon appears in the menu bar and a welcome screen offers to set up the CLIs it finds. That registers VisionCLI's tools for every project: `claude mcp add visioncli --scope user …` for Claude Code, the global MCP config for Antigravity CLI, and `gemini mcp add -s user --trust visioncli …` for Gemini CLI. You can also do it later from 👁 → Settings → *Set Up …*.
+The VisionCLI icon appears in the menu bar and a welcome screen offers to set up the CLIs it finds. That registers VisionCLI's tools for every project: `claude mcp add visioncli --scope user …` for Claude Code, the global MCP config for Antigravity CLI, and `gemini mcp add -s user --trust visioncli …` for Gemini CLI. You can also do it later from VisionCLI menu → Settings → More → *Set Up …*.
 
 macOS will ask for three permissions. VisionCLI needs all of them:
 
@@ -58,17 +57,17 @@ macOS will ask for three permissions. VisionCLI needs all of them:
 | **Screen & System Audio Recording** for **your terminal app** (iTerm, Terminal, Warp…) | when you *type* to Claude Code, the screenshot is taken by the terminal running `claude`. Without it, Claude only sees the wallpaper. Restart the terminal after allowing it. |
 | **Automation** (iTerm, Chrome/Brave) | asked the first time it types into your terminal or controls the browser |
 
-If something doesn't work, check System Settings → Privacy & Security, and 👁 → Settings → *Open Log*.
+If something doesn't work, check System Settings → Privacy & Security, and VisionCLI menu → Settings → More → *Open Log*.
 
 ### 3. Optional extras
 
 | Add | Get | How |
 |---|---|---|
-| **Parakeet** | Fastest local transcription (~0.3s on the Neural Engine) that spells your project's class names right. Apple Silicon | 👁 → Voice & Audio → Speech Recognition → **Parakeet** (downloads ~600 MB on first use) |
+| **Parakeet** | Fastest local transcription (~0.3s on the Neural Engine) that spells your project's class names right. Apple Silicon | VisionCLI menu → Settings → Voice & Audio → Speech Recognition → **Parakeet** (downloads ~600 MB on first use) |
 | **Wispr Flow** | Use your own Wispr Flow account: hold ⌥ and speak as usual | Have Flow running with its push-to-talk key on fn, then pick **Wispr Flow** in Speech Recognition |
-| **Whisper** | More accurate transcription of names and jargon (~0.7s, local) | 👁 → Voice & Audio → Speech Recognition → **Download Whisper** (installs `whisper-cpp` via Homebrew, then downloads the ~490 MB model) |
-| **Kokoro** | Natural voices for spoken answers (local) | 👁 → Voice & Audio → Voice → **Download Natural Voices** (installs [`uv`](https://docs.astral.sh/uv/) if needed, then downloads ~350 MB) |
-| **TypeSafe Jev** | Instant browser commands | add your key via 👁 → Settings → *API Keys*, or set `TYPESAFE_API_KEY` |
+| **Whisper** | More accurate transcription of names and jargon (~0.7s, local) | VisionCLI menu → Settings → Voice & Audio → Speech Recognition → **Download Whisper** (installs `whisper-cpp` via Homebrew, then downloads the ~490 MB model) |
+| **Kokoro** | Natural voices for spoken answers (local) | VisionCLI menu → Settings → Voice & Audio → Voice → **Download Natural Voices** (installs [`uv`](https://docs.astral.sh/uv/) if needed, then downloads ~350 MB) |
+| **TypeSafe Jev** | Instant browser commands | add your key via VisionCLI menu → Settings → More → *API Keys*, or set `TYPESAFE_API_KEY` |
 | **Browser control** | Click, scroll and read pages | in Chrome or Brave: **View → Developer → Allow JavaScript from Apple Events** |
 
 Models are saved in `~/Library/Application Support/visioncli/models/`. Whisper and Kokoro models you already have from other tools (e.g. in `~/.cache/whisper`) are picked up automatically. Without them, VisionCLI uses Apple's on-device speech recognition and the system voice.
@@ -82,11 +81,11 @@ VisionCLI works with Gemini as well as Claude, using your own sign-in, the same 
 | **Antigravity CLI** (`agy`) | You sign in with a personal Google account. Google now serves personal accounts through Antigravity. |
 | **Gemini CLI** (`gemini`) | Your Gemini CLI sign-in still works (paid Code Assist / work account), or you add an API key. |
 
-- **Set up:** 👁 → Settings → *Set Up Antigravity CLI* / *Set Up Gemini CLI* (or `visioncli install`, which registers every CLI it finds).
+- **Set up:** VisionCLI menu → Settings → More → *Set Up Antigravity CLI* / *Set Up Gemini CLI* (or `visioncli install`, which registers every CLI it finds).
   - Antigravity: adds visioncli to `~/.gemini/config/mcp_config.json` and allows its read-only/navigation tools in `~/.gemini/antigravity-cli/settings.json`.
   - Gemini CLI: `gemini mcp add -s user --trust visioncli …`.
 - **Typing:** in `agy` or `gemini`, the visioncli tools (look, browser, database, device screenshots…) are available in every workspace.
-- **Voice:** choose 👁 → **Assistant → Gemini (Antigravity CLI)** or **Gemini CLI**.
+- **Voice:** choose VisionCLI menu → **Settings → Assistant → Gemini (Antigravity CLI)** or **Gemini CLI**.
   - *Terminal* mode types your question into the `agy`/`gemini` running for the project (or opens one) and shows the answer in the terminal and the bubble.
   - *Bubble Only* mode runs it headless (`agy -p … --output-format stream-json`, or `gemini -p … -o stream-json`) and continues the same conversation each time.
 - **Pointing at a terminal** that runs `claude`, `agy` or `gemini` uses that CLI, whatever the Assistant setting.
@@ -94,7 +93,7 @@ VisionCLI works with Gemini as well as Claude, using your own sign-in, the same 
 **Notes:**
 - In Bubble Only mode the CLI can't ask for approval, so it only reads (code, screen, browser, database). Use terminal mode for edits and commands.
 - Headless `agy` takes ~15s to start per question; terminal mode keeps it running and answers faster.
-- Gemini CLI on a free *personal* Google sign-in now fails with "…no longer supported for Gemini Code Assist for individuals". Use Antigravity instead, or add `"gemini": {"apiKey": "..."}` in 👁 → Settings → *API Keys*.
+- Gemini CLI on a free *personal* Google sign-in now fails with "…no longer supported for Gemini Code Assist for individuals". Use Antigravity instead, or add `"gemini": {"apiKey": "..."}` in VisionCLI menu → Settings → More → *API Keys*.
 
 ## Use it
 
@@ -110,11 +109,11 @@ VisionCLI works with Gemini as well as Claude, using your own sign-in, the same 
 | **⌥ ↩ / esc** | Approve or deny an edit or command (background mode) |
 | **esc** | Dismiss, or stop the answer |
 
-To attach a screenshot to every question instead, turn on **👁 → Settings → Screenshot Every Question**.
+To attach a screenshot to every question instead, turn on **VisionCLI menu → Settings → More → Screenshot Every Question**.
 
-**Which project?** By default VisionCLI follows the window under your mouse. PhpStorm `myshop – payments` maps to `~/PhpstormProjects/myshop`, and a terminal running `claude` maps to its folder. With several projects open, pick one in **👁 → Project**. The menu bar shows the current project, with 📌 when you've chosen one.
+**Which project?** By default VisionCLI follows the window under your mouse. PhpStorm `myshop – payments` maps to `~/PhpstormProjects/myshop`, and a terminal running `claude` maps to its folder. With several projects open, pick one in **VisionCLI menu → Project**. The menu bar shows the current project.
 
-**Which session?** In **Terminal** mode (the default), voice questions are typed into the `claude` (or `agy`/`gemini`, see [Gemini](#gemini-antigravity-cli-or-gemini-cli)) already running for that project in iTerm, or a new one is opened. You can type there too; it's one conversation, and answers show in both the terminal and the bubble. **Bubble Only** mode uses a hidden, leaner session instead. Switch in 👁 → *Answer In*.
+**Which session?** In **Terminal** mode (the default), voice questions are typed into the `claude` (or `agy`/`gemini`, see [Gemini](#gemini-antigravity-cli-or-gemini-cli)) already running for that project in iTerm, or a new one is opened. You can type there too; it's one conversation, and answers show in both the terminal and the bubble. **Bubble Only** mode uses a hidden, leaner session instead. Switch in VisionCLI menu → *Settings → Answer In*.
 
 ### In Claude Code (typing)
 
@@ -142,11 +141,11 @@ Slash commands: `/mcp__visioncli__see <question>`, `/mcp__visioncli__point <ques
 
 ## Menu
 
-**👁 Project** (Auto, or pick from running `claude`/`agy`/`gemini` sessions, open editors and recent projects) · **Assistant** (Claude Code, Gemini via Antigravity, or Gemini CLI) · **Answer In** (terminal, or bubble only) · **Model** (Sonnet or Opus, for Claude) · **Recipes** · **Computer Control** (ask before each action, allow all, or off; Accessibility permission; watch for app crashes) · **Voice & Audio** (speak answers, speed up to 2×, voice, speech recognition, microphone, speaker) · History · Copy Last Answer · New Conversation · **Settings** (Set Up Claude Code / Antigravity / Gemini CLI, Start at Login, instant browser commands, AI cursor, API keys, logs).
+**Project** (Auto, or pick from running `claude`/`agy`/`gemini` sessions, open editors and recent projects) · **Claude Usage** · History · New Conversation · Copy Last Answer · **Settings**: Assistant (Claude Code or Gemini via Antigravity), Answer In (terminal or bubble only), Model, Effort, Voice & Audio (speak answers, speed, voice, speech recognition, microphone, speaker), Computer Control, Autopilot, Setup Wizard, Start at Login, Check for Updates, and **More** (screenshot every question, browser options, API keys, tool setup, Fix Permissions, logs).
 
 ## API keys
 
-👁 → Settings → *API Keys* opens `~/Library/Application Support/visioncli/integrations.json` (readable only by you):
+VisionCLI menu → Settings → More → *API Keys* opens `~/Library/Application Support/visioncli/integrations.json` (readable only by you):
 
 ```json
 {
@@ -188,14 +187,14 @@ node dist/index.js voice          # start voice mode (under launchd: restarts af
 |---|---|
 | "VisionCLI can't be opened" | Right-click → Open, or `xattr -dr com.apple.quarantine /Applications/VisionCLI.app` |
 | Claude sees only the wallpaper | Voice: enable Screen Recording for VisionCLI. Typing in Claude Code: enable it for your terminal app. Then quit and reopen that app. |
-| Tools missing in Claude Code / Gemini CLI | 👁 → Settings → *Set Up Claude Code* / *Set Up Gemini CLI* (again after moving the app or switching Node versions), then restart `claude` / `gemini` |
-| Gemini CLI: "no longer supported for Code Assist for individuals" | Google moved personal accounts to Antigravity: choose 👁 → Assistant → *Gemini (Antigravity CLI)* (or add a Gemini API key) |
-| Gemini answers "tried a step that needs your approval" | Bubble Only mode can't approve commands/edits; switch 👁 → Answer In to the terminal |
-| Answers only in the terminal, or none at all | 👁 → Settings → *Open Log*; check `claude` is installed and signed in |
-| Microphone errors | Pick a specific mic in 👁 → Voice & Audio → Microphone |
+| Tools missing in Claude Code / Gemini CLI | VisionCLI menu → Settings → More → *Set Up Claude Code* / *Set Up Gemini CLI* (again after moving the app or switching Node versions), then restart `claude` / `gemini` |
+| Gemini CLI: "no longer supported for Code Assist for individuals" | Google moved personal accounts to Antigravity: choose VisionCLI menu → Settings → Assistant → *Gemini (Antigravity CLI)* (or add a Gemini API key) |
+| Gemini answers "tried a step that needs your approval" | Bubble Only mode can't approve commands/edits; switch VisionCLI menu → Settings → Answer In to the terminal |
+| Answers only in the terminal, or none at all | VisionCLI menu → Settings → More → *Open Log*; check `claude` is installed and signed in |
+| Microphone errors | Pick a specific mic in VisionCLI menu → Settings → Voice & Audio → Microphone |
 | Sound bars move but no text appears | The pill now says why. Usually: allow **Speech Recognition** for VisionCLI (Privacy & Security), or turn on **Keyboard → Dictation**. Installing Whisper also transcribes without Apple's recognizer. |
-| Asked for permissions again after updating, though Settings shows VisionCLI as allowed | The switch belongs to an older signature. VisionCLI 0.5.5+ clears it automatically on first launch; otherwise use 👁 → Settings → **Fix Permissions…** (or remove VisionCLI with − and add it again). Happens once when moving to the permanently signed releases; later updates keep permissions. |
-| It crashed | It restarts automatically; details are in 👁 → Settings → *Open Crash Log* |
+| Asked for permissions again after updating, though Settings shows VisionCLI as allowed | The switch belongs to an older signature. VisionCLI 0.5.5+ clears it automatically on first launch; otherwise use VisionCLI menu → Settings → More → **Fix Permissions…** (or remove VisionCLI with − and add it again). Happens once when moving to the permanently signed releases; later updates keep permissions. |
+| It crashed | It restarts automatically; details are in VisionCLI menu → Settings → More → *Open Crash Log* |
 
 ## License
 

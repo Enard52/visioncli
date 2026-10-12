@@ -410,8 +410,8 @@ extension AppDelegate {
     func startCrashWatcher() {
         crashWatcher.onCrash = { [weak self] crash in
             guard let self, self.state.phase == .hidden else { return }
-            self.state.question = "💥 \(crash.app) crashed"
-            self.flash("\(crash.app) just crashed. Hold ⌥ and ask \"why did it crash?\", or pick 👁 → Recipes → Explain the last crash.", seconds: 9)
+            self.state.question = "\(crash.app) crashed"
+            self.flash("\(crash.app) just crashed. Hold ⌥ and ask \"why did it crash?\".", seconds: 9)
         }
         if Settings.watchCrashes { crashWatcher.start() }
     }
@@ -522,7 +522,7 @@ extension AppDelegate {
         }
 
         if Settings.computerControl == "off" {
-            reply(["error": "Computer control is turned off in VisionCLI (👁 → Computer Control). Ask the user to turn it on."]); return
+            reply(["error": "Computer control is turned off in VisionCLI (VisionCLI menu → Settings → Computer Control). Ask the user to turn it on."]); return
         }
         guard Computer.isTrusted else { reply(needTrust()); return }
 
@@ -703,7 +703,7 @@ extension AppDelegate {
         controlLastAction = Date()
         var detail: [(String, DiffKind)] = []
         if let t = request["text"] as? String { detail.append(contentsOf: t.components(separatedBy: "\n").prefix(6).map { ($0, .added) }) }
-        if sensitive { detail.append(("⚠︎ Sensitive: passwords, payments or system settings. Check carefully.", .removed)) }
+        if sensitive { detail.append(("Sensitive: passwords, payments or system settings. Check carefully.", .removed)) }
         detail.append(("Esc stops the assistant from using your computer.", .context))
         let name = Settings.assistant.name
         state.permission = PermissionRequest(id: UUID().uuidString, tool: "computer", input: request,
@@ -728,7 +728,7 @@ extension AppDelegate {
     /// The step being performed, in the bubble.
     private func showControlStatus(_ text: String) {
         log("control: \(text)")
-        activity.text("\n🖱 \(text)\n")
+        activity.text("\n> \(text)\n")
         ActivityBadge.shared.show("cursorarrow.motionlines", text.prefix(1).uppercased() + text.dropFirst() + " · esc stops", tint: .purple, seconds: 4)
         ActivityBadge.shared.controlling()
         switch state.phase {

@@ -30,10 +30,10 @@ final class ActivityLog {
         let time = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .short)
         line("")
         line(c("2", "━━━ \(time) · \((project as NSString).lastPathComponent) " + String(repeating: "━", count: 40)))
-        line(c("1;36", "🎤 You: ") + c("1", text))
+        line(c("1;36", "You: ") + c("1", text))
         for (i, s) in shots.enumerated() {
             let pointer = s.pointer.map { ", pointer at \(Int($0.x)),\(Int($0.y))" } ?? ""
-            line(c("2", "   📸 \(shots.count > 1 ? "\(i + 1). " : "")\(s.label) (\(Int(s.pixelSize.width))×\(Int(s.pixelSize.height))\(pointer))"))
+            line(c("2", "   screenshot: \(shots.count > 1 ? "\(i + 1). " : "")\(s.label) (\(Int(s.pixelSize.width))×\(Int(s.pixelSize.height))\(pointer))"))
         }
     }
 
@@ -51,7 +51,7 @@ final class ActivityLog {
             let json = (try? JSONSerialization.data(withJSONObject: input)).map { String(decoding: $0, as: UTF8.self) } ?? ""
             detail = json == "{}" ? "" : String(json.prefix(160))
         }
-        line(c("35", "🔧 \(short) ") + detail)
+        line(c("35", "tool \(short) ") + detail)
     }
 
     func toolResult(_ text: String, isError: Bool, tool: String?) {
@@ -68,7 +68,7 @@ final class ActivityLog {
 
     func permission(_ title: String, allowed: Bool?) {
         switch allowed {
-        case nil: line(c("1;33", "✋ \(title)? (waiting for you in the bubble)"))
+        case nil: line(c("1;33", "Waiting for you: \(title)? (in the bubble)"))
         case true?: line(c("32", "   ✓ allowed"))
         case false?: line(c("31", "   ✗ denied"))
         }
@@ -76,7 +76,7 @@ final class ActivityLog {
 
     func text(_ delta: String) {
         if !midText {
-            write(c("1;32", "💬 Claude: "))
+            write(c("1;32", "Claude: "))
             midText = true
         }
         write(delta)
@@ -87,7 +87,7 @@ final class ActivityLog {
         if let cost { line(c("2", String(format: "   ($%.4f)", cost))) }
     }
 
-    func error(_ message: String) { line(c("31", "⚠️  " + message)) }
+    func error(_ message: String) { line(c("31", "Error: " + message)) }
 
     func note(_ message: String) { line(c("2", "   " + message)) }
 }

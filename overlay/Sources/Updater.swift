@@ -131,7 +131,7 @@ final class Updater {
     }
 
     /// Start the new copy: through launchd if VisionCLI runs as the agent, otherwise with `open`.
-    private static func relaunch() {
+    static func relaunch() {
         let target = Bundle.main.bundlePath.replacingOccurrences(of: "'", with: "'\\''")
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")

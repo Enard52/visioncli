@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 // Task mode: while the assistant uses the computer, a small panel in the top-right corner lists its steps with
-// Pause and Stop. Recipes: saved multi-step tasks ("run the app on the simulator and check for crashes").
+// Pause and Stop.
 // Watcher: notices app crashes (including simulator apps) and offers to explain them.
 
 // MARK: - Task HUD
@@ -141,49 +141,6 @@ struct TaskView: View {
         case .failed: Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10)).foregroundStyle(.orange)
         case .declined: Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.red.opacity(0.8))
         case .waiting: Image(systemName: "hand.raised.fill").font(.system(size: 10)).foregroundStyle(.yellow)
-        }
-    }
-}
-
-// MARK: - Recipes
-
-struct Recipe: Codable {
-    var name: String
-    var prompt: String
-}
-
-enum Recipes {
-    static let file = supportDir.appendingPathComponent("recipes.json")
-
-    static let defaults: [Recipe] = [
-        Recipe(name: "Explain this screen", prompt: "Look at what's on my screen and explain what it is, what it's for, and anything that looks wrong."),
-        Recipe(name: "Fix this error", prompt: "There's an error on my screen. Read it, find the cause in the project code, and propose the smallest fix (make the edit if it's clear)."),
-        Recipe(name: "Run the tests", prompt: "Run this project's test suite with its usual command, then summarize what passed and what failed, with the file:line of each failure."),
-        Recipe(name: "Review my changes", prompt: "Review my uncommitted changes (git diff) for bugs, missing edge cases and leftover debug code. List the real problems only."),
-        Recipe(name: "Explain the last crash", prompt: "Read the most recent crash report, explain why the app crashed in plain words, and point to the code responsible in this project."),
-        Recipe(name: "Run on the simulator", prompt: "Build and run this app on the iOS Simulator (or Android emulator), wait for it to launch, take a screenshot, and tell me if anything looks broken."),
-        Recipe(name: "Write a commit message", prompt: "Look at my staged changes (git diff --cached) and write a concise commit message for them. Don't commit."),
-    ]
-
-    static func load() -> [Recipe] {
-        if let data = try? Data(contentsOf: file), let list = try? JSONDecoder().decode([Recipe].self, from: data), !list.isEmpty { return list }
-        save(defaults)
-        return defaults
-    }
-
-    static func save(_ list: [Recipe]) {
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
-        try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
-        try? enc.encode(list).write(to: file)
-    }
-
-    /// "run the tests" / "recipe review my changes" → that recipe's instructions.
-    static func match(_ question: String) -> Recipe? {
-        let q = question.lowercased().trimmingCharacters(in: .punctuationCharacters.union(.whitespaces))
-        return load().first { r in
-            let n = r.name.lowercased()
-            return q == n || q == "recipe \(n)" || q == "run \(n)" || q.hasPrefix("recipe \(n)") || q == "do \(n)"
         }
     }
 }

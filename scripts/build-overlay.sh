@@ -33,7 +33,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHumanReadableCopyright</key><string>MIT License · github.com/thethirdsourcers/visioncli</string>
-  <key>NSMicrophoneUsageDescription</key><string>VisionCLI listens while you hold Option+Space so you can ask Claude about your screen.</string>
+  <key>NSMicrophoneUsageDescription</key><string>VisionCLI listens only while you hold Option, so you can ask Claude about your screen.</string>
   <key>NSAppleEventsUsageDescription</key><string>VisionCLI types your spoken questions into the Claude session in your terminal and controls the browser for quick commands.</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>VisionCLI turns your spoken question into text for Claude.</string>
 </dict>

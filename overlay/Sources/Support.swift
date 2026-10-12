@@ -322,6 +322,18 @@ enum Settings {
         set { d.set(newValue, forKey: "screenshotEveryQuestion") }
     }
 
+    /// The first-run setup wizard was finished (or every permission was already there).
+    static var setupDone: Bool {
+        get { d.bool(forKey: "setupDone") }
+        set { d.set(newValue, forKey: "setupDone") }
+    }
+
+    /// The wizard step to reopen on (Screen Recording needs a relaunch mid-setup).
+    static var setupStep: String? {
+        get { d.string(forKey: "setupStep") }
+        set { d.set(newValue, forKey: "setupStep") }
+    }
+
     /// Autopilot (off by default): suggestions while you work, only in the apps listed in `autopilotApps`.
     static var autopilot: Bool {
         get { d.bool(forKey: "autopilot") }

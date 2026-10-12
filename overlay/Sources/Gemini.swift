@@ -156,10 +156,10 @@ final class GeminiSession: AssistantSession {
 /// Turn Gemini's auth failures into something actionable.
 func geminiFriendlyError(_ raw: String) -> String {
     if raw.contains("API_KEY_INVALID") || raw.contains("API key not valid") {
-        return "Gemini rejected the API key in 👁 → Settings → API Keys. Fix or remove it (without it, VisionCLI uses your normal `gemini` sign-in)."
+        return "Gemini rejected the API key in VisionCLI menu → Settings → More → API Keys. Fix or remove it (without it, VisionCLI uses your normal `gemini` sign-in)."
     }
     if raw.contains("IneligibleTierError") || raw.contains("no longer supported for Gemini Code Assist") {
-        return "Google refused this Gemini CLI sign-in (\"no longer supported for Code Assist for individuals\"). Run `gemini` in a terminal and use /auth to sign in with an account that has Gemini CLI access, or switch 👁 → Assistant back to Claude Code."
+        return "Google refused this Gemini CLI sign-in (\"no longer supported for Code Assist for individuals\"). Run `gemini` in a terminal and use /auth to sign in with an account that has Gemini CLI access, or switch VisionCLI menu → Settings → Assistant back to Claude Code."
     }
     return String(raw.suffix(400))
 }

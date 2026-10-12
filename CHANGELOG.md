@@ -1,10 +1,17 @@
 # Changelog
 
+## 0.7.5
+
+- **Setup wizard:** first-time users get one window that walks through everything VisionCLI needs, one step at a time, each ticking itself as soon as macOS reports it granted: Microphone, Speech Recognition, Accessibility, Screen Recording (it restarts the app for you and resumes there), Terminal access, the speech model (Parakeet, Wispr Flow, any Whisper model on your Mac, or Apple, with download progress), voice (read answers aloud, speed, and every voice with a sample), and your assistant (Claude Code or Gemini through Antigravity, where answers appear, and connecting VisionCLI's tools). It replaces the burst of permission prompts on first launch. Reopen it from VisionCLI menu → Settings → Setup Wizard….
+- **Simpler menu:** only Project, Claude Usage, History, New Conversation, Copy Last Answer and Settings at the top. Assistant, Answer In, Model, Effort, Voice & Audio, Computer Control and Autopilot live under Settings; rarely used options under Settings → More.
+- **No emoji** in menus, messages or the activity log.
+- **Recipes removed:** just ask for what you want ("run the tests", "review my changes").
+
 ## 0.7.4
 
 - **New keys:** hold **⌥** to ask as text, hold **⌥⌘** to ask with a screenshot of the window under the mouse (adding ⌘ while holding ⌥ also works). ⌥⇧Space still lets you drag an area.
 - **Meet Visi:** a little robot peeks in from the right edge of the screen while you hold ⌥. It blinks, talks along with you, pulls a face now and then (wink, laugh, surprise, wave), and its antenna glows while the answer is on its way.
-- **Autopilot (off by default):** in the apps you pick (👁 → Autopilot), VisionCLI glances at the window when you switch to it or pause, and shows a small suggestion card when it has something useful; in chat apps it drafts a reply you can put in the reply box. Nothing is ever sent for you. Uses Claude Haiku (about 1k tokens a look, at most 30 an hour); password fields and password managers are never read. *Check Now* asks for a suggestion right away.
+- **Autopilot (off by default):** in the apps you pick (VisionCLI menu → Autopilot), VisionCLI glances at the window when you switch to it or pause, and shows a small suggestion card when it has something useful; in chat apps it drafts a reply you can put in the reply box. Nothing is ever sent for you. Uses Claude Haiku (about 1k tokens a look, at most 30 an hour); password fields and password managers are never read. *Check Now* asks for a suggestion right away.
 - **See when it's looking or acting:** a small pill at the top of the screen shows when a screenshot is taken or Autopilot is reading, and the screen edges glow while the assistant is using your computer.
 - **Wispr Flow:** your words now show live while you speak (Apple's on-device recognizer runs alongside Flow for the preview), and if Flow returns nothing the live text is used instead of failing. ⌥⌘ works with Flow.
 - **Terminal mode:** questions go to the Claude you already have open for the project (the most recent one), or open your latest conversation like `claude -c`. The question is always submitted (Return is pressed again if Claude swallowed it), and the note added to it is now short: `[voice · mouse over …]`, only naming the window when the mouse is really over another app.
@@ -23,11 +30,11 @@
 
 ## 0.7.2
 
-- **New keys, no Space:** hold **⌃** to ask as text only (no screenshot, far fewer tokens; the assistant takes its own look if it needs to), hold **⌃⌥** to ask with a screenshot of the window under the mouse (adding ⌥ while holding ⌃ also works). ⌥⇧Space still lets you drag an area. Other ⌃ shortcuts (⌃C, ⌃-click) keep working. Without the Accessibility permission the keys fall back to ⌃Space / ⌃⌥Space. 👁 → Settings → *Screenshot Every Question* brings back the old behaviour.
+- **New keys, no Space:** hold **⌃** to ask as text only (no screenshot, far fewer tokens; the assistant takes its own look if it needs to), hold **⌃⌥** to ask with a screenshot of the window under the mouse (adding ⌥ while holding ⌃ also works). ⌥⇧Space still lets you drag an area. Other ⌃ shortcuts (⌃C, ⌃-click) keep working. Without the Accessibility permission the keys fall back to ⌃Space / ⌃⌥Space. VisionCLI menu → Settings → *Screenshot Every Question* brings back the old behaviour.
 - **See what it sees:** while a screenshot question is held, the display under the mouse dims except the window that will be captured (cyan outline).
-- **Parakeet speech recognition:** NVIDIA Parakeet TDT runs locally on the Neural Engine (Apple Silicon), about 0.2–0.3 s per question, and gets your project's names right (class names from the window title, your vocabulary list, common tools). Choose it in 👁 → Voice & Audio → Speech Recognition; the model (~600 MB) downloads on first use.
+- **Parakeet speech recognition:** NVIDIA Parakeet TDT runs locally on the Neural Engine (Apple Silicon), about 0.2–0.3 s per question, and gets your project's names right (class names from the window title, your vocabulary list, common tools). Choose it in VisionCLI menu → Voice & Audio → Speech Recognition; the model (~600 MB) downloads on first use.
 - **Wispr Flow:** use your own Wispr Flow account as the speech engine. Hold ⌃ and speak as usual; VisionCLI holds Flow's push-to-talk key for you and takes Flow's text as the question.
-- **Claude usage in the menu bar:** a coloured ring with your current 5-hour session usage (optionally the week too), and a usage card in 👁 → Claude Usage with session and weekly limits, reset times and today's tokens across all Claude Code sessions.
+- **Claude usage in the menu bar:** a coloured ring with your current 5-hour session usage (optionally the week too), and a usage card in VisionCLI menu → Claude Usage with session and weekly limits, reset times and today's tokens across all Claude Code sessions.
 - **All Claude models:** Fable, Opus, Sonnet, Haiku, Opus-plan and the 1M-context variants. Changing Model or Effort in the menu is sent to the Claude running in your terminal (`/model`, `/effort`), and the menu follows a model you pick in the terminal. Saying "slash compact" (or any "slash …") runs it as a real command.
 - **History per project:** History opens on the current project, with a project picker, *Clear Project*, and 200 questions kept per project.
 - Fixes: Bluetooth headsets (AirPods, Sony…) no longer record silence when they switch to their call mode mid-question; the crash watcher ignores Xcode's background services.
@@ -42,10 +49,10 @@
 ## 0.7.0
 
 - **Computer control: VisionCLI can use your Mac.** Claude or Gemini can click, double/right-click, drag, scroll, type, press shortcuts, open apps and URLs, in any app, from voice or from the terminal. It reads each app's real buttons, fields and menus through Accessibility (`ui_elements`) so it clicks "Save" by id instead of guessing pixels; pixel positions on a screenshot work too. Keys and typing go to the app it's working in, never by accident to your terminal.
-  - **Approvals:** 👁 → Computer Control → *Ask Before Each Action* (default), *Allow All Actions*, or *Off*. Password fields, System Settings, Keychain and password managers always ask.
+  - **Approvals:** VisionCLI menu → Computer Control → *Ask Before Each Action* (default), *Allow All Actions*, or *Off*. Password fields, System Settings, Keychain and password managers always ask.
   - **Task panel** (top-right) lists each step with ✓/✗, plus **Pause** and **Stop**. **Esc** stops the assistant from touching the computer until your next question.
-  - Needs the Accessibility permission (👁 → Computer Control → Grant Accessibility Permission…).
-- **Recipes:** saved routines (*Explain this screen*, *Fix this error*, *Run the tests*, *Review my changes*, *Explain the last crash*, *Run on the simulator*, *Write a commit message*) in 👁 → Recipes, or say the name ("run the tests"). Edit or add your own in `recipes.json`.
+  - Needs the Accessibility permission (VisionCLI menu → Computer Control → Grant Accessibility Permission…).
+- **Recipes:** saved routines (*Explain this screen*, *Fix this error*, *Run the tests*, *Review my changes*, *Explain the last crash*, *Run on the simulator*, *Write a commit message*) in VisionCLI menu → Recipes, or say the name ("run the tests"). Edit or add your own in `recipes.json`.
 - **Crash watcher:** when one of your apps (Mac or iOS Simulator) crashes, VisionCLI offers to explain it, and your next question includes the crash report's path.
 - **Browser dropdowns and toggles work.** Clicks now send the full pointer sequence (custom React/Radix/MUI widgets respond), new `browser_select` picks options in native and custom dropdowns, and `browser_elements` shows toggles' on/off state and dropdowns' options. Fixed stale element ids after listing a page twice.
 - **Drawings are shown on the screenshot inside the bubble**, not on your real screen.
@@ -62,7 +69,7 @@
 
 ## 0.5.5
 
-- **Self-repairing permissions.** After a signature change (moving to the permanently signed releases), System Settings can show VisionCLI as allowed while macOS still asks, and toggling doesn't help. On the first launch of a new version, VisionCLI now clears its own stale entries (only for permissions not actually in effect), so macOS shows a fresh prompt and one click fixes it. 👁 → Settings → *Fix Permissions…* does the same on demand.
+- **Self-repairing permissions.** After a signature change (moving to the permanently signed releases), System Settings can show VisionCLI as allowed while macOS still asks, and toggling doesn't help. On the first launch of a new version, VisionCLI now clears its own stale entries (only for permissions not actually in effect), so macOS shows a fresh prompt and one click fixes it. VisionCLI menu → Settings → *Fix Permissions…* does the same on demand.
 
 ## 0.5.4
 
@@ -71,7 +78,7 @@
 ## 0.5.3
 
 - **Permissions survive upgrades.** Releases are now signed with VisionCLI's permanent certificate instead of an ad-hoc signature (which changed every build, so macOS asked for Screen Recording / Microphone again after each update). You'll be asked one last time when moving to 0.5.3.
-- **Check for updates.** VisionCLI checks GitHub at launch and every 6 hours, then offers *Install Update*: it downloads, verifies the signature matches, replaces itself and restarts. Manual check and an on/off switch are in 👁 → Settings.
+- **Check for updates.** VisionCLI checks GitHub at launch and every 6 hours, then offers *Install Update*: it downloads, verifies the signature matches, replaces itself and restarts. Manual check and an on/off switch are in VisionCLI menu → Settings.
 
 ## 0.5.2
 
@@ -79,14 +86,14 @@
 
 ## 0.5.1
 
-- **Whisper and Kokoro on any Mac**: when they aren't installed, 👁 → Voice & Audio offers *Download Whisper* (installs whisper-cpp via Homebrew + the small.en model) and *Download Natural Voices* (installs uv if needed + the Kokoro model), with progress in the menu. Each switches itself on when done. Previously they only appeared on Macs that already had the models.
+- **Whisper and Kokoro on any Mac**: when they aren't installed, VisionCLI menu → Voice & Audio offers *Download Whisper* (installs whisper-cpp via Homebrew + the small.en model) and *Download Natural Voices* (installs uv if needed + the Kokoro model), with progress in the menu. Each switches itself on when done. Previously they only appeared on Macs that already had the models.
 
 ## 0.5.0
 
-- **Gemini via Antigravity CLI (`agy`)**, using your Google sign-in: 👁 → Assistant → *Gemini (Antigravity CLI)*. Terminal mode opens or attaches to `agy` and follows its transcript (`~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`). Bubble Only mode runs `agy -p --output-format stream-json --conversation <id>`. *Set Up Antigravity CLI* registers the MCP tools globally with allow rules. Verified end to end in both modes, including attaching to a running `agy`.
+- **Gemini via Antigravity CLI (`agy`)**, using your Google sign-in: VisionCLI menu → Assistant → *Gemini (Antigravity CLI)*. Terminal mode opens or attaches to `agy` and follows its transcript (`~/.gemini/antigravity-cli/brain/<id>/…/transcript.jsonl`). Bubble Only mode runs `agy -p --output-format stream-json --conversation <id>`. *Set Up Antigravity CLI* registers the MCP tools globally with allow rules. Verified end to end in both modes, including attaching to a running `agy`.
 - Clear message when headless Gemini ends a turn because a step needed approval.
 
-- **Gemini CLI support**: *Set Up Gemini CLI* registers the MCP tools (`gemini mcp add -s user --trust`); 👁 → Assistant → Gemini CLI answers voice questions in Gemini Terminal mode (types into your running `gemini`, reads its session file) or Bubble Only mode (`gemini -p -o stream-json`, resumed per project). Pointing at a terminal that runs `gemini` uses it automatically, and the Project menu marks running `gemini` sessions.
+- **Gemini CLI support**: *Set Up Gemini CLI* registers the MCP tools (`gemini mcp add -s user --trust`); VisionCLI menu → Assistant → Gemini CLI answers voice questions in Gemini Terminal mode (types into your running `gemini`, reads its session file) or Bubble Only mode (`gemini -p -o stream-json`, resumed per project). Pointing at a terminal that runs `gemini` uses it automatically, and the Project menu marks running `gemini` sessions.
 - Gemini uses your normal `gemini` sign-in, like Claude uses your `claude` login. Optionally, a `gemini.apiKey` in integrations.json switches VisionCLI's runs to API-key auth. Auth errors show actionable messages.
 - `visioncli install` also registers with Gemini CLI when it's installed.
 

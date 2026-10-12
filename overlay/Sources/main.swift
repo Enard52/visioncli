@@ -142,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     let spotlight = Spotlight()
     let autopilot = Autopilot()
     let mascot = Mascot()
+    let setupWizard = SetupWizard()
     var installer: ModelInstaller!
     let updater = Updater()
     var sigterm: DispatchSourceSignal?
@@ -235,7 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         updater.onAvailable = { [weak self] release in
             guard let self else { return }
             self.state.question = "visioncli"
-            self.flash("VisionCLI \(release.version) is available. Install it from 👁 → Install Update.", seconds: 10)
+            self.flash("VisionCLI \(release.version) is available. Install it from VisionCLI menu → Install Update.", seconds: 10)
         }
         updater.onError = { [weak self] message in
             self?.state.question = "visioncli update"
@@ -257,13 +258,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 Settings.ttsEngine = "kokoro"
                 Settings.speak = true
                 self.kokoro.start()
-                self.flash("Kokoro voices are installed. Answers will be read aloud; pick a voice in 👁 → Voice & Audio → Voice.", seconds: 8)
+                self.flash("Kokoro voices are installed. Answers will be read aloud; pick a voice in VisionCLI menu → Settings → Voice & Audio → Voice.", seconds: 8)
             }
         }
         updateStatusTitle()
         refreshCandidates()
         AgyModels.refresh(cfg: cfg)
-        if Config.isFirstRun { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showWelcome() } }
+        if SetupWizard.shouldShow { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showSetupWizard() } }
         // Candidates are refreshed when the menu opens (menuNeedsUpdate), not on a timer: each refresh runs `ps` and
         // an `lsof` per running CLI.
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
@@ -386,15 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         hotkeys = HotKeys()
         HotKeys.handler = { [weak self] key, pressed in self?.hotkey(key, pressed: pressed) }
         if Computer.isTrusted {
-            modifierHold.onChange = { [weak self] key, pressed in self?.hotkey(key, pressed: pressed) }
-            modifierHold.immediate = { [weak self] in self?.state.phase == .listening }
-            modifierHold.onUpgrade = { [weak self] in
-                guard let self, self.state.phase == .listening, !self.withScreen else { return }
-                log("hotkey: ⌥ added, now with a screenshot")
-                self.withScreen = true
-                self.spotlight.show()
-            }
-            modifierHold.start()
+            enableModifierKeys()
         } else {
             // No Accessibility yet: modifier-only keys can't be seen, so use ⌃Space / ⌃⌥Space until it's granted.
             log("hotkeys: no Accessibility permission; using ⌃ and ⌃⌥")
@@ -403,9 +396,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
 
         let repaired = repairStalePermissions(force: false)
-        SFSpeechRecognizer.requestAuthorization { _ in }
-        AVCaptureDevice.requestAccess(for: .audio) { _ in }
-        if !Screen.hasPermission { CGRequestScreenCaptureAccess() }
+        if !SetupWizard.shouldShow { // the wizard asks for these one at a time
+            SFSpeechRecognizer.requestAuthorization { _ in }
+            AVCaptureDevice.requestAccess(for: .audio) { _ in }
+            if !Screen.hasPermission { CGRequestScreenCaptureAccess() }
+        }
         if !repaired.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 self.state.question = "visioncli"
@@ -595,7 +590,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             if micDenied || speechDenied {
                 self.flash("VisionCLI needs \([micDenied ? "Microphone" : nil, speechDenied ? "Speech Recognition" : nil].compactMap { $0 }.joined(separator: " and ")) access: System Settings → Privacy & Security.", seconds: 10)
             } else {
-                self.flash("Couldn't start the microphone (\(error.localizedDescription)). Try again, or pick another mic in 👁 → Microphone.", seconds: 10)
+                self.flash("Couldn't start the microphone (\(error.localizedDescription)). Try again, or pick another mic in VisionCLI menu → Microphone.", seconds: 10)
             }
         }
         timed("warmQuick") { warmQuick() }
@@ -775,7 +770,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             state.question = ""
             // Explain *why* nothing was transcribed when we know (permission, Dictation off, …).
             if let issue = listener.lastIssue {
-                flash(issue + (whisper == nil ? " Or install Whisper in 👁 → Voice & Audio → Speech Recognition." : ""), seconds: 12)
+                flash(issue + (whisper == nil ? " Or install Whisper in VisionCLI menu → Settings → Voice & Audio → Speech Recognition." : ""), seconds: 12)
             } else {
                 flash("Didn't catch that. Hold ⌥ while you speak.")
             }
@@ -792,11 +787,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             log("quick: \(handled ? "handled" : "→ claude") intent=\(result?["intent"] ?? "-") conf=\(result?["confidence"] ?? "-") \(result?["reason"] ?? "") \(Int(Date().timeIntervalSince(started) * 1000))ms")
             guard handled, let message = result?["message"] as? String else { self.captureAndAsk(text); return }
             self.activity.question(text, project: self.currentProject, shots: [])
-            self.activity.note("⚡ \(message) (Jev, \(Int(Date().timeIntervalSince(started) * 1000))ms)")
-            self.state.raw = "⚡ " + message
+            self.activity.note("\(message) (Jev, \(Int(Date().timeIntervalSince(started) * 1000))ms)")
+            self.state.raw = message
             self.set(.done)
             self.speaker.feed(message, final: true)
-            self.history.add(HistoryEntry(date: Date(), project: self.currentProject, question: text, answer: "⚡ " + message, screenshots: []))
+            self.history.add(HistoryEntry(date: Date(), project: self.currentProject, question: text, answer: message, screenshots: []))
             self.scheduleHide(after: 4)
         }
     }
@@ -1058,7 +1053,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     func ask(_ question: String, shots: [Shot], window: WinInfo? = nil) {
         taskHUD.reset(title: question.count > 40 ? String(question.prefix(40)) + "…" : question)
         var question = question
-        if let recipe = Recipes.match(question) { question = "\(recipe.name): \(recipe.prompt)" }
         if let crash = crashWatcher.recent {
             let mins = max(1, Int(Date().timeIntervalSince(crash.date) / 60))
             question += "\n(If relevant: \(crash.app) crashed \(mins) min ago; crash report at \(crash.file.path).)"
@@ -1322,7 +1316,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
 
         // Project: Auto, or pick one (candidates refreshed in the background each time the menu opens)
         refreshCandidates()
-        submenu("Project: \((currentProject as NSString).lastPathComponent)\(Settings.pinnedProject != nil ? " 📌" : "")", in: menu) { m in
+        submenu("Project: \((currentProject as NSString).lastPathComponent)\(Settings.pinnedProject != nil ? " (pinned)" : "")", in: menu) { m in
             item("Auto: follow the window under the pointer", #selector(pickProject(_:)), in: m, on: Settings.pinnedProject == nil)
             m.addItem(.separator())
             var seen = Set<String>()
@@ -1332,7 +1326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 item("\((path as NSString).lastPathComponent)   \(note)\(shortPath)", #selector(pickProject(_:)), in: m,
                      on: Settings.pinnedProject == path, value: path)
             }
-            for r in candidates.running { add(r.project, note: "⚡ \(r.assistant.binary) running · ") }
+            for r in candidates.running { add(r.project, note: "\(r.assistant.binary) running · ") }
             for p in candidates.windows { add(p, note: "open · ") }
             for p in [currentProject] + Array(Set(history.entries.prefix(50).map(\.project))).sorted() + terminals.values.map(\.project).sorted() + sessions.values.map(\.cwd).sorted() {
                 add(p, note: "recent · ")
@@ -1342,7 +1336,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             item("Choose Folder…", #selector(chooseProjectFolder), in: m)
         }
         usageItems(in: menu, item: item)
-        submenu(Settings.autopilot ? "Autopilot: On (\(autopilot.calls)/\(Autopilot.hourlyCap) checks this hour)" : "Autopilot: Off", in: menu) { m in
+        // Everyday items stay at the top level; everything else is gathered under Settings.
+        let settingsMenu = NSMenu()
+        submenu(Settings.autopilot ? "Autopilot: On (\(autopilot.calls)/\(Autopilot.hourlyCap) checks this hour)" : "Autopilot: Off", in: settingsMenu) { m in
             item(Settings.autopilot ? "Turn Off" : "Turn On…", #selector(toggleAutopilot), in: m)
             item("Check Now", Settings.autopilot ? #selector(autopilotCheckNow) : nil, in: m)
             m.addItem(.separator())
@@ -1360,13 +1356,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 item(name, #selector(toggleAutopilotApp(_:)), in: m, on: Settings.autopilotApps.contains(id), value: id)
             }
         }
-        item(Settings.screenshotEveryQuestion ? "Hold ⌥ to ask · ⌥⇧Space to point at an area" : "Hold ⌥ to ask (text) · ⌥⌘ with a screenshot · ⌥⇧Space to point at an area", nil, in: menu)
-        if let status = updater.status { item("⏳ " + status, nil, in: menu) }
-        else if let release = updater.available { item("⬆︎ Install Update (\(release.version))…", #selector(installUpdate), in: menu) }
-        if !Screen.hasPermission { item("⚠︎ Grant Screen Recording…", #selector(openScreenSettings), in: menu) }
+        if let status = updater.status { item(status, nil, in: menu) }
+        else if let release = updater.available { item("Install Update (\(release.version))…", #selector(installUpdate), in: menu) }
+        if !Screen.hasPermission { item("Grant Screen Recording…", #selector(openScreenSettings), in: menu) }
         menu.addItem(.separator())
 
-        submenu("Assistant: \(Settings.assistant.appName)", in: menu) { m in
+        submenu("Assistant: \(Settings.assistant.appName)", in: settingsMenu) { m in
             for a in [Assistant.claude, .antigravity] {
                 let installed: Bool
                 switch a {
@@ -1382,7 +1377,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
 
         // How answers are delivered
-        submenu("Answer In", in: menu) { m in
+        submenu("Answer In", in: settingsMenu) { m in
             item("\(Settings.assistant.name) Terminal: type or talk, same conversation", #selector(useTerminalMode), in: m, on: Settings.terminalMode)
             item("Bubble Only: background, leaner", #selector(useBackgroundMode), in: m, on: !Settings.terminalMode)
             m.addItem(.separator())
@@ -1395,7 +1390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             }
         }
 
-        submenu(Settings.assistant == .antigravity ? "Model" : "Model: \(MenuLabels.claudeModel(cfg.model ?? Settings.model))", in: menu) { m in
+        submenu(Settings.assistant == .antigravity ? "Model" : "Model: \(MenuLabels.claudeModel(cfg.model ?? Settings.model))", in: settingsMenu) { m in
             if Settings.assistant == .antigravity {
                 item("Default (from your agy settings)", #selector(chooseAgyModel(_:)), in: m, on: Settings.agyModel == nil)
                 m.addItem(.separator())
@@ -1414,7 +1409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             }
         }
 
-        submenu("Effort: \(MenuLabels.effort(Settings.effort))", in: menu) { m in
+        submenu("Effort: \(MenuLabels.effort(Settings.effort))", in: settingsMenu) { m in
             for level in [nil, "low", "medium", "high", "xhigh", "max"] as [String?] {
                 item(MenuLabels.effort(level) + (level == nil ? " (the CLI's own setting)" : ""), #selector(chooseEffort(_:)), in: m,
                      on: Settings.effort == level, value: level)
@@ -1423,15 +1418,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             item("Applies to Claude and Gemini; higher is slower but more thorough.", nil, in: m)
         }
 
-        submenu("Recipes", in: menu) { m in
-            for r in Recipes.load() { item(r.name, #selector(runRecipe(_:)), in: m, value: r.prompt).toolTip = r.prompt }
-            m.addItem(.separator())
-            item("Edit Recipes…", #selector(editRecipes), in: m)
-            item("Or say \"run the tests\", \"review my changes\"… by name", nil, in: m)
-        }
 
         let controlNames = ["ask": "Ask Before Each Action", "auto": "Allow All Actions", "off": "Off"]
-        submenu("Computer Control: \(controlNames[Settings.computerControl] ?? "Ask")", in: menu) { m in
+        submenu("Computer Control: \(controlNames[Settings.computerControl] ?? "Ask")", in: settingsMenu) { m in
             for mode in ["ask", "auto", "off"] {
                 item(controlNames[mode]!, #selector(chooseComputerControl(_:)), in: m, on: Settings.computerControl == mode, value: mode)
             }
@@ -1443,8 +1432,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             item("Watch for App Crashes", #selector(toggleWatchCrashes), in: m, on: Settings.watchCrashes)
         }
 
-        submenu("Voice & Audio", in: menu) { m in
-            if let status = installer?.status { item("⏳ " + status, nil, in: m); m.addItem(.separator()) }
+        submenu("Voice & Audio", in: settingsMenu) { m in
+            if let status = installer?.status { item(status, nil, in: m); m.addItem(.separator()) }
             item("Speak Answers", #selector(toggleSpeakSetting), in: m, on: Settings.speak)
             submenu("Speech Speed", in: m) { sp in
                 for x in [1.0, 1.25, 1.5, 1.75, 2.0] {
@@ -1488,28 +1477,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             m.addItem(deviceMenu(title: "Microphone", input: true))
             m.addItem(deviceMenu(title: "Speaker", input: false))
         }
-        menu.addItem(.separator())
 
         item("History…", #selector(showHistoryMenu), in: menu, key: "y")
-        item("Copy Last Answer", #selector(copyAnswerMenu), in: menu, key: "c")
         item("New Conversation", #selector(newConversation), in: menu, key: "n")
+        item("Copy Last Answer", #selector(copyAnswerMenu), in: menu, key: "c")
         menu.addItem(.separator())
 
         submenu("Settings", in: menu) { m in
-            item("Set Up Claude Code (MCP tools)…", #selector(setupClaudeCode as () -> Void), in: m)
-            item("Set Up Antigravity CLI (MCP tools)…", cfg.agy == nil ? nil : #selector(setupAgy), in: m)
-            item("Start at Login", #selector(toggleLogin), in: m, on: LoginItem.isEnabled)
-            item("Fix Permissions…", #selector(fixPermissions), in: m)
-            item("Check for Updates… (v\(Updater.currentVersion))", #selector(checkForUpdates), in: m)
-            item("Check for Updates Automatically", #selector(toggleAutoUpdate), in: m, on: Settings.autoUpdate)
-            item("Screenshot Every Question (uses more tokens)", #selector(toggleScreenshotEvery), in: m, on: Settings.screenshotEveryQuestion)
-            item("Instant Browser Commands (Jev)", #selector(toggleQuick), in: m, on: Settings.quickCommands)
-            item("Show AI Cursor in Browser", #selector(toggleGhost), in: m, on: !FileManager.default.fileExists(atPath: ghostOffFile.path))
-            item("API Keys (TypeSafe for Jev, Gemini)…", #selector(openIntegrations), in: m)
+            for i in settingsMenu.items { settingsMenu.removeItem(i); m.addItem(i) }
             m.addItem(.separator())
-            item("Open Log", #selector(openLog), in: m)
-            if ((try? FileManager.default.attributesOfItem(atPath: CrashReporter.logURL.path)[.size] as? Int) ?? 0) > 0 {
-                item("Open Crash Log", #selector(openCrashLog), in: m)
+            item("Setup Wizard…", #selector(showSetupWizard), in: m)
+            item("Start at Login", #selector(toggleLogin), in: m, on: LoginItem.isEnabled)
+            item("Check for Updates… (v\(Updater.currentVersion))", #selector(checkForUpdates), in: m)
+            submenu("More", in: m) { more in
+                item("Screenshot Every Question (uses more tokens)", #selector(toggleScreenshotEvery), in: more, on: Settings.screenshotEveryQuestion)
+                item("Check for Updates Automatically", #selector(toggleAutoUpdate), in: more, on: Settings.autoUpdate)
+                item("Instant Browser Commands (Jev)", #selector(toggleQuick), in: more, on: Settings.quickCommands)
+                item("Show AI Cursor in Browser", #selector(toggleGhost), in: more, on: !FileManager.default.fileExists(atPath: ghostOffFile.path))
+                item("API Keys (TypeSafe for Jev, Gemini)…", #selector(openIntegrations), in: more)
+                more.addItem(.separator())
+                item("Set Up Claude Code (MCP tools)…", #selector(setupClaudeCode as () -> Void), in: more)
+                item("Set Up Antigravity CLI (MCP tools)…", cfg.agy == nil ? nil : #selector(setupAgy), in: more)
+                item("Fix Permissions…", #selector(fixPermissions), in: more)
+                more.addItem(.separator())
+                item("Open Log", #selector(openLog), in: more)
+                if ((try? FileManager.default.attributesOfItem(atPath: CrashReporter.logURL.path)[.size] as? Int) ?? 0) > 0 {
+                    item("Open Crash Log", #selector(openCrashLog), in: more)
+                }
             }
         }
         item("Quit visioncli", #selector(quit), in: menu, key: "q")
@@ -1561,7 +1555,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         speaker.feed("This is the VisionCLI speaker test.", final: true, force: true)
     }
 
-    /// Project name next to the menu-bar icon (📌 when chosen manually).
+    /// Project name next to the menu-bar icon.
     /// Claude plan usage at the top of the menu, with a submenu to refresh it or hide it from the menu bar.
     func usageItems(in menu: NSMenu, item: (String, Selector?, NSMenu, String, Bool, Any?) -> NSMenuItem) {
         let u = UsageTracker.shared
@@ -1597,7 +1591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
 
     func updateStatusTitle() {
         let name = (currentProject as NSString).lastPathComponent
-        let title = " " + (Settings.pinnedProject != nil ? "📌 " : "") + (name.count > 18 ? String(name.prefix(17)) + "…" : name)
+        let title = " " + (name.count > 18 ? String(name.prefix(17)) + "…" : name)
         let u = UsageTracker.shared
         if Settings.usageInMenuBar, let sp = u.percent(u.session), let wp = u.percent(u.week) {
             // Colored rings: the current 5-hour session, plus the week when turned on.
@@ -1766,6 +1760,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         then()
     }
 
+    /// Connects VisionCLI's MCP tools to one CLI without any dialogs (for the setup wizard). Calls back on main with
+    /// nil on success, or what went wrong.
+    func connectTools(_ a: Assistant, done: @escaping (String?) -> Void) {
+        guard let node = cfg.node, let server = cfg.server else { done("Needs Node.js 18 or later (nodejs.org)."); return }
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = cfg.path
+        let claude = cfg.claude, gemini = cfg.gemini, agy = cfg.agy
+        DispatchQueue.global(qos: .userInitiated).async {
+            var failure: String?
+            switch a {
+            case .claude:
+                shell(claude, ["mcp", "remove", "visioncli", "-s", "user"], env: env)
+                let (status, out, err) = shell(claude, ["mcp", "add", "visioncli", "--scope", "user", "--", node, server], env: env)
+                if status != 0 { failure = err.isEmpty ? out : err }
+            case .gemini:
+                guard let gemini else { failure = "Gemini CLI isn't installed."; break }
+                shell(gemini, ["mcp", "remove", "-s", "user", "visioncli"], env: env)
+                let (status, out, err) = shell(gemini, ["mcp", "add", "-s", "user", "--trust", "visioncli", node, server], env: env)
+                if status != 0 { failure = err.isEmpty ? out : err }
+            case .antigravity:
+                if agy == nil { failure = "Antigravity isn't installed."; break }
+                do { try AgySetup.install(node: node, server: server) } catch { failure = error.localizedDescription }
+            }
+            DispatchQueue.main.async { done(failure?.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+    }
+
+    /// Are VisionCLI's tools already registered with this CLI? Slow (runs the CLI): call off the main thread.
+    func toolsConnected(_ a: Assistant) -> Bool {
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = cfg.path
+        switch a {
+        case .claude:
+            guard FileManager.default.isExecutableFile(atPath: cfg.claude) else { return false }
+            return shell(cfg.claude, ["mcp", "get", "visioncli"], env: env).0 == 0
+        case .gemini:
+            guard let gemini = cfg.gemini else { return false }
+            return shell(gemini, ["mcp", "list"], env: env).1.contains("visioncli")
+        case .antigravity:
+            let config = home.appendingPathComponent(".gemini/config/mcp_config.json")
+            return (try? String(contentsOf: config, encoding: .utf8))?.contains("visioncli") ?? false
+        }
+    }
+
+    func isInstalled(_ a: Assistant) -> Bool {
+        switch a {
+        case .claude: return FileManager.default.isExecutableFile(atPath: cfg.claude)
+        case .antigravity: return cfg.agy != nil
+        case .gemini: return cfg.gemini != nil
+        }
+    }
+
     @objc func chooseEffort(_ sender: NSMenuItem) {
         Settings.effort = sender.representedObject as? String
         log("effort: \(Settings.effort ?? "default")")
@@ -1791,7 +1837,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             do {
                 try AgySetup.install(node: node, server: server)
                 alert.messageText = "Antigravity CLI is set up"
-                alert.informativeText = "visioncli's tools are now available in every agy workspace. Restart any running `agy` sessions. To answer voice questions with Gemini through Antigravity, choose 👁 → Assistant → Gemini (Antigravity CLI)."
+                alert.informativeText = "visioncli's tools are now available in every agy workspace. Restart any running `agy` sessions. To answer voice questions with Gemini through Antigravity, choose VisionCLI menu → Settings → Assistant → Gemini (Antigravity CLI)."
             } catch {
                 alert.messageText = "Couldn't set up Antigravity CLI"
                 alert.informativeText = error.localizedDescription
@@ -1817,7 +1863,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 DispatchQueue.main.async {
                     alert.messageText = status == 0 ? "Gemini CLI is set up" : "Couldn't set up Gemini CLI"
                     alert.informativeText = status == 0
-                        ? "visioncli's tools are now available in every Gemini CLI project. Restart any running `gemini` sessions. To answer voice questions with Gemini, choose 👁 → Assistant → Gemini CLI.\n\nFor screenshots when typing in Gemini CLI, give your terminal app Screen Recording access too."
+                        ? "visioncli's tools are now available in every Gemini CLI project. Restart any running `gemini` sessions. To answer voice questions with Gemini, choose VisionCLI menu → Settings → Assistant → Gemini CLI.\n\nFor screenshots when typing in Gemini CLI, give your terminal app Screen Recording access too."
                         : (err.isEmpty ? out : err)
                     NSApp.activate(ignoringOtherApps: true)
                     alert.runModal()
@@ -1833,6 +1879,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     /// First launch of a downloaded app: explain the basics and offer the Claude Code setup.
+    /// Hold ⌥ / ⌥⌘ (needs Accessibility). Called at launch, or when setup gets the permission.
+    private var modifierKeysOn = false
+    func enableModifierKeys() {
+        guard !modifierKeysOn else { return }
+        modifierKeysOn = true
+        hotkeys.set(.talk, false)
+        hotkeys.set(.screen, false)
+        modifierHold.onChange = { [weak self] key, pressed in self?.hotkey(key, pressed: pressed) }
+        modifierHold.immediate = { [weak self] in self?.state.phase == .listening }
+        modifierHold.onUpgrade = { [weak self] in
+            guard let self, self.state.phase == .listening, !self.withScreen else { return }
+            log("hotkey: ⌘ added, now with a screenshot")
+            self.withScreen = true
+            self.spotlight.show()
+        }
+        modifierHold.start()
+    }
+
+    @objc func showSetupWizard() {
+        setupWizard.show(hooks: SetupWizard.Hooks(
+            chooseSpeech: { [weak self] engine in
+                // "whisper:small.en" picks a Whisper model; otherwise "parakeet" | "external" | "apple".
+                if engine.hasPrefix("whisper:") { Settings.sttEngine = "whisper"; Settings.whisperModel = String(engine.dropFirst(8)) }
+                else { Settings.sttEngine = engine }
+                self?.restartWhisper()
+            },
+            whisperModels: { VoiceModels.whisperModels().map(\.0) },
+            whisperReady: { [weak self] in self?.whisper?.ready ?? false },
+            installWhisper: { [weak self] in self?.installer.installWhisper() },
+            voices: { VoiceModels.kokoroModel != nil ? VoiceModels.kokoroVoiceList.map { ($0.0, $0.1) } : [] },
+            selectVoice: { [weak self] id in Settings.speak = true; self?.selectVoice(id) },
+            setSpeak: { [weak self] on in Settings.speak = on; if !on { self?.speaker.reset() } },
+            setSpeed: { Settings.speechSpeed = $0 },
+            parakeetReady: { [weak self] in self?.parakeet?.ready ?? false },
+            installKokoro: { [weak self] in self?.installer.installKokoro() },
+            installStatus: { [weak self] in self?.installer.status },
+            useSystemVoice: { Settings.ttsEngine = "system"; Settings.speak = true },
+            isInstalled: { [weak self] in self?.isInstalled($0) ?? false },
+            toolsConnected: { [weak self] in self?.toolsConnected($0) ?? false },
+            connectTools: { [weak self] a, done in self?.connectTools(a, done: done) },
+            chooseAssistant: { a in Settings.assistant = a; log("assistant: \(a.appName)") },
+            setTerminalMode: { Settings.terminalMode = $0 },
+            accessibilityGranted: { [weak self] in self?.enableModifierKeys() },
+            relaunch: { Updater.relaunch() }
+        ))
+    }
+
     func showWelcome() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
@@ -1843,13 +1936,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         • Hold ⌥, ask, let go: the answer appears in the top-right corner.
         • Hold ⌥ ⌘ to send a screenshot of the window too.
         • Hold ⌥ ⇧ Space to drag a box around what you mean.
-        • The 👁 menu bar icon has projects, voices, models and settings.
-        • Optional: 👁 → Voice & Audio can download Whisper (more accurate transcription) and natural Kokoro voices.
+        • The VisionCLI menu bar icon has projects, voices, models and settings.
+        • Optional: VisionCLI menu → Settings → Voice & Audio can download Whisper (more accurate transcription) and natural Kokoro voices.
 
         macOS will ask for Microphone, Speech Recognition and Screen Recording access. VisionCLI needs all three.
         To use the tools by typing in Claude Code, also give your terminal app (iTerm, Terminal…) Screen Recording access.
 
-        Set up your AI CLI now so VisionCLI's tools work in every project? (Works with Claude Code and Gemini through Antigravity; pick which one answers voice questions in 👁 → Assistant.)
+        Set up your AI CLI now so VisionCLI's tools work in every project? (Works with Claude Code and Gemini through Antigravity; pick which one answers voice questions in VisionCLI menu → Settings → Assistant.)
         """
         let hasClaude = FileManager.default.isExecutableFile(atPath: cfg.claude), hasAgy = cfg.agy != nil
         alert.addButton(withTitle: "Set Up \([hasClaude ? "Claude Code" : nil, hasAgy ? "Antigravity" : nil].compactMap { $0 }.joined(separator: " + ").ifEmpty("Claude Code"))")
@@ -1880,9 +1973,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         else { Settings.sttEngine = "apple" }
         restartWhisper()
     }
-    @objc func chooseVoice(_ sender: NSMenuItem) {
+    @objc func chooseVoice(_ sender: NSMenuItem) { selectVoice(sender.representedObject as? String) }
+
+    /// A Kokoro voice id, or nil for the macOS voice; plays a short preview.
+    func selectVoice(_ id: String?) {
         speaker.reset()
-        if let voice = sender.representedObject as? String {
+        if let voice = id {
             Settings.ttsEngine = "kokoro"
             Settings.kokoroVoice = voice
             kokoro.start()
@@ -2041,23 +2137,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         Settings.computerControl = mode
         controlAllowUntil = nil
         if mode != "off", !Computer.isTrusted { Computer.requestTrust() }
-    }
-
-    @objc func runRecipe(_ sender: NSMenuItem) {
-        guard let prompt = sender.representedObject as? String else { return }
-        let name = sender.title
-        var shots: [Shot] = []
-        if let w = Screen.windowUnderPointer(), let shot = try? Screen.capture(window: w) { shots = [shot] }
-        state.question = name
-        state.raw = ""
-        state.status = "Starting “\(name)”…"
-        set(.thinking)
-        ask("\(name): \(prompt)", shots: shots)
-    }
-
-    @objc func editRecipes() {
-        _ = Recipes.load() // writes the defaults the first time
-        NSWorkspace.shared.open(Recipes.file)
     }
 
     @objc func toggleWatchCrashes() {

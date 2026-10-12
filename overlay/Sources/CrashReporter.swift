@@ -40,7 +40,7 @@ enum CrashReporter {
         FileManager.default.createFile(atPath: markerURL.path, contents: nil)
         guard crashedLastTime else { return nil }
         appendSystemReport()
-        return "VisionCLI restarted after a crash. Details: 👁 → Open Crash Log."
+        return "VisionCLI restarted after a crash. Details: VisionCLI menu → Settings → More → Open Crash Log."
     }
 
     /// Clean shutdown: no crash next launch.
