@@ -3,58 +3,12 @@ import WebKit
 
 // Mermaid diagrams in the answer bubble: ```mermaid blocks are rendered with the bundled mermaid.js (offline).
 
-enum AnswerSegment: Hashable {
-    case text(String)
-    case mermaid(String)
-    case pendingDiagram // a ```mermaid block that is still streaming in
-}
-
 enum Diagrams {
-    private static var lastSplit: (answer: String, segments: [AnswerSegment])?
-    private static let lastSplitLock = NSLock()
+    /// Split an answer into text and mermaid blocks (see DiagramText).
+    static func segments(_ answer: String) -> [AnswerSegment] { DiagramText.segments(answer) }
 
-    /// Split an answer into text and mermaid blocks. Remembers the last answer: while streaming, the bubble and the
-    /// speaker both ask for the same text.
-    static func segments(_ answer: String) -> [AnswerSegment] {
-        lastSplitLock.lock()
-        let last = lastSplit
-        lastSplitLock.unlock()
-        if let last, last.answer == answer { return last.segments }
-        let out = split(answer)
-        lastSplitLock.lock()
-        lastSplit = (answer, out)
-        lastSplitLock.unlock()
-        return out
-    }
-
-    private static func split(_ answer: String) -> [AnswerSegment] {
-        var out: [AnswerSegment] = []
-        var rest = Substring(answer)
-        while let open = rest.range(of: "```mermaid") {
-            let before = rest[..<open.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !before.isEmpty { out.append(.text(before)) }
-            let afterOpen = rest[open.upperBound...]
-            guard let close = afterOpen.range(of: "```") else { out.append(.pendingDiagram); return out }
-            let code = afterOpen[..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !code.isEmpty { out.append(.mermaid(code)) }
-            rest = afterOpen[close.upperBound...]
-        }
-        let tail = rest.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !tail.isEmpty { out.append(.text(tail)) }
-        return out
-    }
-
-    /// Text to read aloud: diagrams become a short mention; an unfinished one cuts the text off (so the spoken
-    /// prefix only ever grows while streaming).
-    static func speakable(_ answer: String) -> String {
-        segments(answer).map {
-            switch $0 {
-            case .text(let t): return t
-            case .mermaid: return "(See the diagram.)"
-            case .pendingDiagram: return ""
-            }
-        }.joined(separator: "\n")
-    }
+    /// Text to read aloud, diagrams reduced to a short mention (see DiagramText).
+    static func speakable(_ answer: String) -> String { DiagramText.speakable(answer) }
 
     /// Fallback when the cache dir can't be set up: the bundled mermaid.js inlined into the page.
     static let script: String = {

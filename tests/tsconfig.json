@@ -1,0 +1,6 @@
+{
+  // Typechecks the tests together with the sources they import (`npm test` runs this before the tests).
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "rootDir": "..", "noEmit": true },
+  "include": ["../src", "."]
+}

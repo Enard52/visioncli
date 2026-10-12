@@ -16,5 +16,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx tsc --noEmit
+      - run: npm test
+      - name: Swift unit tests
+        run: sh scripts/test-overlay.sh
       - name: Compile the overlay app
         run: VISIONCLI_NO_INSTALL=1 sh scripts/build-overlay.sh

@@ -89,6 +89,11 @@ export async function tabs(b?: BrowserName): Promise<Tab[]> {
   // Three Apple events for all windows at once (per-tab property reads are what made this slow).
   const out = await osa(`const a = Application(${JSON.stringify(browser)});
     JSON.stringify([a.windows.activeTabIndex(), a.windows.tabs.title(), a.windows.tabs.url()])`, 8000, true);
+  return zipTabs(out);
+}
+
+/** Tabs from the JXA reply `[activeTabIndex per window, titles per window, urls per window]` (front window first). */
+export function zipTabs(out: string): Tab[] {
   const [active, titles, urls]: [number[], (string | null)[][], (string | null)[][]] = JSON.parse(out || "[[],[],[]]");
   return titles.flatMap((ts, w) =>
     ts.map((title, i) => ({
@@ -119,7 +124,8 @@ export async function switchTo(tabId: string, b?: BrowserName) {
 // The tab the assistant works in: later opens navigate it instead of piling up new tabs/windows.
 // Kept in a file because quick commands run as separate processes.
 const AGENT_TAB = join(homedir(), "Library", "Application Support", "visioncli", "agent-tab.json");
-const sameUrl = (a: string, b: string) => {
+/** Same page, ignoring scheme, www., trailing slashes, #fragment and case. */
+export const sameUrl = (a: string, b: string) => {
   const norm = (u: string) => u.replace(/#.*$/, "").replace(/\/+$/, "").replace(/^https?:\/\/(www\.)?/i, "").toLowerCase();
   return norm(a) === norm(b);
 };
@@ -216,8 +222,22 @@ const FRAMES = `const __docs = () => { const out = [document];
     while (w && w !== window && w.frameElement) { const fr = w.frameElement.getBoundingClientRect(); x += fr.left; y += fr.top; w = w.parent; }
     return { left: x, top: y, width: r.width, height: r.height }; };`;
 
+/**
+ * Links as a short path (same site) or host + path: full URLs with tracking params cost a lot of tokens. Runs in the page
+ * (its source is embedded in ELEMENTS_JS), so it must stay plain JavaScript without outside references.
+ */
+export function shortHrefFor(href: string, hereHost: string): string | undefined {
+  try {
+    const u = new URL(href);
+    if (!/^https?:$/.test(u.protocol)) return undefined;
+    return ((u.host === hereHost ? "" : u.host) + u.pathname + (u.search.length < 40 ? u.search : "")).slice(0, 80);
+  } catch (e) {
+    return undefined;
+  }
+}
+
 // Tags visible, clickable elements with data-vcli ids so a later click/type can target them exactly.
-const ELEMENTS_JS = `(() => {
+export const ELEMENTS_JS = `(() => {
   ${FRAMES}
   const vis = el => { const r = el.getBoundingClientRect(); const s = el.ownerDocument.defaultView.getComputedStyle(el);
     return r.width > 2 && r.height > 2 && s.visibility !== 'hidden' && s.display !== 'none' &&
@@ -231,12 +251,7 @@ const ELEMENTS_JS = `(() => {
   const sel = 'a[href], button, input, textarea, select, label, summary, [onclick], [aria-haspopup], [contenteditable=true], ' +
     '[role=button], [role=link], [role=tab], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=option], ' +
     '[role=checkbox], [role=switch], [role=radio], [role=combobox], [role=listbox], [role=slider], [role=treeitem]';
-  // Links as a short path (same site) or host + path: full URLs with tracking params cost a lot of tokens.
-  const shortHref = el => { if (typeof el.href !== 'string' || !el.href) return undefined;
-    try { const u = new URL(el.href); if (!/^https?:$/.test(u.protocol)) return undefined;
-      const here = el.ownerDocument.location;
-      return ((u.host === here.host ? '' : u.host) + u.pathname + (u.search.length < 40 ? u.search : '')).slice(0, 80);
-    } catch (e) { return undefined; } };
+  const shortHref = el => typeof el.href === 'string' && el.href ? (${shortHrefFor})(el.href, el.ownerDocument.location.host) : undefined;
   const out = []; let n = 0;
   __qa('[data-vcli]').forEach(el => el.removeAttribute('data-vcli')); // ids from an earlier listing
   for (const el of __qa(sel)) {

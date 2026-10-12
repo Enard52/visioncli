@@ -19,7 +19,9 @@ if (cmd) {
     }
     else if (cmd === "computer") {
       const computer = await import("./control.js");
-      console.log(JSON.stringify(await computer.send(JSON.parse(rest.join(" ") || '{"action":"status"}')), null, 2));
+      // Debug path: raw JSON straight to the app, unchecked (the typed API is for the tools).
+      const req = JSON.parse(rest.join(" ") || '{"action":"status"}') as import("./control.js").ControlRequest;
+      console.log(JSON.stringify(await computer.send(req), null, 2));
     }
     else if (cmd === "browser") {
       // Debug helper: visioncli browser tabs|elements|read|click <t>|open <url>|scroll <dir>|nav <action>

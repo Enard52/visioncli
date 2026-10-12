@@ -13,22 +13,27 @@ type Conn =
   | { kind: "postgres"; url?: string; host: string; port: number; user: string; password: string; database: string }
   | { kind: "sqlite"; file: string };
 
-const MAX_ROWS = 50;
-const MAX_CELL = 200;
+export const MAX_ROWS = 50;
+export const MAX_CELL = 200;
+
+/** KEY=value lines of a .env file: optional `export`, quoted values kept verbatim, unquoted ones lose a trailing # comment. */
+export function parseEnvText(text: string, vars: Record<string, string> = {}): Record<string, string> {
+  for (const line of text.split("\n")) {
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line); // lazy: trailing spaces/CR aren't part of the value
+    if (!m) continue;
+    let v = m[2];
+    if (/^(['"]).*\1$/.test(v)) v = v.slice(1, -1);
+    else v = v.replace(/\s+#.*$/, "");
+    vars[m[1]] = v;
+  }
+  return vars;
+}
 
 function parseEnv(dir: string): Record<string, string> {
   const vars: Record<string, string> = {};
-  for (const name of [".env", ".env.local"]) {
+  for (const name of [".env", ".env.local"]) { // .env.local wins
     const file = join(dir, name);
-    if (!existsSync(file)) continue;
-    for (const line of readFileSync(file, "utf8").split("\n")) {
-      const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
-      if (!m) continue;
-      let v = m[2];
-      if (/^(['"]).*\1$/.test(v)) v = v.slice(1, -1);
-      else v = v.replace(/\s+#.*$/, "");
-      vars[m[1]] = v;
-    }
+    if (existsSync(file)) parseEnvText(readFileSync(file, "utf8"), vars);
   }
   return vars;
 }
@@ -75,7 +80,8 @@ export function assertReadOnly(sql: string) {
   return s;
 }
 
-function format(rows: Record<string, unknown>[]) {
+/** Rows as a tab-separated table, capped at MAX_ROWS rows and MAX_CELL characters per cell. */
+export function formatRows(rows: Record<string, unknown>[]) {
   if (!rows.length) return "(no rows)";
   const shown = rows.slice(0, MAX_ROWS);
   const cols = Object.keys(shown[0]);
@@ -168,10 +174,10 @@ async function rows(sql: string, c: Conn): Promise<Record<string, unknown>[]> {
 
 export async function query(sql: string, dir = process.cwd()): Promise<string> {
   const stmt = assertReadOnly(sql);
-  return format(await rows(stmt, connection(dir)));
+  return formatRows(await rows(stmt, connection(dir)));
 }
 
-const MAX_SCHEMA = 8000;
+export const MAX_SCHEMA = 8000;
 
 /** Tables with columns, and foreign keys, for the whole database or one table (capped; pass a table for the rest). */
 export async function schema(table?: string, dir = process.cwd()): Promise<string> {
@@ -201,8 +207,21 @@ export async function schema(table?: string, dir = process.cwd()): Promise<strin
       c,
     );
     tables = all;
-    fks = all.flatMap((r) => (r.fk ? String(r.fk).split("\n").map((fk) => ({ t: r.t, fk })) : []));
+    fks = sqliteForeignKeys(all);
   }
+  return formatSchema(tables, fks, t);
+}
+
+/** sqlite's per-table newline-joined foreign keys ("from -> table.to") as one row each. */
+export function sqliteForeignKeys(all: Record<string, unknown>[]): Record<string, unknown>[] {
+  return all.flatMap((r) => (r.fk ? String(r.fk).split("\n").map((fk) => ({ t: r.t, fk })) : []));
+}
+
+/**
+ * The schema text: tables with their columns, then foreign keys, capped at MAX_SCHEMA characters (the rest is summarized).
+ * `t`/`cols`/`fk` are read in either case, as some drivers return column labels upper-cased.
+ */
+export function formatSchema(tables: Record<string, unknown>[], fks: Record<string, unknown>[], t?: string): string {
   if (!tables.length) return t ? `(no table ${t})` : "(no tables)";
   const val = (r: Record<string, unknown>, k: string) => String(r[k] ?? r[k.toUpperCase()] ?? "");
   const lines = ["TABLES", ...tables.map((r) => `${val(r, "t")}: ${val(r, "cols")}`), "", "FOREIGN KEYS",

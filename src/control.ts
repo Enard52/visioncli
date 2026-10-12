@@ -30,9 +30,81 @@ export const rememberLook = (m: ShotMap, seq = ++lookSeq) => {
   lastLook = m;
 };
 
+type Point = { x: number; y: number };
+type Rect = { x: number; y: number; width: number; height: number };
+
+/**
+ * The app's control protocol (overlay/Sources/Control.swift), one request shape per action, so a misspelled action or
+ * field fails the typecheck. Fields are snake_case/short as the app reads them.
+ */
+export interface ControlRequests {
+  status: {};
+  displays: { windows?: boolean };
+  announce: { text: string };
+  autopilot_check: {};
+  capture: { window_id: number } | Rect; // a window, or an area in top-left points (e.g. a whole display)
+  elements: { app?: string };
+  click: { element?: number; x?: number; y?: number; button?: "left" | "right"; count?: number };
+  type: { text: string; element?: number; replace?: boolean; app?: string };
+  key: { keys: string; app?: string };
+  scroll: { x?: number; y?: number; dx?: number; dy?: number };
+  drag: { x1: number; y1: number; x2: number; y2: number };
+  open_app: { name: string };
+  focus_app: { name: string };
+  open_url: { url: string };
+}
+export type ControlAction = keyof ControlRequests;
+export type ControlRequest<A extends ControlAction = ControlAction> = { [K in A]: { action: K } & ControlRequests[K] }[A];
+
+/** An on-screen window as the app reports it (front-most first). */
+export interface AppWindow { id: number; app: string; title: string; pid?: number; bounds: Rect }
+/** An Accessibility element from `elements`: center and size in screen points. */
+export interface UIElement { id: number; role: string; label: string; x: number; y: number; w: number; h: number }
+/** What the app replies to an action it performed (after approval). */
+export interface ActionDone { ok: true; done: string; frontApp: string }
+
+export interface ControlResponses {
+  status: { trusted: boolean; mode: string; frontApp: string; stopped: boolean };
+  displays: { displays: Rect[]; pointer?: Point; windows?: AppWindow[] };
+  announce: { ok: true };
+  autopilot_check: { ok: true };
+  capture: { data?: string; width?: number; height?: number };
+  elements: { app: string; elements: UIElement[] };
+  click: ActionDone;
+  type: ActionDone;
+  key: ActionDone;
+  scroll: ActionDone;
+  drag: ActionDone;
+  open_app: ActionDone;
+  focus_app: ActionDone;
+  open_url: ActionDone;
+}
+
 // Answered instantly by the app (no approval), so a short timeout; anything else may wait for the user to approve.
-const QUICK_ACTIONS: Record<string, number> = { status: 3000, displays: 3000, announce: 3000, windows: 3000, capture: 5000, elements: 8000 };
+// A Record over every action, so a new action has to pick its timeout here.
 const APPROVAL_TIMEOUT = 5 * 60_000;
+const TIMEOUTS: Record<ControlAction, number> = {
+  status: 3000,
+  displays: 3000,
+  announce: 3000,
+  capture: 5000,
+  elements: 8000,
+  autopilot_check: APPROVAL_TIMEOUT,
+  click: APPROVAL_TIMEOUT,
+  type: APPROVAL_TIMEOUT,
+  key: APPROVAL_TIMEOUT,
+  scroll: APPROVAL_TIMEOUT,
+  drag: APPROVAL_TIMEOUT,
+  open_app: APPROVAL_TIMEOUT,
+  focus_app: APPROVAL_TIMEOUT,
+  open_url: APPROVAL_TIMEOUT,
+};
+
+/** Every action the app understands (kept equal to Swift's ControlAction by a test). */
+export const CONTROL_ACTIONS = Object.keys(TIMEOUTS) as ControlAction[];
+
+/** How long to wait for the app's reply (unknown actions, e.g. from the CLI debug path, may need approval). */
+export const timeoutFor = (action: string): number => TIMEOUTS[action as ControlAction] ?? APPROVAL_TIMEOUT;
 
 // control.json is re-read only when the app restarted (new port/token): connection refused or a bad token.
 let info: { port: number; token: string } | null = null;
@@ -74,10 +146,11 @@ function post(conn: { port: number; token: string }, body: string, timeout: numb
   });
 }
 
-export async function send(action: Record<string, unknown>): Promise<any> {
+/** One request to the app; its `{ error }` replies become thrown errors. */
+export async function send<A extends ControlAction>(req: ControlRequest<A>): Promise<ControlResponses[A]> {
   if (process.platform !== "darwin") throw new Error("Computer control is only supported on macOS.");
-  const body = JSON.stringify(action);
-  const timeout = QUICK_ACTIONS[String(action.action)] ?? APPROVAL_TIMEOUT;
+  const body = JSON.stringify(req);
+  const timeout = timeoutFor(req.action);
   let res: string;
   try {
     res = await post(info ?? readInfo(), body, timeout);
@@ -105,6 +178,7 @@ export function toScreen(x: number, y: number, opts: { image?: number; screen?: 
   if (opts.screen) return { x, y };
   let m: ShotMap | null = lastLook;
   if (opts.image) {
+    m = null; // never fall back to the last look: its pixels are a different image
     try {
       const shots: ShotMap[] = JSON.parse(readFileSync(join(SUPPORT, "shots.json"), "utf8")).shots;
       m = shots[opts.image - 1] ?? null;
@@ -118,20 +192,11 @@ export function toScreen(x: number, y: number, opts: { image?: number; screen?: 
   };
 }
 
-type Rect = { x: number; y: number; width: number; height: number };
-
-/** An on-screen window as the app reports it (front-most first). */
-export interface AppWindow { id: number; app: string; title: string; pid?: number; bounds: Rect }
-
 /**
  * Displays (top-left points) and the mouse position, from the running app; null if it isn't running.
  * `windows: true` also asks for the on-screen windows (newer app versions; older ones just leave them out).
  */
-export async function displaysAndPointer(opts: { windows?: boolean } = {}): Promise<{
-  displays: Rect[];
-  pointer?: { x: number; y: number };
-  windows?: AppWindow[];
-} | null> {
+export async function displaysAndPointer(opts: { windows?: boolean } = {}): Promise<ControlResponses["displays"] | null> {
   try {
     return await send(opts.windows ? { action: "displays", windows: true } : { action: "displays" });
   } catch {

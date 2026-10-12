@@ -1,0 +1,143 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import * as browser from "../browser.js";
+import { errorResult, text } from "./common.js";
+
+const wrap = <A,>(fn: (args: A) => Promise<string>) => async (args: A) => {
+  try {
+    return text(await browser.serial(() => fn(args))); // one browser call at a time (element ids, "window 1")
+  } catch (err) {
+    return errorResult(err);
+  }
+};
+
+/** Brave/Chrome through AppleScript: the browser_* tools. */
+export function register(server: McpServer) {
+  server.registerTool(
+    "browser_tabs",
+    {
+      title: "List browser tabs",
+      description: "Open tabs in the front-most Brave/Chrome (ids like t1.3 = window 1, tab 3), marking the active one.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    wrap(async () => {
+      const b = await browser.pick();
+      return `${b}\n` + (await browser.tabs(b)).map((t) => `${t.id}${t.active ? " (active)" : ""}\t${t.title}\t${t.url}`).join("\n");
+    }),
+  );
+
+  server.registerTool(
+    "browser_open",
+    {
+      title: "Open a URL",
+      description:
+        "Open a URL in Chrome/Brave. Always use this (never ⌘L/⌘T + typing) to go to a page: it switches to a tab already showing it, " +
+        "otherwise reuses your own working tab, and only opens one new tab the first time. new_tab: false loads it in the user's current tab.",
+      inputSchema: { url: z.string(), new_tab: z.boolean().default(true) },
+    },
+    wrap(async ({ url, new_tab }) => browser.open(url, new_tab)),
+  );
+
+  server.registerTool(
+    "browser_switch_tab",
+    {
+      title: "Switch tab",
+      description: "Bring a tab (id from browser_tabs) to the front.",
+      inputSchema: { tab_id: z.string() },
+    },
+    wrap(async ({ tab_id }) => {
+      await browser.switchTo(tab_id);
+      return `Switched to ${tab_id}`;
+    }),
+  );
+
+  server.registerTool(
+    "browser_navigate",
+    {
+      title: "Back / forward / reload / close tab / new tab",
+      description: "Navigate the active tab.",
+      inputSchema: { action: z.enum(["back", "forward", "reload", "close", "new"]) },
+    },
+    wrap(async ({ action }) => {
+      await browser.navigate(action);
+      return `Done: ${action}`;
+    }),
+  );
+
+  server.registerTool(
+    "browser_read",
+    {
+      title: "Read the current page",
+      description: "Title, URL, selected text and readable text of the active tab (capped). Faster and more exact than a screenshot.",
+      inputSchema: { max_chars: z.number().int().min(500).max(50000).default(6000).describe("Raise it (up to 50000) only if the text you need was cut off") },
+      annotations: { readOnlyHint: true },
+    },
+    wrap(async ({ max_chars }) => browser.read(max_chars)),
+  );
+
+  server.registerTool(
+    "browser_elements",
+    {
+      title: "List clickable elements",
+      description: "Visible links, buttons, fields, dropdowns (with options) and toggles (with on/off state) on the active page, with ids (e1, e2, …) for browser_click / browser_type / browser_select.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    wrap(async () =>
+      (await browser.elements())
+        .map((e) =>
+          [e.id, e.kind, e.text, e.state && `[${e.state}]`, e.expanded !== undefined && (e.expanded ? "[open]" : "[closed]"),
+            e.value !== undefined && `value: ${e.value}`, e.options && `options: ${e.options.join(" | ")}`, e.href]
+            .filter(Boolean).join("\t"))
+        .join("\n") || "(none)"),
+  );
+
+  server.registerTool(
+    "browser_click",
+    {
+      title: "Click an element",
+      description: "Click an element by id from browser_elements (or by its visible text).",
+      inputSchema: { target: z.string().describe("Element id like e12, or visible text") },
+    },
+    wrap(async ({ target }) => `Clicked “${await browser.click(target)}”`),
+  );
+
+  server.registerTool(
+    "browser_type",
+    {
+      title: "Type into a field",
+      description: "Set the value of a form field (id from browser_elements), optionally submitting the form.",
+      inputSchema: { target: z.string(), text: z.string(), submit: z.boolean().default(false) },
+    },
+    wrap(async ({ target, text: value, submit }) => {
+      await browser.type(target, value, submit);
+      return `Typed into ${target}${submit ? " and submitted" : ""}`;
+    }),
+  );
+
+  server.registerTool(
+    "browser_select",
+    {
+      title: "Choose a dropdown option",
+      description:
+        "Pick an option in a dropdown (native <select> or custom combobox/menu) by its visible text. Use this instead of browser_click for dropdowns. " +
+        "Toggles/switches/checkboxes: use browser_click (browser_elements shows their on/off state).",
+      inputSchema: { target: z.string().describe("Dropdown id from browser_elements"), option: z.string().describe("Option text") },
+    },
+    wrap(async ({ target, option }) => browser.select(target, option)),
+  );
+
+  server.registerTool(
+    "browser_scroll",
+    {
+      title: "Scroll the page",
+      description: "Scroll the active page.",
+      inputSchema: { where: z.enum(["down", "up", "top", "bottom"]) },
+    },
+    wrap(async ({ where }) => {
+      await browser.scroll(where);
+      return `Scrolled ${where}`;
+    }),
+  );
+}

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.8
+
+- **Cleaner, tested codebase:** the app's 2,356-line main file is split into focused parts (270 lines left), the server's tools are split by area, and 251 automated tests (app core logic and server) now run on every push. Messages between the app and the server are typed on both sides, with a test that keeps them in sync.
+- Fixes found by the new tests: `ui_elements` and `look_after` output showed a literal `\n` instead of line breaks; clicking on "image N" could use the wrong screenshot when its record was missing; `.env` values with trailing spaces or Windows line endings kept their quotes.
+
 ## 0.7.7
 
 - **Report back out loud:** a new `announce` tool lets Claude or Gemini tell you when background work they promised to report on is done ("the release is live"). VisionCLI shows it in the bubble and says it out loud, even with Speak Answers off, and waits if you're in the middle of a question.

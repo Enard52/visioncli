@@ -44,7 +44,7 @@ export function apiKey(): string | undefined {
   return undefined;
 }
 
-interface Answer { type: string; choice?: string; confidence?: number; probabilities?: Record<string, number> }
+export interface Answer { type: string; choice?: string; confidence?: number; probabilities?: Record<string, number> }
 
 async function jev(state: unknown, questions: Record<string, unknown>, key: string): Promise<Record<string, Answer>> {
   const res = await fetch("https://api.typesafe.ai/v1/systemone", {
@@ -58,7 +58,7 @@ async function jev(state: unknown, questions: Record<string, unknown>, key: stri
 }
 
 /** Words after the command verb, e.g. "search for laravel queues" → "laravel queues". */
-function phrase(utterance: string): string {
+export function phrase(utterance: string): string {
   return utterance
     .replace(/[.?!]+$/, "")
     .replace(/^(hey |ok |okay |please |can you |could you |would you |i want to |let'?s )+/i, "")
@@ -68,15 +68,91 @@ function phrase(utterance: string): string {
     .trim();
 }
 
-function siteUrl(name: string): string {
+/** A spoken site name as a URL: a domain as is, anything else through Google's "I'm Feeling Lucky". */
+export function siteUrl(name: string): string {
   if (/^[\w-]+(\.[\w-]+)+(\/\S*)?$/i.test(name.replace(/\s+/g, ""))) return name.replace(/\s+/g, "");
   // Not a domain: let Google pick the site ("I'm Feeling Lucky").
   return `https://www.google.com/search?btnI=1&q=${encodeURIComponent(name)}`;
 }
 
-const MIN_INTENT = 0.7;
-const MIN_TARGET = 0.55;
-const MAX_ELEMENTS = 60; // page elements offered to Jev (in page order): enough for a screenful, keeps the request fast
+export const MIN_INTENT = 0.7;
+export const MIN_TARGET = 0.55;
+export const MAX_ELEMENTS = 60; // page elements offered to Jev (in page order): enough for a screenful, keeps the request fast
+
+/** The Jev questions: the intent, plus which open tab / page element is meant when there are candidates. */
+export function quickQuestions(tabList: browser.Tab[], els: browser.Element[]): Record<string, unknown> {
+  const questions: Record<string, unknown> = {
+    intent: {
+      type: "choice",
+      instructions: "What does the user want done with `spoken_command`? Pick the single matching action.",
+      criteria: INTENTS,
+    },
+  };
+  if (tabList.length) {
+    questions.tab = {
+      type: "choice",
+      instructions: "Suppose the user wants to switch to an already-open browser tab: which of these open tabs do they mean (by title, site or topic)?",
+      criteria: { ...Object.fromEntries(tabList.map((t) => [t.id, `${t.title.slice(0, 80)} (${t.url.slice(0, 80)})`])), none: "None of the open tabs matches." },
+    };
+  }
+  if (els.length) {
+    questions.element = {
+      type: "choice",
+      instructions: "Suppose the user wants to click something on the current web page: which of these page elements do they mean?",
+      criteria: { ...Object.fromEntries(els.map((e) => [e.id, `${e.kind}: ${e.text}${e.href ? ` (${e.href})` : ""}`])), none: "None of these elements matches." },
+    };
+  }
+  return questions;
+}
+
+/** The intent and whether it's confident and simple enough to handle without Claude (`fallthrough` says why not). */
+export function readIntent(a: Record<string, Answer | undefined>): { intent: string; confidence: number; fallthrough?: string } {
+  const intent = a.intent?.choice ?? "ask_claude";
+  const confidence = a.intent?.confidence ?? 0;
+  if (intent === "ask_claude") return { intent, confidence, fallthrough: "needs Claude" };
+  if (confidence < MIN_INTENT) return { intent, confidence, fallthrough: `unsure (${confidence.toFixed(2)})` };
+  return { intent, confidence };
+}
+
+/** What a confident intent does, with its target resolved (a weak target falls back or falls through). */
+export type QuickPlan =
+  | { do: "fallthrough"; reason: string }
+  | { do: "switch_tab"; tab: string }
+  | { do: "open_site"; site: string }
+  | { do: "web_search"; query: string }
+  | { do: "click"; element: string }
+  | { do: "scroll"; where: "down" | "up" | "top" | "bottom" }
+  | { do: "play_pause" | "mute" }
+  | { do: "navigate"; action: "back" | "forward" | "reload" | "close" | "new" };
+
+const sure = (t: Answer | undefined): t is Answer & { choice: string } =>
+  !!t?.choice && t.choice !== "none" && (t.confidence ?? 0) >= MIN_TARGET;
+
+export function plan(intent: string, a: Record<string, Answer | undefined>, utterance: string): QuickPlan {
+  switch (intent) {
+    case "switch_tab":
+      // Not open yet: treat as opening the site.
+      return sure(a.tab) ? { do: "switch_tab", tab: a.tab.choice } : { do: "open_site", site: phrase(utterance) };
+    case "open_site":
+      return { do: "open_site", site: phrase(utterance) };
+    case "web_search":
+      return { do: "web_search", query: phrase(utterance) };
+    case "click":
+      return sure(a.element) ? { do: "click", element: a.element.choice } : { do: "fallthrough", reason: "couldn't tell which element" };
+    case "scroll_down": case "scroll_up": case "scroll_top": case "scroll_bottom":
+      return { do: "scroll", where: intent.replace("scroll_", "") as "down" | "up" | "top" | "bottom" };
+    case "play_pause": case "mute":
+      return { do: intent };
+    case "back": case "forward": case "reload":
+      return { do: "navigate", action: intent };
+    case "close_tab":
+      return { do: "navigate", action: "close" };
+    case "new_tab":
+      return { do: "navigate", action: "new" };
+    default:
+      return { do: "fallthrough", reason: `unhandled intent ${intent}` };
+  }
+}
 
 export async function quick(utterance: string): Promise<QuickResult> {
   const started = Date.now();
@@ -109,27 +185,7 @@ export async function quick(utterance: string): Promise<QuickResult> {
     current_tab: active ? { title: active.title.slice(0, 80), url: active.url.slice(0, 100) } : null,
   };
 
-  const questions: Record<string, unknown> = {
-    intent: {
-      type: "choice",
-      instructions: "What does the user want done with `spoken_command`? Pick the single matching action.",
-      criteria: INTENTS,
-    },
-  };
-  if (tabList.length) {
-    questions.tab = {
-      type: "choice",
-      instructions: "Suppose the user wants to switch to an already-open browser tab: which of these open tabs do they mean (by title, site or topic)?",
-      criteria: { ...Object.fromEntries(tabList.map((t) => [t.id, `${t.title.slice(0, 80)} (${t.url.slice(0, 80)})`])), none: "None of the open tabs matches." },
-    };
-  }
-  if (els.length) {
-    questions.element = {
-      type: "choice",
-      instructions: "Suppose the user wants to click something on the current web page: which of these page elements do they mean?",
-      criteria: { ...Object.fromEntries(els.map((e) => [e.id, `${e.kind}: ${e.text}${e.href ? ` (${e.href})` : ""}`])), none: "None of these elements matches." },
-    };
-  }
+  const questions = quickQuestions(tabList, els);
 
   let a: Record<string, Answer>;
   try {
@@ -137,12 +193,10 @@ export async function quick(utterance: string): Promise<QuickResult> {
   } catch (err) {
     return { handled: false, reason: String((err as Error).message ?? err), ms: Date.now() - started };
   }
-  const intent = a.intent?.choice ?? "ask_claude";
-  const conf = a.intent?.confidence ?? 0;
+  const { intent, confidence: conf, fallthrough: why } = readIntent(a);
   const base = { intent, confidence: conf, ms: 0 };
   const fallthrough = (reason: string): QuickResult => ({ handled: false, ...base, reason, ms: Date.now() - started });
-  if (intent === "ask_claude") return fallthrough("needs Claude");
-  if (conf < MIN_INTENT) return fallthrough(`unsure (${conf.toFixed(2)})`);
+  if (why) return fallthrough(why);
   if (process.env.VISIONCLI_QUICK_DRY === "1") {
     const target = intent === "switch_tab" ? a.tab : intent === "click" ? a.element : undefined;
     const label = target?.choice && target.choice !== "none"
@@ -151,41 +205,30 @@ export async function quick(utterance: string): Promise<QuickResult> {
     return { handled: true, ...base, message: `[dry run] ${intent}${label ? ` → ${label} (${(target?.confidence ?? 0).toFixed(2)})` : ""}${["open_site", "web_search"].includes(intent) ? ` → "${phrase(utterance)}"` : ""}`, ms: Date.now() - started };
   }
 
+  const p = plan(intent, a, utterance);
   try {
     let message = "";
-    switch (intent) {
-      case "switch_tab": {
-        const t = a.tab;
-        if (!t?.choice || t.choice === "none" || (t.confidence ?? 0) < MIN_TARGET) {
-          // Not open yet: treat as opening the site.
-          await browser.open(siteUrl(phrase(utterance)), true, b, tabList);
-          message = `Opened ${phrase(utterance)}`;
-          break;
-        }
-        await browser.switchTo(t.choice, b);
-        message = `Switched to “${tabList.find((x) => x.id === t.choice)?.title ?? t.choice}”`;
+    switch (p.do) {
+      case "fallthrough":
+        return fallthrough(p.reason);
+      case "switch_tab":
+        await browser.switchTo(p.tab, b);
+        message = `Switched to “${tabList.find((x) => x.id === p.tab)?.title ?? p.tab}”`;
         break;
-      }
       case "open_site":
-        await browser.open(siteUrl(phrase(utterance)), true, b, tabList);
-        message = `Opened ${phrase(utterance)}`;
+        await browser.open(siteUrl(p.site), true, b, tabList);
+        message = `Opened ${p.site}`;
         break;
-      case "web_search": {
-        const query = phrase(utterance);
-        await browser.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, true, b, tabList);
-        message = `Searching for “${query}”`;
+      case "web_search":
+        await browser.open(`https://www.google.com/search?q=${encodeURIComponent(p.query)}`, true, b, tabList);
+        message = `Searching for “${p.query}”`;
         break;
-      }
-      case "click": {
-        const e = a.element;
-        if (!e?.choice || e.choice === "none" || (e.confidence ?? 0) < MIN_TARGET) return fallthrough("couldn't tell which element");
-        const clicked = await browser.click(e.choice, b);
-        message = `Clicked “${clicked}”`;
+      case "click":
+        message = `Clicked “${await browser.click(p.element, b)}”`;
         break;
-      }
-      case "scroll_down": case "scroll_up": case "scroll_top": case "scroll_bottom":
-        await browser.scroll(intent.replace("scroll_", "") as "down" | "up" | "top" | "bottom", b);
-        message = { scroll_down: "Scrolled down", scroll_up: "Scrolled up", scroll_top: "Top of page", scroll_bottom: "Bottom of page" }[intent]!;
+      case "scroll":
+        await browser.scroll(p.where, b);
+        message = { down: "Scrolled down", up: "Scrolled up", top: "Top of page", bottom: "Bottom of page" }[p.where];
         break;
       case "play_pause": {
         const r = await browser.js(`(() => { const m = [...document.querySelectorAll('video, audio')].sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight))[0];
@@ -200,20 +243,10 @@ export async function quick(utterance: string): Promise<QuickResult> {
         message = r;
         break;
       }
-      case "back": case "forward": case "reload":
-        await browser.navigate(intent, b);
-        message = { back: "Back", forward: "Forward", reload: "Reloaded" }[intent]!;
+      case "navigate":
+        await browser.navigate(p.action, b);
+        message = { back: "Back", forward: "Forward", reload: "Reloaded", close: "Closed the tab", new: "New tab" }[p.action];
         break;
-      case "close_tab":
-        await browser.navigate("close", b);
-        message = "Closed the tab";
-        break;
-      case "new_tab":
-        await browser.navigate("new", b);
-        message = "New tab";
-        break;
-      default:
-        return fallthrough(`unhandled intent ${intent}`);
     }
     return { handled: true, ...base, message, ms: Date.now() - started };
   } catch (err) {

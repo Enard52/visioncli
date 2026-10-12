@@ -124,3 +124,33 @@ enum TerminalLauncher {
         """, name: "continue")
     }
 }
+
+/// The activity feed with streamed answer text batched: ActivityLog opens the log file for every write, and answers
+/// stream a token at a time. Text is written a few times a second, and always before any other entry so the feed
+/// stays in order. Main thread only.
+final class BufferedActivity {
+    private let feed = ActivityLog()
+    private var pending = ""
+
+    func text(_ delta: String) {
+        if pending.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.flush() }
+        }
+        pending += delta
+    }
+
+    private func flush() {
+        guard !pending.isEmpty else { return }
+        let text = pending
+        pending = ""
+        feed.text(text)
+    }
+
+    func question(_ text: String, project: String, shots: [Shot]) { flush(); feed.question(text, project: project, shots: shots) }
+    func tool(_ name: String, _ input: [String: Any]) { flush(); feed.tool(name, input) }
+    func toolResult(_ text: String, isError: Bool, tool: String?) { flush(); feed.toolResult(text, isError: isError, tool: tool) }
+    func permission(_ title: String, allowed: Bool?) { flush(); feed.permission(title, allowed: allowed) }
+    func done(cost: Double?) { flush(); feed.done(cost: cost) }
+    func error(_ message: String) { flush(); feed.error(message) }
+    func note(_ message: String) { flush(); feed.note(message) }
+}

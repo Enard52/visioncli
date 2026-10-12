@@ -377,6 +377,28 @@ final class UIElements {
 
 // MARK: - App side: approvals, kill switch, status
 
+/// What the MCP server asks for (the request's "action"). src/ mirrors these raw values, and a test there reads this
+/// case list, so keep one `case` per line right under the declaration.
+enum ControlAction: String, CaseIterable {
+    case status
+    case displays
+    case announce
+    case autopilotCheck = "autopilot_check"
+    case capture
+    case elements
+    case click
+    case type
+    case key
+    case scroll
+    case drag
+    case openApp = "open_app"
+    case focusApp = "focus_app"
+    case openURL = "open_url"
+
+    /// Keys and typing go to the app the assistant is working in.
+    var usesKeyboard: Bool { self == .type || self == .key }
+}
+
 /// Apps where every action asks first, even with "Allow all".
 private let sensitiveApps: Set<String> = [
     "com.apple.systempreferences", "com.apple.Settings", "com.apple.keychainaccess", "com.apple.Passwords",
@@ -451,6 +473,7 @@ extension AppDelegate {
     /// approvals, the task panel, hotkeys, the bubble) is only touched on the main thread.
     func handleControl(_ r: [String: Any], reply: @escaping ([String: Any]) -> Void) {
         let action = r["action"] as? String ?? ""
+        let kind = ControlAction(rawValue: action) // nil: unknown, refused by perform after the usual checks
         func num(_ k: String) -> CGFloat? { (r[k] as? NSNumber).map { CGFloat($0.doubleValue) } }
         func point(_ xk: String = "x", _ yk: String = "y") -> CGPoint? {
             guard let x = num(xk), let y = num(yk) else { return nil }
@@ -458,19 +481,19 @@ extension AppDelegate {
         }
 
         // Read-only requests: no approval, work even when control is off.
-        switch action {
-        case "announce":
+        switch kind {
+        case .announce:
             // The assistant reporting back later on its own (background work done): bubble + speech.
             let text = r["text"] as? String ?? ""
             DispatchQueue.main.async { self.announce(text); reply(["ok": true]) }
             return
-        case "status":
+        case .status:
             DispatchQueue.main.async {
                 reply(["trusted": Computer.isTrusted, "mode": Settings.computerControl,
                        "frontApp": Computer.frontApp?.localizedName ?? "", "stopped": self.controlStopped != nil])
             }
             return
-        case "displays":
+        case .displays:
             DispatchQueue.main.async {
                 let primary = Geometry.primaryHeight
                 let mouse = Geometry.pointer // top-left points
@@ -487,14 +510,14 @@ extension AppDelegate {
                 reply(out)
             }
             return
-        case "autopilot_check":
+        case .autopilotCheck:
             DispatchQueue.main.async {
                 guard Settings.autopilot else { reply(["error": "Autopilot is off"]); return }
                 self.autopilot.checkNow()
                 reply(["ok": true])
             }
             return
-        case "capture":
+        case .capture:
             // Fast screenshot for the `look` tool (ScreenCaptureKit, in memory). window_id, or x/y/width/height
             // (top-left points, e.g. a whole display).
             let windowId = (r["window_id"] as? NSNumber).map { CGWindowID($0.uint32Value) }
@@ -513,7 +536,7 @@ extension AppDelegate {
             guard let image, let jpeg = Screen.jpeg(image) else { reply(["error": "capture unavailable"]); return }
             reply(["data": jpeg.0.base64EncodedString(), "width": Int(jpeg.1.width), "height": Int(jpeg.1.height)])
             return
-        case "elements":
+        case .elements:
             guard Computer.isTrusted else { reply(needTrust()); return }
             let (app, items) = uiElements.list(appNamed: r["app"] as? String)
             let target = uiElements.app
@@ -538,7 +561,7 @@ extension AppDelegate {
         let elementApp = element != nil ? uiElements.app : nil
         let elementLabel = element.map { uiElements.label($0) }
         let secureTarget = (element.map { uiElements.isSecure($0) } ?? false)
-            || (action == "type" && focusedIsSecure())
+            || (kind == .type && focusedIsSecure())
             || (target.map { isSecure(at: $0) } ?? false)
         let resolvedTarget = target
         DispatchQueue.main.async {
@@ -550,6 +573,7 @@ extension AppDelegate {
     /// Main thread: refuse after an Esc stop, describe the action, ask for approval when needed, then run it.
     private func decideControl(_ action: String, _ r: [String: Any], target: CGPoint?, element: Int?, elementApp: NSRunningApplication?,
                                elementLabel: String?, secureTarget: Bool, reply: @escaping ([String: Any]) -> Void) {
+        let kind = ControlAction(rawValue: action)
         func num(_ k: String) -> CGFloat? { (r[k] as? NSNumber).map { CGFloat($0.doubleValue) } }
         if let stopped = controlStopped, Date().timeIntervalSince(stopped) < 120 {
             reply(["error": "The user pressed Esc to stop you using the computer. Stop and ask them how to continue."]); return
@@ -558,17 +582,17 @@ extension AppDelegate {
 
         // Keys and typing go to the app the assistant is working in (an Accessibility press doesn't bring it
         // forward, so otherwise they'd land in whatever is in front, e.g. the terminal).
-        if action == "type" || action == "key" {
+        if kind?.usesKeyboard == true {
             if let name = r["app"] as? String, !name.isEmpty { controlTarget = Computer.runningApp(named: name) ?? controlTarget }
             if element != nil, let a = elementApp { controlTarget = a }
         }
-        let keyboardTarget = (action == "type" || action == "key") ? controlTarget.flatMap { $0.isTerminated ? nil : $0 } : nil
+        let keyboardTarget = kind?.usesKeyboard == true ? controlTarget.flatMap { $0.isTerminated ? nil : $0 } : nil
         let app = keyboardTarget ?? Computer.frontApp
 
         // In Chrome/Brave the browser_* tools are exact and fast; keyboard navigation there opened stray tabs/windows
         // and typed into whichever window happened to be in front.
         let browserIds: Set<String> = ["com.google.Chrome", "com.brave.Browser", "com.google.Chrome.canary", "com.brave.Browser.beta"]
-        if action == "key", browserIds.contains(app?.bundleIdentifier ?? ""),
+        if kind == .key, browserIds.contains(app?.bundleIdentifier ?? ""),
            let keys = (r["keys"] as? String)?.lowercased().replacingOccurrences(of: " ", with: ""),
            ["cmd+l", "cmd+t", "cmd+n", "cmd+shift+n", "command+l", "command+t", "command+n"].contains(where: { keys.contains($0) }) {
             reply(["error": "Don't use keyboard shortcuts to open or navigate pages in \(app?.localizedName ?? "the browser"). Use browser_open (reuses tabs), browser_navigate, browser_switch_tab, browser_elements + browser_click/browser_type/browser_select. Use click/type_text only for things those can't reach (canvas, cross-origin frames, browser dialogs)."])
@@ -577,19 +601,19 @@ extension AppDelegate {
         let appName = app?.localizedName ?? "the front app"
         let what: String = {
             let on = elementLabel ?? target.map { "(\(Int($0.x)), \(Int($0.y)))" } ?? ""
-            switch action {
-            case "click":
-                let kind = (r["button"] as? String) == "right" ? "right-click" : ((r["count"] as? Int ?? 1) >= 2 ? "double-click" : "click")
-                return "\(kind) \(on) in \(appName)"
-            case "type":
+            switch kind {
+            case .click:
+                let click = (r["button"] as? String) == "right" ? "right-click" : ((r["count"] as? Int ?? 1) >= 2 ? "double-click" : "click")
+                return "\(click) \(on) in \(appName)"
+            case .type:
                 let t = r["text"] as? String ?? ""
                 return "type \"\(t.count > 60 ? String(t.prefix(60)) + "…" : t)\"\(element != nil ? " into \(on)" : "") in \(appName)"
-            case "key": return "press \(r["keys"] as? String ?? "") in \(appName)"
-            case "scroll": return "scroll in \(appName)"
-            case "drag": return "drag from (\(Int(num("x1") ?? 0)), \(Int(num("y1") ?? 0))) to (\(Int(num("x2") ?? 0)), \(Int(num("y2") ?? 0))) in \(appName)"
-            case "open_app": return "open \(r["name"] as? String ?? "an app")"
-            case "focus_app": return "switch to \(r["name"] as? String ?? "an app")"
-            case "open_url": return "open \(r["url"] as? String ?? "a link")"
+            case .key: return "press \(r["keys"] as? String ?? "") in \(appName)"
+            case .scroll: return "scroll in \(appName)"
+            case .drag: return "drag from (\(Int(num("x1") ?? 0)), \(Int(num("y1") ?? 0))) to (\(Int(num("x2") ?? 0)), \(Int(num("y2") ?? 0))) in \(appName)"
+            case .openApp: return "open \(r["name"] as? String ?? "an app")"
+            case .focusApp: return "switch to \(r["name"] as? String ?? "an app")"
+            case .openURL: return "open \(r["url"] as? String ?? "a link")"
             default: return action
             }
         }()
@@ -613,7 +637,7 @@ extension AppDelegate {
             let step = self.taskHUD.begin(label)
             self.showControlStatus(label + "…")
             // Our own Esc hotkey would swallow a synthetic Escape.
-            let isEsc = action == "key" && (r["keys"] as? String ?? "").lowercased().contains("esc")
+            let isEsc = kind == .key && (r["keys"] as? String ?? "").lowercased().contains("esc")
             if isEsc { self.hotkeys.set(.dismiss, false) }
             // The action itself (waiting for the app to come forward, typing, dragging…) runs off the main thread.
             ControlServer.queue.async {
@@ -624,7 +648,7 @@ extension AppDelegate {
                 }
                 let error = self.perform(action, r, target: target, element: element)
                 var opened: NSRunningApplication??
-                if error == nil, ["open_app", "focus_app"].contains(action), let name = r["name"] as? String {
+                if error == nil, kind == .openApp || kind == .focusApp, let name = r["name"] as? String {
                     opened = .some(Computer.runningApp(named: name))
                 }
                 DispatchQueue.main.async {
@@ -656,45 +680,46 @@ extension AppDelegate {
 
     /// Runs on ControlServer.queue (it waits between events, and uiElements belongs to that queue).
     private func perform(_ action: String, _ r: [String: Any], target: CGPoint?, element: Int?) -> String? {
-        switch action {
-        case "click":
+        guard let kind = ControlAction(rawValue: action) else { return "Unknown action \(action)." }
+        switch kind {
+        case .click:
             let button = r["button"] as? String ?? "left"
             let count = (r["count"] as? NSNumber)?.intValue ?? 1
             // Prefer pressing the element through Accessibility (exact, no mouse needed); fall back to a real click.
             if let element, button == "left", count == 1, uiElements.press(element) { return nil }
             guard let target else { return element != nil ? "That element is gone; call ui_elements again." : "Missing x/y or element." }
             Computer.click(at: target, button: button, count: count)
-        case "type":
+        case .type:
             guard let text = r["text"] as? String else { return "Missing text." }
             if let element {
                 if (r["replace"] as? Bool ?? false), uiElements.setText(element, text) { return nil }
                 if let c = uiElements.center(element) { Computer.click(at: c) ; usleep(120_000) }
             }
             Computer.type(text)
-        case "key":
+        case .key:
             guard let keys = r["keys"] as? String else { return "Missing keys." }
             for combo in keys.split(separator: " ") {
                 if let err = Computer.press(String(combo)) { return err }
                 usleep(60_000)
             }
-        case "scroll":
+        case .scroll:
             Computer.scroll(at: target, dx: (r["dx"] as? NSNumber)?.intValue ?? 0, dy: (r["dy"] as? NSNumber)?.intValue ?? -5)
-        case "drag":
+        case .drag:
             guard let a = (r["x1"] as? NSNumber).flatMap({ x in (r["y1"] as? NSNumber).map { CGPoint(x: x.doubleValue, y: $0.doubleValue) } }),
                   let b = (r["x2"] as? NSNumber).flatMap({ x in (r["y2"] as? NSNumber).map { CGPoint(x: x.doubleValue, y: $0.doubleValue) } })
             else { return "Missing x1/y1/x2/y2." }
             Computer.drag(from: a, to: b)
-        case "open_app":
+        case .openApp:
             guard let name = r["name"] as? String else { return "Missing name." }
             return Computer.openApp(name)
-        case "focus_app":
+        case .focusApp:
             guard let name = r["name"] as? String else { return "Missing name." }
             return Computer.focusApp(name)
-        case "open_url":
+        case .openURL:
             guard let url = r["url"] as? String else { return "Missing url." }
             return Computer.openURL(url)
-        default:
-            return "Unknown action \(action)."
+        case .status, .displays, .announce, .autopilotCheck, .capture, .elements:
+            return "Unknown action \(action)." // answered in handleControl; never performed
         }
         return nil
     }

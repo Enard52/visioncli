@@ -22,15 +22,16 @@ export interface RouteResult {
   reason?: string;
 }
 
-const MIN_FAST = 0.6;     // below this the strong model answers (a wrong "fast" costs more than a slower answer)
-const MIN_FOLLOWUP = 0.6;
+export const MIN_FAST = 0.6;     // below this the strong model answers (a wrong "fast" costs more than a slower answer)
+export const MIN_FOLLOWUP = 0.6;
+export const MIN_GENERAL = 0.6;  // scope confidence needed to leave the project for "general"
 
-export async function route(input: RouteInput): Promise<RouteResult> {
-  const { question: utterance, previous, previousLane, project } = input;
-  const started = Date.now();
-  const key = apiKey();
-  if (!key) return { lane: "strong", scope: project ? "project" : undefined, reason: "no TypeSafe API key" };
+/** Jev's answers as the route questions come back. */
+export type RouteAnswers = Record<string, { choice?: string; confidence?: number; noul?: number } | undefined>;
 
+/** The Jev request for an input: the scope question only with a project, the follow-up one only with a previous question. */
+export function routeRequest(input: RouteInput): { state: Record<string, unknown>; questions: Record<string, unknown> } {
+  const { question: utterance, previous, project } = input;
   const state: Record<string, unknown> = {
     spoken_request: utterance,
     note: "Spoken aloud to a software developer's AI assistant while looking at their screen; speech-to-text may mishear words.",
@@ -75,8 +76,31 @@ export async function route(input: RouteInput): Promise<RouteResult> {
       criteria: { true: "It continues the previous request or depends on it to make sense", false: "It is a new, self-contained request" },
     };
   }
+  return { state, questions };
+}
 
-  let answers: Record<string, { choice?: string; confidence?: number; noul?: number }>;
+/** The lane (and scope) from Jev's answers. */
+export function decide(answers: RouteAnswers, input: Pick<RouteInput, "project" | "previousLane">): RouteResult {
+  const followup = answers.followup?.noul;
+  // Unsure about the scope: stay with the project (its assistant can still answer general questions).
+  const scope: RouteResult["scope"] = input.project
+    ? (answers.scope?.choice === "general" && (answers.scope?.confidence ?? 0) >= MIN_GENERAL ? "general" : "project")
+    : undefined;
+  const confidence = answers.lane?.confidence ?? 0;
+  // A follow-up to a heavy question stays with the strong model (it has that conversation's context and tools).
+  if (input.previousLane === "strong" && (followup ?? 0) >= MIN_FOLLOWUP) return { lane: "strong", scope, confidence, followup, reason: "follow-up" };
+  if (answers.lane?.choice === "fast" && confidence >= MIN_FAST) return { lane: "fast", scope, confidence, followup };
+  return { lane: "strong", scope, confidence, followup };
+}
+
+export async function route(input: RouteInput): Promise<RouteResult> {
+  const { project } = input;
+  const started = Date.now();
+  const key = apiKey();
+  if (!key) return { lane: "strong", scope: project ? "project" : undefined, reason: "no TypeSafe API key" };
+
+  const { state, questions } = routeRequest(input);
+  let answers: RouteAnswers;
   try {
     const res = await fetch("https://api.typesafe.ai/v1/systemone", {
       method: "POST",
@@ -90,14 +114,5 @@ export async function route(input: RouteInput): Promise<RouteResult> {
     return { lane: "strong", scope: project ? "project" : undefined, reason: String((err as Error).message ?? err), ms: Date.now() - started };
   }
   const ms = Date.now() - started;
-  const followup = answers.followup?.noul;
-  // Unsure about the scope: stay with the project (its assistant can still answer general questions).
-  const scope: RouteResult["scope"] = project
-    ? (answers.scope?.choice === "general" && (answers.scope?.confidence ?? 0) >= 0.6 ? "general" : "project")
-    : undefined;
-  const confidence = answers.lane?.confidence ?? 0;
-  // A follow-up to a heavy question stays with the strong model (it has that conversation's context and tools).
-  if (previousLane === "strong" && (followup ?? 0) >= MIN_FOLLOWUP) return { lane: "strong", scope, confidence, followup, ms, reason: "follow-up" };
-  if (answers.lane?.choice === "fast" && confidence >= MIN_FAST) return { lane: "fast", scope, confidence, followup, ms };
-  return { lane: "strong", scope, confidence, followup, ms };
+  return { ...decide(answers, input), ms };
 }

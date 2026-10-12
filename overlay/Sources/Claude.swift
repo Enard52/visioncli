@@ -81,24 +81,6 @@ struct PermissionRequest {
 
 enum DiffKind { case added, removed, context }
 
-/// Splits a byte stream (a pipe's readabilityHandler chunks) into lines in one pass per chunk. Removing each line from
-/// the front of the buffer re-copied the rest every time, which is quadratic when a big chunk holds many lines.
-/// Not thread-safe: use one per stream, fed from that stream's handler only.
-final class LineSplitter {
-    private var buffer = Data()
-
-    func feed(_ chunk: Data, _ line: (Data) -> Void) {
-        guard !chunk.isEmpty else { return }
-        buffer.append(chunk)
-        var start = buffer.startIndex
-        while let nl = buffer[start...].firstIndex(of: 0x0A) {
-            line(buffer[start..<nl])
-            start = buffer.index(after: nl)
-        }
-        if start != buffer.startIndex { buffer = Data(buffer[start...]) }
-    }
-}
-
 /// The tail of a process's stderr, appended from its readability handler and read from its termination handler
 /// (different threads), so behind a lock.
 final class TailText {

@@ -494,7 +494,7 @@ enum HomeProject {
     }
 
     static func label(_ project: String) -> String {
-        project == path ? "Home" : (project as NSString).lastPathComponent
+        ProjectSelector.label(project, home: path)
     }
 }
 

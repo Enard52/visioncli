@@ -8,12 +8,12 @@ final class TerminalSession {
     let assistant: Assistant
     private let cfg: Config
     private(set) var sessionId: String
-    // Threading: everything here belongs to the main thread, except `offset`/`buffer` (owned by `reader`, which reads
+    // Threading: everything here belongs to the main thread, except `offset`/`lines` (owned by `reader`, which reads
     // and parses the transcript). Process scans and AppleScript run on `work`, with results applied on main.
     private var termId: String?          // iTerm session unique id, or Terminal tab reference
     private let usesITerm: Bool
     private var offset: UInt64 = 0       // reader queue only
-    private var buffer = Data()          // reader queue only
+    private let lines = LineSplitter()   // reader queue only
     private var timer: Timer?
     private var reading = false          // a transcript read is in flight on the reader queue
     /// Marker of the voice question we're waiting on. The transcript is only followed while there is one.
@@ -464,7 +464,7 @@ final class TerminalSession {
 
     // MARK: Transcript watching
 
-    /// Reads and parses the transcript off the main thread; owns `offset` and `buffer`.
+    /// Reads and parses the transcript off the main thread; owns `offset` and `lines`.
     private let reader = DispatchQueue(label: "dev.visioncli.transcript", qos: .userInitiated)
 
     /// Follows the transcript while a question is waiting for its answer (stopped when `awaiting` clears).
@@ -483,7 +483,7 @@ final class TerminalSession {
         reader.async { [weak self] in
             guard let self else { return }
             self.offset = fromStart ? 0 : url.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? UInt64 } ?? 0
-            self.buffer = Data()
+            self.lines.reset()
         }
     }
 
@@ -533,17 +533,8 @@ final class TerminalSession {
         h.seek(toFileOffset: offset)
         let data = h.readDataToEndOfFile()
         offset += UInt64(data.count) // what was read, which can be past `size` if the file grew meanwhile
-        buffer.append(data)
-        // One pass over the new lines (removing each line from the front of the buffer re-copied the rest every
-        // time, which took seconds on a big transcript).
-        var objects: [[String: Any]] = []
-        var start = buffer.startIndex
-        while let nl = buffer[start...].firstIndex(of: 0x0A) {
-            if let obj = try? JSONSerialization.jsonObject(with: buffer[start..<nl]) as? [String: Any] { objects.append(obj) }
-            start = buffer.index(after: nl)
-        }
-        buffer = Data(buffer[start...])
-        return (objects, true)
+        // One pass over the new lines; a partial last line waits in `lines` for the rest.
+        return (JSONLines.objects(data, splitter: lines), true)
     }
 
     /// Only what's written after the question matters: skip whatever the conversation has grown by since last time
@@ -553,7 +544,7 @@ final class TerminalSession {
         reader.async { [weak self] in
             guard let self, let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? UInt64) else { return }
             self.offset = size
-            self.buffer = Data()
+            self.lines.reset()
         }
     }
 

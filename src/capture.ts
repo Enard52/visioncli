@@ -3,7 +3,7 @@ import { mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { type AppWindow, displayBounds, displaysAndPointer, send } from "./control.js";
+import { type AppWindow, type ControlRequests, displayBounds, displaysAndPointer, send } from "./control.js";
 
 const run = promisify(execFile);
 
@@ -70,17 +70,29 @@ async function screencapture(args: string[], out: string) {
   }
 }
 
+/** Pixel size from the first 24 bytes of a PNG (signature + IHDR); null if it isn't one. */
+export function pngHeaderSize(buf: Buffer): { w: number; h: number } | null {
+  if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47 || buf.toString("ascii", 12, 16) !== "IHDR") return null;
+  return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+}
+
 /** Pixel size from a PNG header (all our sources are PNG); null if it isn't one. */
 async function pngSize(src: string): Promise<{ w: number; h: number } | null> {
   const fh = await open(src, "r");
   try {
     const buf = Buffer.alloc(24);
     await fh.read(buf, 0, 24, 0);
-    if (buf.readUInt32BE(0) !== 0x89504e47 || buf.toString("ascii", 12, 16) !== "IHDR") return null;
-    return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+    return pngHeaderSize(buf);
   } finally {
     await fh.close();
   }
+}
+
+/** Size after fitting the longer side into `max` (never upscaled), and whether that's a downscale. */
+export function fitSize(w: number, h: number, max = MAX_DIM): { width: number; height: number; downscale: boolean } {
+  const downscale = Math.max(w, h) > max;
+  const scale = downscale ? max / Math.max(w, h) : 1;
+  return { width: Math.round(w * scale), height: Math.round(h * scale), downscale };
 }
 
 // Downscale to MAX_DIM and re-encode as JPEG to keep the payload small (one sips run).
@@ -94,17 +106,11 @@ async function encode(dir: string, src: string): Promise<Capture> {
     const { stdout } = await run("sips", ["-g", "pixelWidth", "-g", "pixelHeight", src]);
     size = { w: Number(/pixelWidth: (\d+)/.exec(stdout)?.[1] ?? 0), h: Number(/pixelHeight: (\d+)/.exec(stdout)?.[1] ?? 0) };
   }
-  const { w, h } = size;
+  const fit = fitSize(size.w, size.h);
   const args = ["-s", "format", "jpeg", "-s", "formatOptions", "85"];
-  if (Math.max(w, h) > MAX_DIM) args.push("-Z", String(MAX_DIM)); // -Z would also upscale smaller images
+  if (fit.downscale) args.push("-Z", String(MAX_DIM)); // -Z would also upscale smaller images
   await run("sips", [...args, src, "--out", out]);
-  const scale = Math.max(w, h) > MAX_DIM ? MAX_DIM / Math.max(w, h) : 1;
-  return {
-    data: (await readFile(out)).toString("base64"),
-    mimeType: "image/jpeg",
-    width: Math.round(w * scale),
-    height: Math.round(h * scale),
-  };
+  return { data: (await readFile(out)).toString("base64"), mimeType: "image/jpeg", width: fit.width, height: fit.height };
 }
 
 const LIST_WINDOWS_JXA = `
@@ -128,7 +134,8 @@ export interface Snapshot {
   displays?: WindowInfo["bounds"][]; // from the running app (top-left points)
 }
 
-const fromApp = (w: AppWindow & Partial<WindowInfo["bounds"]>): WindowInfo => ({
+/** A window from the app's reply (bounds nested, or flat x/y/width/height from older app versions). */
+export const fromApp = (w: AppWindow & Partial<WindowInfo["bounds"]>): WindowInfo => ({
   id: Number(w.id),
   app: w.app ?? "",
   title: w.title ?? "",
@@ -175,7 +182,7 @@ export async function pointerLocation(snap?: Snapshot): Promise<{ x: number; y: 
   return p;
 }
 
-function contains(w: WindowInfo, p: { x: number; y: number }) {
+export function contains(w: WindowInfo, p: { x: number; y: number }) {
   const b = w.bounds;
   return p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
 }
@@ -224,7 +231,7 @@ export async function findWindow(
 }
 
 /** Fast path: VisionCLI.app captures in memory with ScreenCaptureKit (~0.1 s). null if the app isn't running. */
-async function captureViaApp(req: Record<string, unknown>): Promise<Capture | null> {
+async function captureViaApp(req: ControlRequests["capture"]): Promise<Capture | null> {
   try {
     const r = await send({ action: "capture", ...req });
     if (typeof r.data !== "string") return null;

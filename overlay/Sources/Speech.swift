@@ -379,11 +379,11 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
         }
         let chunk = String(rest[..<cut])
         spokenUpTo += chunk.count
-        let spoken = Speaker.clean(chunk).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Speaker.speakable(spoken) else { return }
+        let spoken = SpokenText.clean(chunk).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard SpokenText.speakable(spoken) else { return }
         if Settings.ttsEngine == "kokoro", let kokoro {
             // One request per sentence so the first one starts playing quickly.
-            for sentence in Speaker.sentences(spoken) { enqueueKokoro(sentence, kokoro) }
+            for sentence in SpokenText.sentences(spoken) { enqueueKokoro(sentence, kokoro) }
         } else {
             speakSystem(spoken)
         }
@@ -466,34 +466,5 @@ final class Speaker: NSObject, AVAudioPlayerDelegate {
         if let name = Settings.voiceName, let v = AVSpeechSynthesisVoice(identifier: name) { u.voice = v }
         else { u.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier.hasPrefix("en") ? Locale.current.identifier.replacingOccurrences(of: "_", with: "-") : "en-US") }
         return u
-    }
-
-    static func sentences(_ text: String) -> [String] {
-        var out: [String] = []
-        text.enumerateSubstrings(in: text.startIndex..., options: .bySentences) { sub, _, _, _ in
-            if let s = sub?.trimmingCharacters(in: .whitespacesAndNewlines), speakable(s) { out.append(s) }
-        }
-        return out.isEmpty && speakable(text) ? [text] : out
-    }
-
-    /// Worth saying out loud: has words, not just punctuation or table borders ("|---|", "|").
-    static func speakable(_ s: String) -> Bool {
-        s.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
-    }
-
-    /// Make text pleasant to hear: "app/Models/Payment.php:42" → "Payment.php, line 42"; drop markdown.
-    static func clean(_ s: String) -> String {
-        // Code blocks and table rows don't read well aloud (and made the voice say "dot", "bar"…): skip them.
-        var t = s.replacingOccurrences(of: #"```[\s\S]*?(```|$)"#, with: "", options: .regularExpression)
-        t = t.split(separator: "\n", omittingEmptySubsequences: false)
-            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("|") }
-            .map { $0.replacingOccurrences(of: #"^\s*([-*•]|\d+\.)\s+"#, with: "", options: .regularExpression) }
-            .joined(separator: "\n")
-        t = t.replacingOccurrences(of: #"(?:[\w.@-]+/)*([\w.@-]+\.\w+):(\d+)(?:-\d+)?"#, with: "$1, line $2", options: .regularExpression)
-        t = t.replacingOccurrences(of: #"\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
-        t = t.replacingOccurrences(of: #"https?://\S+"#, with: "a link", options: .regularExpression)
-        t = t.replacingOccurrences(of: "→", with: " to ").replacingOccurrences(of: "≈", with: "about ")
-        for mark in ["**", "__", "`", "#"] { t = t.replacingOccurrences(of: mark, with: "") }
-        return t
     }
 }
