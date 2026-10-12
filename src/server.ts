@@ -41,7 +41,10 @@ Use it whenever the user refers to something they are looking at: "this file", "
   decline or press Esc, stop and ask.
 - Browser (Brave/Chrome): \`browser_tabs\`, \`browser_open\`, \`browser_switch_tab\`, \`browser_navigate\`, \`browser_read\`,
   \`browser_elements\` → \`browser_click\` / \`browser_type\` / \`browser_select\` (dropdowns) by element id, \`browser_scroll\`. Prefer these over screenshots for
-  web pages: they're fast and exact.`;
+  web pages: they're fast and exact.
+- Reporting back later: when you told the user you'd let them know (a build, release, deploy, test run or other background
+  work finishing), call \`announce\` with one or two short spoken sentences once it's done. They may be away from the
+  terminal; VisionCLI shows it in a bubble and says it out loud. Only for real updates, not for every reply.`;
 
 export const server = new McpServer({ name: "visioncli", version: "0.3.0" }, { instructions: INSTRUCTIONS });
 
@@ -532,6 +535,25 @@ server.registerTool(
     inputSchema: { url: z.string(), look_after: lookAfter },
   },
   act(async ({ url }) => done(await computer.send({ action: "open_url", url }))),
+);
+
+server.registerTool(
+  "announce",
+  {
+    title: "Tell the user out loud",
+    description:
+      "Show a short update in VisionCLI's bubble and say it out loud, e.g. when background work you promised to report on " +
+      "has finished (\"The v0.7.6 release is live.\"). One or two short spoken sentences, plain text, no markdown.",
+    inputSchema: { text: z.string().describe("What to tell the user, as it should be spoken") },
+  },
+  async ({ text }) => {
+    try {
+      await computer.send({ action: "announce", text });
+      return { content: [{ type: "text" as const, text: "Announced." }] };
+    } catch (err) {
+      return errorResult(err);
+    }
+  },
 );
 
 server.registerTool(

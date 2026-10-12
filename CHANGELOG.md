@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.7
+
+- **Report back out loud:** a new `announce` tool lets Claude or Gemini tell you when background work they promised to report on is done ("the release is live"). VisionCLI shows it in the bubble and says it out loud, even with Speak Answers off, and waits if you're in the middle of a question.
+- **Fix: a second voice talking over the answer.** Tables and other markdown were read aloud; Kokoro couldn't pronounce fragments like `|---|` and the macOS voice jumped in mid-answer, saying "dot" and "bar". Spoken answers now skip tables, code blocks and bare punctuation, and stay in one voice.
+
 ## 0.7.6
 
 - **Gemini is much faster:** one Antigravity process per project stays running (questions go to it over stdin), started at launch in bubble mode and kept ready for an hour, instead of a new ~20 s startup for every question.

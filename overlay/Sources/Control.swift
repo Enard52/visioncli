@@ -459,6 +459,11 @@ extension AppDelegate {
 
         // Read-only requests: no approval, work even when control is off.
         switch action {
+        case "announce":
+            // The assistant reporting back later on its own (background work done): bubble + speech.
+            let text = r["text"] as? String ?? ""
+            DispatchQueue.main.async { self.announce(text); reply(["ok": true]) }
+            return
         case "status":
             DispatchQueue.main.async {
                 reply(["trusted": Computer.isTrusted, "mode": Settings.computerControl,

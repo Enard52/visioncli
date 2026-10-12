@@ -31,7 +31,7 @@ export const rememberLook = (m: ShotMap, seq = ++lookSeq) => {
 };
 
 // Answered instantly by the app (no approval), so a short timeout; anything else may wait for the user to approve.
-const QUICK_ACTIONS: Record<string, number> = { status: 3000, displays: 3000, windows: 3000, capture: 5000, elements: 8000 };
+const QUICK_ACTIONS: Record<string, number> = { status: 3000, displays: 3000, announce: 3000, windows: 3000, capture: 5000, elements: 8000 };
 const APPROVAL_TIMEOUT = 5 * 60_000;
 
 // control.json is re-read only when the app restarted (new port/token): connection refused or a bad token.

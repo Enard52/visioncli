@@ -461,6 +461,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         default: mascot.hide()
         }
         if phase == .hidden {
+            if !pendingAnnouncements.isEmpty {
+                let next = pendingAnnouncements.removeFirst()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.announce(next) }
+            }
             followTimer?.invalidate()
             followTimer = nil
             panel.orderOut(nil)
@@ -539,6 +543,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    /// Updates the assistant sends on its own later ("the release is live"), through the `announce` tool: shown in the
+    /// bubble and spoken, even with Speak Answers off. Waits while the user is in the middle of a question.
+    var pendingAnnouncements: [String] = []
+
+    func announce(_ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        guard state.phase == .hidden || state.phase == .done || state.phase == .error else {
+            pendingAnnouncements.append(text)
+            log("announce: queued (\(state.phase))")
+            return
+        }
+        log("announce: \(text.prefix(200))")
+        activity.note("Update: \(text)")
+        state.pinned = false
+        state.question = "Update"
+        state.status = ""
+        state.toast = ""
+        state.raw = text
+        set(.done)
+        speaker.reset()
+        speaker.feed(text, final: true, force: true)
+        history.add(HistoryEntry(date: Date(), project: currentProject, question: "Update", answer: text, screenshots: []))
+        scheduleHide(after: max(6, min(20, Double(text.count) / 12)))
     }
 
     func flash(_ message: String, seconds: Double = 5) {
