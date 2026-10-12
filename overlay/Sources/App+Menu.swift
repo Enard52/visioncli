@@ -63,210 +63,26 @@ extension AppDelegate {
             item("Choose Folder…", #selector(chooseProjectFolder), in: m)
         }
         usageItems(in: menu, item: item)
-        // Everyday items stay at the top level; everything else is gathered under Settings.
-        let settingsMenu = NSMenu()
-        submenu(Settings.autopilot ? "Autopilot: On (\(autopilot.calls)/\(Autopilot.hourlyCap) checks this hour)" : "Autopilot: Off", in: settingsMenu) { m in
-            item(Settings.autopilot ? "Turn Off" : "Turn On…", #selector(toggleAutopilot), in: m)
-            item("Check Now", Settings.autopilot ? #selector(autopilotCheckNow) : nil, in: m)
-            m.addItem(.separator())
-            item("Watch only these apps:", nil, in: m)
-            let mine = Bundle.main.bundleIdentifier
-            var apps: [(String, String)] = NSWorkspace.shared.runningApplications.compactMap { a in
-                guard a.activationPolicy == .regular, let id = a.bundleIdentifier, id != mine,
-                      !Autopilot.skipBundles.contains(id), !terminalApps.contains((a.localizedName ?? "").lowercased()) else { return nil }
-                return (a.localizedName ?? id, id)
-            }
-            for id in Settings.autopilotApps where !apps.contains(where: { $0.1 == id }) { apps.append((id, id)) }
-            var seenIds = Set<String>()
-            apps = apps.filter { seenIds.insert($0.1).inserted }.sorted { $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending }
-            for (name, id) in apps {
-                item(name, #selector(toggleAutopilotApp(_:)), in: m, on: Settings.autopilotApps.contains(id), value: id)
-            }
-        }
         if let status = updater.status { item(status, nil, in: menu) }
         else if let release = updater.available { item("Install Update (\(release.version))…", #selector(installUpdate), in: menu) }
         if !Screen.hasPermission { item("Grant Screen Recording…", #selector(openScreenSettings), in: menu) }
         menu.addItem(.separator())
 
-        submenu("Assistant: \(Settings.assistant.appName)", in: settingsMenu) { m in
-            for a in [Assistant.claude, .antigravity] {
-                let installed: Bool
-                switch a {
-                case .claude: installed = FileManager.default.isExecutableFile(atPath: cfg.claude)
-                case .antigravity: installed = cfg.agy != nil
-                case .gemini: installed = cfg.gemini != nil
-                }
-                item(a.appName + (installed ? "" : " (not installed)"), installed ? #selector(chooseAssistant(_:)) : nil, in: m,
-                     on: Settings.assistant == a, value: a.rawValue)
-            }
-            m.addItem(.separator())
-            item("A terminal running claude or agy is used as-is when you point at it.", nil, in: m)
-        }
-
-        // How answers are delivered
-        submenu("Answer In", in: settingsMenu) { m in
-            item("\(Settings.assistant.name) Terminal: type or talk, same conversation", #selector(useTerminalMode), in: m, on: Settings.terminalMode)
-            item("Bubble Only: background, leaner", #selector(useBackgroundMode), in: m, on: !Settings.terminalMode)
-            m.addItem(.separator())
-            if Settings.terminalMode {
-                item("Show \(Settings.assistant.name) Terminal", #selector(showClaudeTerminal), in: m, key: "t")
-            } else {
-                item("Show Live Activity in Terminal", #selector(showActivityMenu), in: m, key: "t")
-                item("Continue Conversation in Terminal", current?.sessionId == nil ? nil : #selector(continueInTerminal), in: m)
-                item("Open Activity Terminal Automatically", #selector(toggleAutoActivity), in: m, on: Settings.autoActivity)
-            }
-        }
-
-        submenu(Settings.assistant == .antigravity ? "Model" : "Model: \(MenuLabels.claudeModel(cfg.model ?? Settings.model))", in: settingsMenu) { m in
-            if Settings.assistant == .antigravity {
-                item("Default (from your agy settings)", #selector(chooseAgyModel(_:)), in: m, on: Settings.agyModel == nil)
-                m.addItem(.separator())
-                let models = AgyModels.cached
-                if models.isEmpty { item("Loading models from agy…", nil, in: m) }
-                for model in models {
-                    item(model.name, #selector(chooseAgyModel(_:)), in: m, on: Settings.agyModel == model.id, value: model.id)
-                }
-            } else {
-                let model = cfg.model ?? Settings.model
-                for (alias, label) in MenuLabels.claudeModels {
-                    if alias == "opusplan" { m.addItem(.separator()) }
-                    item(label, cfg.model == nil ? #selector(chooseClaudeModel(_:)) : nil, in: m, on: model == alias, value: alias)
-                }
-                if cfg.model != nil { item("(set by VISIONCLI_MODEL)", nil, in: m) }
-            }
-        }
-
-        submenu("Effort: \(MenuLabels.effort(Settings.effort))", in: settingsMenu) { m in
-            for level in [nil, "low", "medium", "high", "xhigh", "max"] as [String?] {
-                item(MenuLabels.effort(level) + (level == nil ? " (the CLI's own setting)" : ""), #selector(chooseEffort(_:)), in: m,
-                     on: Settings.effort == level, value: level)
-            }
-            m.addItem(.separator())
-            item("Applies to Claude and Gemini; higher is slower but more thorough.", nil, in: m)
-        }
-
-
-        let controlNames = ["ask": "Ask Before Each Action", "auto": "Allow All Actions", "off": "Off"]
-        submenu("Computer Control: \(controlNames[Settings.computerControl] ?? "Ask")", in: settingsMenu) { m in
-            for mode in ["ask", "auto", "off"] {
-                item(controlNames[mode]!, #selector(chooseComputerControl(_:)), in: m, on: Settings.computerControl == mode, value: mode)
-            }
-            m.addItem(.separator())
-            if Computer.isTrusted { item("✓ Accessibility permission granted", nil, in: m) }
-            else { item("Grant Accessibility Permission…", #selector(grantAccessibility), in: m) }
-            item("Passwords, payments and System Settings always ask. Esc stops it.", nil, in: m)
-            m.addItem(.separator())
-            item("Watch for App Crashes", #selector(toggleWatchCrashes), in: m, on: Settings.watchCrashes)
-        }
-
-        submenu("Voice & Audio", in: settingsMenu) { m in
-            if let status = installer?.status { item(status, nil, in: m); m.addItem(.separator()) }
-            item("Speak Answers", #selector(toggleSpeakSetting), in: m, on: Settings.speak)
-            submenu("Speech Speed", in: m) { sp in
-                for x in [1.0, 1.25, 1.5, 1.75, 2.0] {
-                    item(x == 1 ? "1× (normal)" : "\(x.formatted())×", #selector(chooseSpeed(_:)), in: sp, on: abs(Settings.speechSpeed - x) < 0.01, value: x)
-                }
-            }
-            m.addItem(.separator())
-            submenu("Voice", in: m) { v in
-                if VoiceModels.kokoroModel != nil {
-                    for (id, label) in VoiceModels.kokoroVoiceList {
-                        item("Kokoro: \(label)", #selector(chooseVoice(_:)), in: v, on: Settings.ttsEngine == "kokoro" && Settings.kokoroVoice == id, value: id)
-                    }
-                }
-                item("System voice", #selector(chooseVoice(_:)), in: v, on: Settings.ttsEngine == "system" || VoiceModels.kokoroModel == nil)
-                if !ModelInstaller.kokoroInstalled {
-                    v.addItem(.separator())
-                    item(installer?.isBusy == true ? "Installing…" : "Download Natural Voices (Kokoro, ~350 MB)…",
-                         installer?.isBusy == true ? nil : #selector(installKokoro), in: v)
-                }
-            }
-            submenu("Speech Recognition", in: m) { r in
-                if ParakeetEngine.binary != nil {
-                    item("Parakeet (local, fastest, knows your project's names)" + (parakeet != nil && parakeet?.ready != true ? " · loading…" : ""),
-                         #selector(chooseParakeet), in: r, on: parakeet != nil)
-                }
-                item(FlowDictation.isInstalled ? "Wispr Flow (your Flow account)" : "Wispr Flow (not installed)",
-                     FlowDictation.isInstalled ? #selector(chooseExternalDictation) : nil, in: r, on: Settings.sttEngine == "external")
-                let models = VoiceModels.whisperModels()
-                for (name, _) in models {
-                    item("Whisper \(name) (local)", #selector(chooseWhisper(_:)), in: r,
-                         on: parakeet == nil && Settings.sttEngine != "apple" && Settings.sttEngine != "external" && (whisper?.modelName ?? Settings.whisperModel) == name, value: name)
-                }
-                if models.isEmpty || VoiceModels.binary("whisper-server", path: cfg.path) == nil {
-                    item(installer?.isBusy == true ? "Installing…" : "Download Whisper (better accuracy, ~490 MB)…",
-                         installer?.isBusy == true ? nil : #selector(installWhisper), in: r)
-                }
-                item("Apple (on-device)", #selector(chooseWhisper(_:)), in: r, on: Settings.sttEngine == "apple" || (whisper == nil && parakeet == nil && Settings.sttEngine != "external"))
-                r.addItem(.separator())
-                item("Edit Vocabulary…", #selector(editVocabulary), in: r)
-            }
-            m.addItem(deviceMenu(title: "Microphone", input: true))
-            m.addItem(deviceMenu(title: "Speaker", input: false))
-        }
-
         item("History…", #selector(showHistoryMenu), in: menu, key: "y")
         item("New Conversation", #selector(newConversation), in: menu, key: "n")
         item("Copy Last Answer", #selector(copyAnswerMenu), in: menu, key: "c")
+        // Actions, not settings, so they stay in the menu (where answers appear is chosen in Settings → Assistant).
+        if Settings.terminalMode {
+            item("Show \(Settings.assistant.name) Terminal", #selector(showClaudeTerminal), in: menu, key: "t")
+        } else {
+            item("Show Live Activity in Terminal", #selector(showActivityMenu), in: menu, key: "t")
+            item("Continue Conversation in Terminal", current?.sessionId == nil ? nil : #selector(continueInTerminal), in: menu)
+        }
         menu.addItem(.separator())
 
-        submenu("Settings", in: menu) { m in
-            for i in settingsMenu.items { settingsMenu.removeItem(i); m.addItem(i) }
-            m.addItem(.separator())
-            item("Setup Wizard…", #selector(showSetupWizard), in: m)
-            item("Start at Login", #selector(toggleLogin), in: m, on: LoginItem.isEnabled)
-            item("Check for Updates… (v\(Updater.currentVersion))", #selector(checkForUpdates), in: m)
-            submenu("More", in: m) { more in
-                item("Screenshot Every Question (uses more tokens)", #selector(toggleScreenshotEvery), in: more, on: Settings.screenshotEveryQuestion)
-                item("Fast Model for Simple Questions (Bubble Only)", #selector(toggleSmartRouting), in: more, on: Settings.smartRouting)
-                item("Check for Updates Automatically", #selector(toggleAutoUpdate), in: more, on: Settings.autoUpdate)
-                item("Instant Browser Commands (Jev)", #selector(toggleQuick), in: more, on: Settings.quickCommands)
-                item("Show AI Cursor in Browser", #selector(toggleGhost), in: more, on: !FileManager.default.fileExists(atPath: ghostOffFile.path))
-                item("API Keys (TypeSafe for Jev, Gemini)…", #selector(openIntegrations), in: more)
-                more.addItem(.separator())
-                item("Set Up Claude Code (MCP tools)…", #selector(setupClaudeCode as () -> Void), in: more)
-                item("Set Up Antigravity CLI (MCP tools)…", cfg.agy == nil ? nil : #selector(setupAgy), in: more)
-                item("Fix Permissions…", #selector(fixPermissions), in: more)
-                more.addItem(.separator())
-                item("Open Log", #selector(openLog), in: more)
-                if ((try? FileManager.default.attributesOfItem(atPath: CrashReporter.logURL.path)[.size] as? Int) ?? 0) > 0 {
-                    item("Open Crash Log", #selector(openCrashLog), in: more)
-                }
-            }
-        }
+        // Every option lives in the Settings window.
+        item("Settings…", #selector(showSettings), in: menu, key: ",")
         item("Quit visioncli", #selector(quit), in: menu, key: "q")
-    }
-
-    /// Submenu listing audio devices; the choice applies to VisionCLI only.
-    func deviceMenu(title: String, input: Bool) -> NSMenuItem {
-        let sub = NSMenu()
-        let chosen = input ? Settings.inputDeviceUID : Settings.outputDeviceUID
-        let devices = input ? AudioDevices.inputs : AudioDevices.outputs
-        let missing = chosen != nil && !devices.contains { $0.uid == chosen }
-        let def = AudioDevices.defaultDevice(input: input)?.name ?? "none"
-        let system = NSMenuItem(title: "System Default (\(def))", action: #selector(chooseDevice(_:)), keyEquivalent: "")
-        system.target = self
-        system.representedObject = ["input": input]
-        system.state = chosen == nil || missing ? .on : .off
-        sub.addItem(system)
-        sub.addItem(.separator())
-        for d in devices {
-            let i = NSMenuItem(title: d.name, action: #selector(chooseDevice(_:)), keyEquivalent: "")
-            i.target = self
-            i.representedObject = ["input": input, "uid": d.uid]
-            i.state = d.uid == chosen ? .on : .off
-            sub.addItem(i)
-        }
-        if missing { sub.addItem(withTitle: "(chosen device disconnected, using default)", action: nil, keyEquivalent: "") }
-        if !input {
-            sub.addItem(.separator())
-            let test = NSMenuItem(title: "Play Test Sound", action: #selector(testSpeaker), keyEquivalent: "")
-            test.target = self
-            sub.addItem(test)
-        }
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.submenu = sub
-        return item
     }
 
     /// Claude plan usage at the top of the menu, with a submenu to refresh it or hide it from the menu bar.

@@ -233,7 +233,7 @@ final class AgySession: AssistantSession {
                     return
                 }
                 onDone(nil, denied
-                    ? "Gemini tried a step that needs your approval (like running a command), which Bubble Only mode can't ask for. Ask again, or switch VisionCLI menu → Settings → Answer In to the terminal for commands and edits."
+                    ? "Gemini tried a step that needs your approval (like running a command), which Bubble Only mode can't ask for. Ask again, or switch VisionCLI menu → Settings… → Assistant → Answers appear to the terminal for commands and edits."
                     : (lastStderr.split(separator: "\n").suffix(2).joined(separator: " ").ifEmpty("Gemini finished without a reply.")))
             } else {
                 onDone(nil, (r["error"] as? String) ?? (r["status"] as? String).map { "Antigravity: \($0)" } ?? "Antigravity reported an error.")

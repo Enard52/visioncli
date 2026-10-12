@@ -4,7 +4,7 @@ import Speech
 import SwiftUI
 
 /// First-run setup: one window that walks through every permission and download VisionCLI needs, one step at a
-/// time, with live status (✓ as soon as macOS reports it granted). Reopen it from VisionCLI menu → Settings → Setup Wizard….
+/// time, with live status (✓ as soon as macOS reports it granted). Reopen it from VisionCLI menu → Settings… → General → Setup Wizard.
 /// Screen Recording only takes effect after a relaunch, so the step we're on is remembered across restarts.
 final class SetupWizard {
     /// What the wizard needs from the app (engines, installers) without knowing the AppDelegate.
@@ -351,7 +351,13 @@ final class SetupModel: ObservableObject {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { NSWorkspace.shared.open(url) }
     }
 
-    private static func folderSize(_ url: URL) -> Int {
+    /// "Downloading Kokoro voices… 42%" → 0.42 (indeterminate when there's no number).
+    static func percent(_ status: String) -> Double? {
+        guard let r = status.range(of: #"(\d+)%"#, options: .regularExpression) else { return nil }
+        return Double(status[r].dropLast()).map { $0 / 100 }
+    }
+
+    static func folderSize(_ url: URL) -> Int {
         guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
         var total = 0
         for case let f as URL in e { total += (try? f.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0 }
@@ -459,7 +465,7 @@ private struct SetupView: View {
                 note("It's turned off. In System Settings → Privacy & Security → Automation, turn on \(SetupModel.terminalName) under VisionCLI.")
             }
         case .transcription:
-            header("Speech Model", "How your voice becomes text. You can change it later in VisionCLI menu → Settings → Voice & Audio.")
+            header("Speech Model", "How your voice becomes text. You can change it later in VisionCLI menu → Settings… → Voice.")
             VStack(alignment: .leading, spacing: 10) {
                 if SetupModel.hasParakeet {
                     choice("parakeet", "Parakeet (recommended)", "Most accurate, runs on your Mac, knows your project's names. "
@@ -479,7 +485,7 @@ private struct SetupView: View {
             if m.speechEngine.hasPrefix("whisper"), m.whisperModels.isEmpty {
                 if let status = m.kokoroStatus {
                     VStack(alignment: .leading, spacing: 4) {
-                        ProgressView(value: Self.percent(status))
+                        ProgressView(value: SetupModel.percent(status))
                         Text(status).font(.caption).foregroundStyle(.secondary)
                     }.padding(.top, 8)
                 } else {
@@ -516,7 +522,7 @@ private struct SetupView: View {
                 if !m.kokoroInstalled {
                     if let status = m.kokoroStatus {
                         VStack(alignment: .leading, spacing: 4) {
-                            ProgressView(value: Self.percent(status))
+                            ProgressView(value: SetupModel.percent(status))
                             Text(status).font(.caption).foregroundStyle(.secondary)
                         }.padding(.top, 8)
                     } else {
@@ -548,7 +554,7 @@ private struct SetupView: View {
             header("You're all set", "Hold ⌥ and ask \"what is this?\" while pointing at anything on your screen.")
             let missing = SetupStep.allCases.filter { !$0.optional && $0 != .done && m.state(of: $0) == .pending }
             if !missing.isEmpty {
-                note("Still to do: \(missing.map(\.title).joined(separator: ", ")). Reopen this from VisionCLI menu → Settings → Setup Wizard….")
+                note("Still to do: \(missing.map(\.title).joined(separator: ", ")). Reopen this from VisionCLI menu → Settings… → General → Setup Wizard.")
             }
         }
     }
@@ -658,11 +664,5 @@ private struct SetupView: View {
         if name.hasPrefix("large") { return "Most accurate Whisper, slower. Already on your Mac." }
         if name.hasPrefix("medium") { return "More accurate, a bit slower. Already on your Mac." }
         return "Fast and accurate\(name.hasSuffix(".en") ? " (English)" : "")." + " Already on your Mac."
-    }
-
-    /// "Downloading Kokoro voices… 42%" → 0.42 (indeterminate when there's no number).
-    static func percent(_ status: String) -> Double? {
-        guard let r = status.range(of: #"(\d+)%"#, options: .regularExpression) else { return nil }
-        return Double(status[r].dropLast()).map { $0 / 100 }
     }
 }

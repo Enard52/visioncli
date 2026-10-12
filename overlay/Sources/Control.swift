@@ -550,7 +550,7 @@ extension AppDelegate {
         }
 
         if Settings.computerControl == "off" {
-            reply(["error": "Computer control is turned off in VisionCLI (VisionCLI menu → Settings → Computer Control). Ask the user to turn it on."]); return
+            reply(["error": "Computer control is turned off in VisionCLI (VisionCLI menu → Settings… → Computer Control). Ask the user to turn it on."]); return
         }
         guard Computer.isTrusted else { reply(needTrust()); return }
 

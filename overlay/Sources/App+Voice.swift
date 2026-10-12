@@ -48,11 +48,10 @@ extension AppDelegate {
         whisper?.start()
     }
 
-    @objc func chooseDevice(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any], let input = info["input"] as? Bool else { return }
-        let uid = info["uid"] as? String
+    /// VisionCLI's own microphone or speaker (CoreAudio UID); nil = follow the Mac's default. A new speaker plays a test.
+    func setAudioDevice(input: Bool, uid: String?) {
         if input { Settings.inputDeviceUID = uid } else { Settings.outputDeviceUID = uid }
-        log("\(input ? "microphone" : "speaker"): \(sender.title)")
+        log("\(input ? "microphone" : "speaker"): \(uid.flatMap { AudioDevices.device(uid: $0)?.name } ?? "system default")")
         if !input { testSpeaker() }
     }
 
@@ -62,39 +61,32 @@ extension AppDelegate {
         speaker.feed("This is the VisionCLI speaker test.", final: true, force: true)
     }
 
-    @objc func installWhisper() { installer.installWhisper() }
-
-    @objc func installKokoro() { installer.installKokoro() }
-
-    @objc func chooseSpeed(_ sender: NSMenuItem) {
-        guard let x = sender.representedObject as? Double else { return }
+    /// Plays a short sample at the new speed.
+    func setSpeechSpeed(_ x: Double) {
         Settings.speechSpeed = x
         testSpeaker()
     }
 
-    @objc func toggleSpeakSetting() {
-        Settings.speak.toggle()
-        if !Settings.speak { speaker.reset() }
-        if Settings.speak && Settings.ttsEngine == "kokoro" { kokoro.start() }
+    func setSpeak(_ on: Bool) {
+        Settings.speak = on
+        if !on { speaker.reset() }
+        if on && Settings.ttsEngine == "kokoro" { kokoro.start() }
     }
 
-    @objc func chooseExternalDictation() {
-        Settings.sttEngine = "external"
-        restartWhisper() // stops the local engines; the box needs none
-    }
-
-    @objc func chooseParakeet() {
-        Settings.sttEngine = "parakeet"
+    /// "parakeet" | "external" (Wispr Flow) | "apple" | "whisper:<model>". Restarting stops whichever engine ran before.
+    func chooseSpeechEngine(_ engine: String) {
+        if engine.hasPrefix("whisper:") { Settings.sttEngine = "whisper"; Settings.whisperModel = String(engine.dropFirst(8)) }
+        else { Settings.sttEngine = engine }
         restartWhisper()
     }
 
-    @objc func chooseWhisper(_ sender: NSMenuItem) {
-        if let model = sender.representedObject as? String { Settings.sttEngine = "whisper"; Settings.whisperModel = model }
-        else { Settings.sttEngine = "apple" }
-        restartWhisper()
+    /// The engine actually in use, in chooseSpeechEngine's terms (Whisper falls back to Apple when it can't start).
+    var currentSpeechEngine: String {
+        if parakeet != nil { return "parakeet" }
+        if Settings.sttEngine == "external" { return "external" }
+        if Settings.sttEngine != "apple", let whisper { return "whisper:\(whisper.modelName)" }
+        return "apple"
     }
-
-    @objc func chooseVoice(_ sender: NSMenuItem) { selectVoice(sender.representedObject as? String) }
 
     /// A Kokoro voice id, or nil for the macOS voice; plays a short preview.
     func selectVoice(_ id: String?) {

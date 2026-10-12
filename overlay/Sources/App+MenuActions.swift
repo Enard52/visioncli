@@ -1,42 +1,34 @@
 import AppKit
 
-// Menu actions that flip a setting or open something (the voice, setup and project ones live with their features).
+// Actions that change a setting or open something, used by the menu and the Settings window (the voice, setup and
+// project ones live with their features).
 
 extension AppDelegate {
-    @objc func toggleAutoUpdate() { Settings.autoUpdate.toggle() }
-
-    @objc func chooseEffort(_ sender: NSMenuItem) {
-        Settings.effort = sender.representedObject as? String
-        log("effort: \(Settings.effort ?? "default")")
-        if let level = Settings.effort { propagate("/effort \(level)") }
+    /// nil = the CLI's own setting. A running terminal Claude switches too.
+    func setEffort(_ level: String?) {
+        Settings.effort = level
+        log("effort: \(level ?? "default")")
+        if let level { propagate("/effort \(level)") }
     }
 
-    @objc func chooseAgyModel(_ sender: NSMenuItem) {
-        Settings.agyModel = sender.representedObject as? String
-        log("agy model: \(Settings.agyModel ?? "default")")
+    /// An agy model id; nil = whatever agy itself is set to.
+    func setAgyModel(_ id: String?) {
+        Settings.agyModel = id
+        log("agy model: \(id ?? "default")")
     }
 
-    @objc func chooseAssistant(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let a = Assistant(rawValue: raw) else { return }
+    func setAssistant(_ a: Assistant) {
         Settings.assistant = a
         log("assistant: \(a.appName)")
     }
 
-    @objc func chooseClaudeModel(_ sender: NSMenuItem) {
-        guard let alias = sender.representedObject as? String else { return }
+    /// A Claude Code alias (MenuLabels.claudeModels). A running terminal Claude switches too.
+    func setClaudeModel(_ alias: String) {
         Settings.model = alias
         propagate("/model \(alias)")
     }
 
     @objc func showHistoryMenu() { showHistory() }
-
-    @objc func toggleAutoActivity() { Settings.autoActivity.toggle() }
-
-    @objc func toggleQuick() { Settings.quickCommands.toggle() }
-
-    @objc func toggleScreenshotEvery() { Settings.screenshotEveryQuestion.toggle() }
-
-    @objc func toggleSmartRouting() { Settings.smartRouting.toggle() }
 
     @objc func toggleAutopilot() {
         if Settings.autopilot {
@@ -64,21 +56,34 @@ extension AppDelegate {
 
     @objc func autopilotCheckNow() { autopilot.checkNow() }
 
-    @objc func toggleAutopilotApp(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        var apps = Settings.autopilotApps
-        if let i = apps.firstIndex(of: id) { apps.remove(at: i) } else { apps.append(id) }
+    /// Lets Autopilot read this app (bundle id), or stops it.
+    func setAutopilotApp(_ id: String, on: Bool) {
+        var apps = Settings.autopilotApps.filter { $0 != id }
+        if on { apps.append(id) }
         Settings.autopilotApps = apps
     }
 
-    @objc func toggleGhost() {
-        if FileManager.default.fileExists(atPath: ghostOffFile.path) { try? FileManager.default.removeItem(at: ghostOffFile) }
-        else { FileManager.default.createFile(atPath: ghostOffFile.path, contents: nil) }
+    /// Apps Autopilot can be allowed to read: running regular apps (minus the never-read list and terminals) plus the
+    /// ones already chosen, sorted by name.
+    func autopilotAppChoices() -> [(name: String, id: String)] {
+        let mine = Bundle.main.bundleIdentifier
+        var apps: [(name: String, id: String)] = NSWorkspace.shared.runningApplications.compactMap { a in
+            guard a.activationPolicy == .regular, let id = a.bundleIdentifier, id != mine,
+                  !Autopilot.skipBundles.contains(id), !terminalApps.contains((a.localizedName ?? "").lowercased()) else { return nil }
+            return (a.localizedName ?? id, id)
+        }
+        for id in Settings.autopilotApps where !apps.contains(where: { $0.id == id }) { apps.append((id, id)) }
+        var seenIds = Set<String>()
+        return apps.filter { seenIds.insert($0.id).inserted }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    @objc func useTerminalMode() { Settings.terminalMode = true }
+    /// The browser layer's animated cursor; off = a marker file the node side checks.
+    var ghostCursorOn: Bool { !FileManager.default.fileExists(atPath: ghostOffFile.path) }
 
-    @objc func useBackgroundMode() { Settings.terminalMode = false }
+    func setGhostCursor(_ on: Bool) {
+        if on { try? FileManager.default.removeItem(at: ghostOffFile) }
+        else { FileManager.default.createFile(atPath: ghostOffFile.path, contents: nil) }
+    }
 
     @objc func copyAnswerMenu() {
         let last = history.entries.first.map { Markup.display($0.answer) } ?? state.answer
@@ -104,9 +109,9 @@ extension AppDelegate {
         NSWorkspace.shared.open(file)
     }
 
-    @objc func toggleLogin() {
+    func setStartAtLogin(_ on: Bool) {
         do {
-            try LoginItem.set(!LoginItem.isEnabled)
+            try LoginItem.set(on)
         } catch {
             log("login item: \(error)")
             NSApp.activate(ignoringOtherApps: true)
@@ -117,16 +122,16 @@ extension AppDelegate {
         }
     }
 
-    @objc func chooseComputerControl(_ sender: NSMenuItem) {
-        guard let mode = sender.representedObject as? String else { return }
+    /// "ask" | "auto" | "off"
+    func setComputerControl(_ mode: String) {
         Settings.computerControl = mode
         controlAllowUntil = nil
         if mode != "off", !Computer.isTrusted { Computer.requestTrust() }
     }
 
-    @objc func toggleWatchCrashes() {
-        Settings.watchCrashes.toggle()
-        if Settings.watchCrashes { crashWatcher.start() } else { crashWatcher.stop() }
+    func setWatchCrashes(_ on: Bool) {
+        Settings.watchCrashes = on
+        if on { crashWatcher.start() } else { crashWatcher.stop() }
     }
 
     @objc func grantAccessibility() {

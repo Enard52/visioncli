@@ -9,7 +9,7 @@ extension AppDelegate {
             state.question = ""
             // Explain *why* nothing was transcribed when we know (permission, Dictation off, …).
             if let issue = listener.lastIssue {
-                flash(issue + (whisper == nil ? " Or install Whisper in VisionCLI menu → Settings → Voice & Audio → Speech Recognition." : ""), seconds: 12)
+                flash(issue + (whisper == nil ? " Or install Whisper in VisionCLI menu → Settings… → Voice → Speech recognition." : ""), seconds: 12)
             } else {
                 flash("Didn't catch that. Hold ⌥ while you speak.")
             }

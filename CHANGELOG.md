@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.9
+
+- **Settings window:** the nested Settings menus are replaced by one window in the style of macOS System Settings (VisionCLI menu → Settings…, or ⌘,). Sections: General, Assistant, Voice, Computer Control, Autopilot, Integrations and Advanced; changes apply immediately. Voices play a sample when picked, downloads show progress, the speaker has a Test button, and Integrations connects VisionCLI's tools to Claude Code, Antigravity and Gemini CLI without pop-ups.
+- **Simpler menu:** Show Terminal, Show Live Activity and Continue in Terminal are now top-level items; everything else lives in the Settings window.
+
 ## 0.7.8
 
 - **Cleaner, tested codebase:** the app's 2,356-line main file is split into focused parts (270 lines left), the server's tools are split by area, and 251 automated tests (app core logic and server) now run on every push. Messages between the app and the server are typed on both sides, with a test that keeps them in sync.

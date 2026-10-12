@@ -77,8 +77,6 @@ extension AppDelegate {
 
     /// Register the bundled MCP server with Claude Code for all projects (`claude mcp add --scope user`).
     /// `then` runs after the result alert is closed (the `claude mcp` commands run in the background first).
-    @objc func setupClaudeCode() { setupClaudeCode(then: {}) }
-
     func setupClaudeCode(then: @escaping () -> Void) {
         let alert = NSAlert()
         if let node = cfg.node, let server = cfg.server, FileManager.default.isExecutableFile(atPath: cfg.claude) {
@@ -105,7 +103,7 @@ extension AppDelegate {
                 cfg.node == nil ? "• Node.js 18 or later (https://nodejs.org). An older Node was ignored if present." : nil,
                 FileManager.default.isExecutableFile(atPath: cfg.claude) ? nil : "• Claude Code CLI (https://claude.com/claude-code)",
                 cfg.server == nil ? "• The visioncli server (use the release build of VisionCLI.app)" : nil,
-            ].compactMap { $0 }.joined(separator: "\n") + "\n\nInstall them, then choose Settings → Set Up Claude Code again."
+            ].compactMap { $0 }.joined(separator: "\n") + "\n\nInstall them, then choose VisionCLI menu → Settings… → Integrations → Connect."
         }
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
@@ -172,14 +170,14 @@ extension AppDelegate {
             do {
                 try AgySetup.install(node: node, server: server)
                 alert.messageText = "Antigravity CLI is set up"
-                alert.informativeText = "visioncli's tools are now available in every agy workspace. Restart any running `agy` sessions. To answer voice questions with Gemini through Antigravity, choose VisionCLI menu → Settings → Assistant → Gemini (Antigravity CLI)."
+                alert.informativeText = "visioncli's tools are now available in every agy workspace. Restart any running `agy` sessions. To answer voice questions with Gemini through Antigravity, choose VisionCLI menu → Settings… → Assistant → Gemini (Antigravity)."
             } catch {
                 alert.messageText = "Couldn't set up Antigravity CLI"
                 alert.informativeText = error.localizedDescription
             }
         } else {
             alert.messageText = "Antigravity CLI wasn't found"
-            alert.informativeText = "Install Antigravity (antigravity.google), sign in with `agy` once, then choose Settings → Set Up Antigravity CLI again."
+            alert.informativeText = "Install Antigravity (antigravity.google), sign in with `agy` once, then choose VisionCLI menu → Settings… → Integrations → Connect."
         }
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
@@ -198,7 +196,7 @@ extension AppDelegate {
                 DispatchQueue.main.async {
                     alert.messageText = status == 0 ? "Gemini CLI is set up" : "Couldn't set up Gemini CLI"
                     alert.informativeText = status == 0
-                        ? "visioncli's tools are now available in every Gemini CLI project. Restart any running `gemini` sessions. To answer voice questions with Gemini, choose VisionCLI menu → Settings → Assistant → Gemini CLI.\n\nFor screenshots when typing in Gemini CLI, give your terminal app Screen Recording access too."
+                        ? "visioncli's tools are now available in every Gemini CLI project. Restart any running `gemini` sessions. To answer voice questions with Gemini, choose VisionCLI menu → Settings… → Assistant → Gemini (Antigravity).\n\nFor screenshots when typing in Gemini CLI, give your terminal app Screen Recording access too."
                         : (err.isEmpty ? out : err)
                     NSApp.activate(ignoringOtherApps: true)
                     alert.runModal()
@@ -207,7 +205,7 @@ extension AppDelegate {
             return
         } else {
             alert.messageText = "Gemini CLI wasn't found"
-            alert.informativeText = "Install it with `npm install -g @google/gemini-cli`, sign in once by running `gemini`, then choose Settings → Set Up Gemini CLI again."
+            alert.informativeText = "Install it with `npm install -g @google/gemini-cli`, sign in once by running `gemini`, then choose VisionCLI menu → Settings… → Integrations → Connect."
         }
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
@@ -215,18 +213,13 @@ extension AppDelegate {
 
     @objc func showSetupWizard() {
         setupWizard.show(hooks: SetupWizard.Hooks(
-            chooseSpeech: { [weak self] engine in
-                // "whisper:small.en" picks a Whisper model; otherwise "parakeet" | "external" | "apple".
-                if engine.hasPrefix("whisper:") { Settings.sttEngine = "whisper"; Settings.whisperModel = String(engine.dropFirst(8)) }
-                else { Settings.sttEngine = engine }
-                self?.restartWhisper()
-            },
+            chooseSpeech: { [weak self] in self?.chooseSpeechEngine($0) },
             whisperModels: { VoiceModels.whisperModels().map(\.0) },
             whisperReady: { [weak self] in self?.whisper?.ready ?? false },
             installWhisper: { [weak self] in self?.installer.installWhisper() },
             voices: { VoiceModels.kokoroModel != nil ? VoiceModels.kokoroVoiceList.map { ($0.0, $0.1) } : [] },
             selectVoice: { [weak self] id in Settings.speak = true; self?.selectVoice(id) },
-            setSpeak: { [weak self] on in Settings.speak = on; if !on { self?.speaker.reset() } },
+            setSpeak: { [weak self] in self?.setSpeak($0) },
             setSpeed: { Settings.speechSpeed = $0 },
             parakeetReady: { [weak self] in self?.parakeet?.ready ?? false },
             installKokoro: { [weak self] in self?.installer.installKokoro() },
@@ -235,7 +228,7 @@ extension AppDelegate {
             isInstalled: { [weak self] in self?.isInstalled($0) ?? false },
             toolsConnected: { [weak self] in self?.toolsConnected($0) ?? false },
             connectTools: { [weak self] a, done in self?.connectTools(a, done: done) },
-            chooseAssistant: { a in Settings.assistant = a; log("assistant: \(a.appName)") },
+            chooseAssistant: { [weak self] in self?.setAssistant($0) },
             setTerminalMode: { Settings.terminalMode = $0 },
             accessibilityGranted: { [weak self] in self?.enableModifierKeys() },
             relaunch: { Updater.relaunch() }
@@ -253,13 +246,13 @@ extension AppDelegate {
         • Hold ⌥, ask, let go: the answer appears in the top-right corner.
         • Hold ⌥ ⌘ to send a screenshot of the window too.
         • Hold ⌥ ⇧ Space to drag a box around what you mean.
-        • The VisionCLI menu bar icon has projects, voices, models and settings.
-        • Optional: VisionCLI menu → Settings → Voice & Audio can download Whisper (more accurate transcription) and natural Kokoro voices.
+        • The VisionCLI menu bar icon has projects, history and Settings… (voices, models and more).
+        • Optional: VisionCLI menu → Settings… → Voice can download Whisper (more accurate transcription) and natural Kokoro voices.
 
         macOS will ask for Microphone, Speech Recognition and Screen Recording access. VisionCLI needs all three.
         To use the tools by typing in Claude Code, also give your terminal app (iTerm, Terminal…) Screen Recording access.
 
-        Set up your AI CLI now so VisionCLI's tools work in every project? (Works with Claude Code and Gemini through Antigravity; pick which one answers voice questions in VisionCLI menu → Settings → Assistant.)
+        Set up your AI CLI now so VisionCLI's tools work in every project? (Works with Claude Code and Gemini through Antigravity; pick which one answers voice questions in VisionCLI menu → Settings… → Assistant.)
         """
         let hasClaude = FileManager.default.isExecutableFile(atPath: cfg.claude), hasAgy = cfg.agy != nil
         alert.addButton(withTitle: "Set Up \([hasClaude ? "Claude Code" : nil, hasAgy ? "Antigravity" : nil].compactMap { $0 }.joined(separator: " + ").ifEmpty("Claude Code"))")

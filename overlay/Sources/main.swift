@@ -15,7 +15,7 @@ import SwiftUI
 //
 // AppDelegate holds the app's state and launch wiring; its behavior lives in extensions by feature:
 // App+Listening (hotkeys, mic), App+Questions (routing, asking, answers), App+Sessions, App+Projects, App+Panel,
-// App+Bubble, App+Announce, App+Menu / App+MenuActions, App+Setup, App+Voice, App+Debug, and Control.swift.
+// App+Bubble, App+Announce, App+Menu / App+MenuActions, App+Settings (the Settings window), App+Setup, App+Voice, App+Debug, and Control.swift.
 // Pure logic (no AppKit) is in Core*.swift, tested by scripts/test-overlay.sh.
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, BubbleActions {
@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     let autopilot = Autopilot()
     let mascot = Mascot()
     let setupWizard = SetupWizard()
+    let settingsWindow = SettingsWindow()
     var installer: ModelInstaller!
     let updater = Updater()
     var sigterm: DispatchSourceSignal?
@@ -170,7 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 Settings.ttsEngine = "kokoro"
                 Settings.speak = true
                 self.kokoro.start()
-                self.flash("Kokoro voices are installed. Answers will be read aloud; pick a voice in VisionCLI menu → Settings → Voice & Audio → Voice.", seconds: 8)
+                self.flash("Kokoro voices are installed. Answers will be read aloud; pick a voice in VisionCLI menu → Settings… → Voice.", seconds: 8)
             }
         }
         updateStatusTitle()
