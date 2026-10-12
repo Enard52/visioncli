@@ -229,7 +229,7 @@ enum Settings {
 
     /// A Claude Code model alias (fable, opus, sonnet, haiku, …; see MenuLabels.claudeModels). A --model launch flag overrides.
     static var model: String {
-        get { d.string(forKey: "model") ?? "sonnet" }
+        get { d.string(forKey: "model") ?? "default" } // "default": whatever the user's Claude Code is set to
         set { d.set(newValue, forKey: "model") }
     }
 
@@ -311,6 +311,13 @@ enum Settings {
     }
 
     /// Instant browser commands routed by Jev (TypeSafe System One) before asking Claude.
+    /// Smart routing (bubble mode): Jev sends light questions to a small fast model (Haiku / Gemini Flash), heavy ones
+    /// to the chosen model.
+    static var smartRouting: Bool {
+        get { d.object(forKey: "smartRouting") as? Bool ?? true }
+        set { d.set(newValue, forKey: "smartRouting") }
+    }
+
     static var quickCommands: Bool {
         get { d.object(forKey: "quickCommands") as? Bool ?? true }
         set { d.set(newValue, forKey: "quickCommands") }
@@ -462,3 +469,32 @@ enum MainThreadWatchdog {
         }
     }
 }
+
+/// VisionCLI Home: the project for questions that aren't about any software project (general knowledge, emails,
+/// web pages, everyday tasks). A real folder, so terminal mode and file-making tasks work there like anywhere else.
+enum HomeProject {
+    static let path = home.appendingPathComponent("VisionCLI").path
+
+    /// Creates the folder (and the note telling the assistant what it is for) if it's missing.
+    static func ensure() {
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: path, withIntermediateDirectories: true)
+        let note = """
+        # VisionCLI Home
+
+        This is VisionCLI's general workspace: questions asked here are not about a specific software project.
+        Treat them like a general assistant would: everyday questions, writing and replying to messages, explaining
+        what is on the screen, web research, small tasks on this Mac. Save any notes, drafts or files you make for the
+        user in this folder unless they say otherwise.
+        """
+        for name in ["CLAUDE.md", "AGENTS.md"] {
+            let file = (path as NSString).appendingPathComponent(name)
+            if !fm.fileExists(atPath: file) { try? note.write(toFile: file, atomically: true, encoding: .utf8) }
+        }
+    }
+
+    static func label(_ project: String) -> String {
+        project == path ? "Home" : (project as NSString).lastPathComponent
+    }
+}
+

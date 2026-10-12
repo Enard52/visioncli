@@ -143,7 +143,7 @@ final class ClaudeSession: AssistantSession {
     private var stdin: FileHandle?
     // Persisted so a restart (e.g. after a crash) resumes the same conversation.
     private(set) var sessionId: String? {
-        didSet { UserDefaults.standard.set(sessionId, forKey: "backgroundSession:\(cwd)") }
+        didSet { UserDefaults.standard.set(sessionId, forKey: storeKey) }
     }
     private(set) var busy = false
     private var model: String
@@ -160,11 +160,19 @@ final class ClaudeSession: AssistantSession {
     var onCost: (Double) -> Void = { _ in }
     private var toolNames: [String: String] = [:]
 
-    init(cwd: String, cfg: Config) {
+    /// The fast lane (smart routing) answers light questions with Haiku at low effort, in its own conversation.
+    let lane: Lane
+    private var storeKey: String { lane == .fast ? "backgroundSession:fast:\(cwd)" : "backgroundSession:\(cwd)" }
+    private var wantedModel: String { lane == .fast ? "haiku" : (cfg.model ?? Settings.model) }
+    private var wantedEffort: String? { lane == .fast ? "low" : Settings.effort }
+
+    init(cwd: String, cfg: Config, lane: Lane = .strong) {
         self.cwd = cwd
         self.cfg = cfg
-        self.model = cfg.model ?? Settings.model
-        self.sessionId = UserDefaults.standard.string(forKey: "backgroundSession:\(cwd)")
+        self.lane = lane
+        self.model = lane == .fast ? "haiku" : (cfg.model ?? Settings.model)
+        self.sessionId = UserDefaults.standard.string(forKey: lane == .fast ? "backgroundSession:fast:\(cwd)" : "backgroundSession:\(cwd)")
+        self.effort = wantedEffort
     }
 
     var isRunning: Bool { proc?.isRunning == true }
@@ -174,8 +182,8 @@ final class ClaudeSession: AssistantSession {
 
     func send(text: String, shots: [Shot]) {
         if busy { restart() } // a new question interrupts the old one; --resume keeps the conversation
-        let wanted = cfg.model ?? Settings.model
-        if wanted != model || Settings.effort != effort { model = wanted; effort = Settings.effort; restart() }
+        let wanted = wantedModel
+        if wanted != model || wantedEffort != effort { model = wanted; effort = wantedEffort; restart() }
         if !isRunning { start() }
         busy = true
         // Built on the write queue: base64 of the screenshots is a megabyte or more.
@@ -219,8 +227,8 @@ final class ClaudeSession: AssistantSession {
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
             "--permission-prompt-tool", "stdio", "--permission-mode", "default",
             "--append-system-prompt", voiceSystemPrompt,
-            "--model", model,
-        ] + (effort.map { ["--effort", $0] } ?? []) + [
+        ] + (model == "default" ? [] : ["--model", model]) // "default": the user's own Claude Code default
+          + (effort.map { ["--effort", $0] } ?? []) + [
             // Lean session: only the built-in tools voice mode uses (about half the input tokens of the full set),
             // and no plugin hooks (their per-session output also defeats prompt caching).
             "--tools", "Read,Grep,Glob,Edit,Write,Bash",

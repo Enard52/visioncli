@@ -127,6 +127,9 @@ final class OverlayPanel: NSPanel {
 
 // MARK: - App
 
+/// Which model answers a bubble-mode question: the small fast one or the chosen (strong) one. See smart routing.
+enum Lane: String { case fast, strong }
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, BubbleActions {
     let cfg = Config.load()
     let state = OverlayState()
@@ -198,8 +201,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     override init() {
         currentProject = ""
         super.init()
-        currentProject = cfg.cwd
+        HomeProject.ensure()
+        // Until a project shows up under the pointer, questions go to Home (a launch folder that is a project wins).
+        currentProject = cfg.cwd == home.path ? HomeProject.path : cfg.cwd
     }
+
+    /// The last real project questions went to, and when: a question asked away from any project window shortly after
+    /// may still be about it (Jev decides), later ones go to Home.
+    var lastRealProject: (path: String, at: Date)?
+    /// Set at key-down when the window under the pointer belongs to no project: Jev decides project or Home.
+    var scopeProject: String?
+    var scopeWindow: WinInfo?
 
     func applicationDidFinishLaunching(_ n: Notification) {
         MainThreadWatchdog.start()
@@ -265,6 +277,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         refreshCandidates()
         AgyModels.refresh(cfg: cfg)
         if SetupWizard.shouldShow { DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showSetupWizard() } }
+        // Gemini (Antigravity) takes ~11 s to start: in bubble mode, have it ready before the first question.
+        if Settings.assistant == .antigravity && !Settings.terminalMode {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                self.session(for: self.currentProject).warm()
+                if self.routingOn { self.session(for: self.currentProject, lane: .fast).warm() }
+            }
+        }
         // Candidates are refreshed when the menu opens (menuNeedsUpdate), not on a timer: each refresh runs `ps` and
         // an `lsof` per running CLI.
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
@@ -368,7 +387,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 log("debug ask (\(Settings.assistant.binary), \(Settings.terminalMode ? "terminal" : "bubble")): \(question)")
                 self.state.question = question
                 self.set(.thinking)
-                self.captureAndAsk(question)
+                if !Settings.terminalMode { self.session(for: self.currentProject).warm(); if self.routingOn { self.session(for: self.currentProject, lane: .fast).warm() } }
+                self.questionReady(question)
             }
         }
 
@@ -610,12 +630,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                     guard let ctx, self.pressedAt == started, self.state.phase == .listening || self.state.phase == .thinking else { return }
                     self.terminalContext = ctx
                     self.currentProject = ctx.project
-                    self.state.project = (ctx.project as NSString).lastPathComponent
+                    self.lastRealProject = (ctx.project, Date())
+                    self.state.project = HomeProject.label(ctx.project)
                     log("terminal context: \(ctx.project)\(ctx.assistant.map { " (\($0.binary) running, session \(ctx.sessionId ?? "?"))" } ?? "")")
                 }
             }
         }
-        if Settings.pinnedProject == nil { currentProject = timed("project(for:)") { projects.project(for: window) } ?? currentProject }
+        scopeProject = nil
+        scopeWindow = window
+        if Settings.pinnedProject == nil {
+            if let p = timed("project(for:)", { projects.project(for: window) }) {
+                currentProject = p
+                lastRealProject = (p, Date())
+            } else if let last = lastRealProject, Date().timeIntervalSince(last.at) < 600 {
+                currentProject = last.path
+                scopeProject = last.path // about that project, or general? Jev decides with the question
+            } else {
+                currentProject = HomeProject.path
+            }
+        }
         if Settings.terminalMode {
             let project = currentProject
             DispatchQueue.global().async {
@@ -624,8 +657,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
                 DispatchQueue.main.async { if self.pressedAt == started { self.existingClaude = found.map { (project, $0) } } }
             }
         }
-        state.project = (currentProject as NSString).lastPathComponent
-        if !Settings.terminalMode { session(for: currentProject).warm() }
+        state.project = HomeProject.label(currentProject)
+        if !Settings.terminalMode {
+            session(for: currentProject).warm()
+            if routingOn { session(for: currentProject, lane: .fast).warm() }
+            if scopeProject != nil { session(for: HomeProject.path, lane: routingOn ? .fast : .strong).warm() }
+        }
         if let window, withScreen {
             DispatchQueue.global().async {
                 let shot = try? Screen.capture(window: window)
@@ -778,7 +815,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         }
         state.question = text
         state.status = withScreen ? "Looking at your screen…" : "Thinking…"
-        guard Settings.quickCommands, Self.looksLikeQuickCommand(text) else { captureAndAsk(text); return }
+        guard Settings.quickCommands, Self.looksLikeQuickCommand(text) else { routeThenAsk(text); return }
         // Jev first (fast path for simple browser commands); Claude if it isn't a confident quick action.
         let started = Date()
         runQuick(text, timeout: 3) { [weak self] result in
@@ -814,14 +851,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     var quickProc: Process?
+    /// Smart routing state: the lane chosen for the next question, and the last question/lane per project (follow-ups).
+    var nextLane: Lane = .strong
+    var lastLane: [String: (lane: Lane, at: Date, question: String)] = [:]
+    var routingOn: Bool { Settings.smartRouting && !Settings.terminalMode && Settings.assistant != .gemini }
+
+    /// Bubble mode: ask Jev (~0.5 s) whether a small fast model can answer, then ask. Terminal mode is unchanged:
+    /// questions go to the assistant the user already has open.
+    func routeThenAsk(_ text: String) {
+        // Away from any project window shortly after using one: is this about that project, or general (Home)?
+        let scope = Settings.pinnedProject == nil && terminalContext == nil ? scopeProject : nil
+        guard routingOn || scope != nil else { captureAndAsk(text); return }
+        var input: [String: Any] = ["question": text]
+        if let previous = lastLane[currentProject], Date().timeIntervalSince(previous.at) < 300 {
+            input["previous"] = previous.question
+            input["previousLane"] = previous.lane.rawValue
+        }
+        if let scope {
+            input["project"] = HomeProject.label(scope)
+            if let w = scopeWindow { input["app"] = w.app; input["window"] = w.title }
+        }
+        guard let json = (try? JSONSerialization.data(withJSONObject: input)).flatMap({ String(data: $0, encoding: .utf8) }) else {
+            captureAndAsk(text); return
+        }
+        let started = Date()
+        runQuick(text, timeout: 2.5, args: ["route", json]) { [weak self] result in
+            guard let self, self.state.phase == .thinking, self.state.question == text else { return }
+            let lane = Lane(rawValue: result?["lane"] as? String ?? "") ?? .strong
+            let general = scope != nil && result?["scope"] as? String == "general"
+            log("route: \(lane.rawValue)\(scope == nil ? "" : general ? ", general (Home)" : ", project") conf=\(result?["confidence"] ?? "-")\(result?["reason"].map { " (\($0))" } ?? "") \(Int(Date().timeIntervalSince(started) * 1000))ms")
+            if general {
+                self.currentProject = HomeProject.path
+                self.state.project = "Home"
+            }
+            self.nextLane = lane
+            self.captureAndAsk(text)
+        }
+    }
 
     /// `visioncli quick <text>` with a hard timeout (killed if slow, so it can't act after Claude took over).
-    func runQuick(_ text: String, timeout: Double, _ done: @escaping ([String: Any]?) -> Void) {
+    func runQuick(_ text: String, timeout: Double, args: [String]? = nil, _ done: @escaping ([String: Any]?) -> Void) {
         guard let node = cfg.node, let server = cfg.server else { done(nil); return }
         quickProc?.terminate()
         let p = Process()
         p.executableURL = URL(fileURLWithPath: node)
-        p.arguments = [server, "quick", text]
+        p.arguments = [server] + (args ?? ["quick", text])
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = cfg.path
         env["VISIONCLI_FRONT_APP"] = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
@@ -866,7 +940,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     /// Terms Parakeet should spell exactly: the project, code-like words in the window title (PaymentController.php →
     /// PaymentController), the user's vocabulary file and common developer names.
     func vocabularyWords() -> [String] {
-        var words = [(currentProject as NSString).lastPathComponent]
+        var words = [HomeProject.label(currentProject)]
         if let title = Screen.windowUnderPointer()?.title {
             for token in title.components(separatedBy: CharacterSet.alphanumerics.inverted) where token.count >= 4 {
                 // CamelCase / snake-ish identifiers only; plain words don't need help.
@@ -883,7 +957,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     func vocabularyPrompt() -> String {
-        var words = [(currentProject as NSString).lastPathComponent]
+        var words = [HomeProject.label(currentProject)]
         if let title = Screen.windowUnderPointer()?.title, !title.isEmpty { words.append(title) }
         if let custom = try? String(contentsOf: Settings.vocabularyFile, encoding: .utf8) {
             words += custom.components(separatedBy: CharacterSet(charactersIn: ",\n")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -966,13 +1040,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
 
     // MARK: Claude
 
-    func session(for project: String) -> AssistantSession {
-        let key = "\(Settings.assistant.rawValue):\(project)"
+    func session(for project: String, lane: Lane = .strong) -> AssistantSession {
+        let lane = Settings.assistant == .gemini ? .strong : lane // Gemini CLI has no fast lane
+        let key = "\(Settings.assistant.rawValue):\(lane.rawValue):\(project)"
         if let s = sessions[key] { return s }
         let s: AssistantSession
         switch Settings.assistant {
-        case .claude: s = ClaudeSession(cwd: project, cfg: cfg)
-        case .antigravity: s = AgySession(cwd: project, cfg: cfg)
+        case .claude: s = ClaudeSession(cwd: project, cfg: cfg, lane: lane)
+        case .antigravity: s = AgySession(cwd: project, cfg: cfg, lane: lane)
         case .gemini: s = GeminiSession(cwd: project, cfg: cfg)
         }
         s.onStatus = { [weak self, weak s] text in
@@ -1017,7 +1092,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             self.finish(result: result, error: error)
         }
         // Keep at most a few projects warm.
-        if sessions.count >= 3, let (victimKey, victim) = sessions.first(where: { $0.value !== current && !$0.value.busy }) {
+        if sessions.count >= 4, let (victimKey, victim) = sessions.first(where: { $0.value !== current && !$0.value.busy }) {
             victim.stop()
             sessions[victimKey] = nil
         }
@@ -1060,8 +1135,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
         // A terminal the user pointed at wins; otherwise the window the pointer ended on decides the project.
         if let pinned = Settings.pinnedProject { currentProject = pinned }
         else if let ctx = terminalContext { currentProject = ctx.project }
-        else if let p = projects.project(for: shots.last?.window ?? window) { currentProject = p }
-        state.project = (currentProject as NSString).lastPathComponent
+        else if let p = projects.project(for: shots.last?.window ?? window) { currentProject = p; lastRealProject = (p, Date()) }
+        state.project = HomeProject.label(currentProject)
         let saved = history.save(shots)
         currentShots = saved
         writeShotMap(saved)
@@ -1148,12 +1223,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             TerminalLauncher.showActivity()
         }
 
-        let s = session(for: currentProject)
+        let lane = routingOn ? nextLane : .strong
+        nextLane = .strong
+        let s = session(for: currentProject, lane: lane)
+        // Switching lanes changes conversations: carry the last couple of exchanges over so follow-ups make sense.
+        var sendText = text
+        if routingOn, let last = lastLane[currentProject], last.lane != lane, Date().timeIntervalSince(last.at) < 1800 {
+            let recent = history.entries.filter { $0.project == currentProject }.prefix(2).reversed()
+            if !recent.isEmpty {
+                sendText = "Earlier in this conversation (for context):\n"
+                    + recent.map { "User: \($0.question.prefix(300))\nAssistant: \($0.answer.prefix(500))" }.joined(separator: "\n")
+                    + "\n\n" + text
+            }
+        }
+        lastLane[currentProject] = (lane, Date(), question)
+        if lane == .fast { log("route: fast lane (\(Settings.assistant == .claude ? "Haiku" : AgyModels.fastest))") }
         current = s
         state.raw = ""
         state.status = "Thinking…"
         if state.phase != .thinking { set(.thinking) }
-        s.send(text: text, shots: saved)
+        s.send(text: sendText, shots: saved)
     }
 
     /// A spoken or typed CLI command: "/model haiku", "Slash model haiku." → "/model haiku".
@@ -1316,10 +1405,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
 
         // Project: Auto, or pick one (candidates refreshed in the background each time the menu opens)
         refreshCandidates()
-        submenu("Project: \((currentProject as NSString).lastPathComponent)\(Settings.pinnedProject != nil ? " (pinned)" : "")", in: menu) { m in
+        submenu("Project: \(HomeProject.label(currentProject))\(Settings.pinnedProject != nil ? " (pinned)" : "")", in: menu) { m in
             item("Auto: follow the window under the pointer", #selector(pickProject(_:)), in: m, on: Settings.pinnedProject == nil)
+            item("Home: general questions, no project", #selector(pickProject(_:)), in: m,
+                 on: Settings.pinnedProject == HomeProject.path, value: HomeProject.path)
             m.addItem(.separator())
-            var seen = Set<String>()
+            var seen: Set<String> = [HomeProject.path]
             func add(_ path: String, note: String) {
                 guard !path.isEmpty, seen.insert(path).inserted else { return }
                 let shortPath = path.replacingOccurrences(of: home.path, with: "~")
@@ -1491,6 +1582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
             item("Check for Updates… (v\(Updater.currentVersion))", #selector(checkForUpdates), in: m)
             submenu("More", in: m) { more in
                 item("Screenshot Every Question (uses more tokens)", #selector(toggleScreenshotEvery), in: more, on: Settings.screenshotEveryQuestion)
+                item("Fast Model for Simple Questions (Bubble Only)", #selector(toggleSmartRouting), in: more, on: Settings.smartRouting)
                 item("Check for Updates Automatically", #selector(toggleAutoUpdate), in: more, on: Settings.autoUpdate)
                 item("Instant Browser Commands (Jev)", #selector(toggleQuick), in: more, on: Settings.quickCommands)
                 item("Show AI Cursor in Browser", #selector(toggleGhost), in: more, on: !FileManager.default.fileExists(atPath: ghostOffFile.path))
@@ -1590,7 +1682,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     }
 
     func updateStatusTitle() {
-        let name = (currentProject as NSString).lastPathComponent
+        let name = HomeProject.label(currentProject)
         let title = " " + (name.count > 18 ? String(name.prefix(17)) + "…" : name)
         let u = UsageTracker.shared
         if Settings.usageInMenuBar, let sp = u.percent(u.session), let wp = u.percent(u.week) {
@@ -2014,7 +2106,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
 
     /// The terminal changed its model itself (/model there): follow it in the menu.
     func syncModelFromTerminal() {
-        guard Settings.terminalMode, Settings.assistant == .claude, cfg.model == nil else { return }
+        // In bubble mode too: the background session should use the model the user's terminal Claude is on.
+        guard Settings.assistant == .claude, cfg.model == nil else { return }
         let t = terminal(for: currentProject, assistant: .claude)
         // Probe and transcript read run in the background; the session's state only changes on main.
         t.findRunning {
@@ -2037,6 +2130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     @objc func toggleAutoActivity() { Settings.autoActivity.toggle() }
     @objc func toggleQuick() { Settings.quickCommands.toggle() }
     @objc func toggleScreenshotEvery() { Settings.screenshotEveryQuestion.toggle() }
+    @objc func toggleSmartRouting() { Settings.smartRouting.toggle() }
 
     @objc func toggleAutopilot() {
         if Settings.autopilot {

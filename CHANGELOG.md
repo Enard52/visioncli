@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.6
+
+- **Gemini is much faster:** one Antigravity process per project stays running (questions go to it over stdin), started at launch in bubble mode and kept ready for an hour, instead of a new ~20 s startup for every question.
+- **Smart routing (bubble mode):** one Jev (TypeSafe System One) request, about 0.5 s, decides whether a question is light ("what is this?", "how are you") or heavy (code changes, debugging, planning). Light ones go to a small fast model (Claude Haiku or Gemini Flash Low), heavy ones and their follow-ups to your model; switching lanes carries the last exchanges along. Turn it off in Settings → More.
+- **Your model by default:** with no model picked in VisionCLI, Claude uses the model your terminal Claude is on, or your Claude Code default (it no longer forces Sonnet). Gemini uses Antigravity's default unless you pick one.
+- **VisionCLI Home:** a general-purpose project (`~/VisionCLI`) for questions that aren't about any project. Questions asked away from any project window go there; shortly after using a project, Jev decides whether a question is about that project or general. Pin Home in the Project menu to use VisionCLI as a plain assistant.
+
 ## 0.7.5
 
 - **Setup wizard:** first-time users get one window that walks through everything VisionCLI needs, one step at a time, each ticking itself as soon as macOS reports it granted: Microphone, Speech Recognition, Accessibility, Screen Recording (it restarts the app for you and resumes there), Terminal access, the speech model (Parakeet, Wispr Flow, any Whisper model on your Mac, or Apple, with download progress), voice (read answers aloud, speed, and every voice with a sample), and your assistant (Claude Code or Gemini through Antigravity, where answers appear, and connecting VisionCLI's tools). It replaces the burst of permission prompts on first launch. Reopen it from VisionCLI menu → Settings → Setup Wizard….

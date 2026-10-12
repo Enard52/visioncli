@@ -1,15 +1,22 @@
 import Foundation
 
-/// Background (bubble-only) Gemini through Antigravity CLI: one `agy -p … --output-format stream-json` run per
-/// question, continuing the same conversation (`--conversation <id>`). Uses the user's own agy (Google) sign-in.
+/// Background (bubble-only) Gemini through Antigravity CLI. One `agy` process per project stays running
+/// (`--input-format stream-json`): each question is a line on its stdin, so only the first one pays agy's ~10–20 s
+/// startup (and that is started while the user is still holding the key). Continues the same conversation
+/// (`--conversation <id>`) across restarts. Uses the user's own agy (Google) sign-in.
 /// Headless agy auto-denies tools that would need approval, so only reads and the allow-listed visioncli tools run.
 final class AgySession: AssistantSession {
     let cwd: String
     private let cfg: Config
     private var proc: Process?
+    private var stdin: FileHandle?
+    private var launchArgs: [String] = []   // model/effort the running process was started with
+    private var primed = false              // the voice instructions went into this conversation
+    private var gotResult = false
+    private var idleStop: DispatchWorkItem?   // an idle agy is shut down after an hour; the next question restarts it
     private(set) var busy = false
     private(set) var sessionId: String? {
-        didSet { UserDefaults.standard.set(sessionId, forKey: "agyBackground:\(cwd)") }
+        didSet { UserDefaults.standard.set(sessionId, forKey: storeKey) }
     }
     private var answer = ""
     private var lastStderr = ""
@@ -29,13 +36,34 @@ final class AgySession: AssistantSession {
     var onToolResult: (_ text: String, _ isError: Bool, _ tool: String?) -> Void = { _, _, _ in }
     var onCost: (Double) -> Void = { _ in }
 
-    init(cwd: String, cfg: Config) {
+    /// The fast lane (smart routing) answers light questions with Gemini Flash (Low), in its own conversation.
+    let lane: Lane
+    private var storeKey: String { lane == .fast ? "agyBackground:fast:\(cwd)" : "agyBackground:\(cwd)" }
+
+    init(cwd: String, cfg: Config, lane: Lane = .strong) {
         self.cwd = cwd
         self.cfg = cfg
-        self.sessionId = UserDefaults.standard.string(forKey: "agyBackground:\(cwd)")
+        self.lane = lane
+        self.sessionId = UserDefaults.standard.string(forKey: lane == .fast ? "agyBackground:fast:\(cwd)" : "agyBackground:\(cwd)")
     }
 
-    func warm() {}
+    /// Start agy now (at key-down) so the question doesn't wait for its startup.
+    func warm() {
+        idleStop?.cancel()
+        if proc?.isRunning != true { start() }
+        scheduleIdleStop()
+    }
+
+    private func scheduleIdleStop() {
+        idleStop?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, !self.busy, self.proc != nil else { return }
+            log("agy: idle, stopping")
+            self.stop()
+        }
+        idleStop = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3600, execute: w) // an hour: agy takes ~11 s to start
+    }
 
     /// Headless agy can't ask for approval, so a denied command ends its turn. When the user approves it in the
     /// bubble, allow that command (an agy permission rule) and let Gemini continue the same conversation.
@@ -47,6 +75,7 @@ final class AgySession: AssistantSession {
             AgySetup.addAllowRule(rule)
             if keepRule { AgySetup.sessionRules.insert(rule) } else { tempRule = rule }
             log("agy: allowed \(rule)\(keepRule ? " (kept)" : " (this time)")")
+            stop() // a running agy doesn't reread its permission rules: restart into the same conversation
             send(text: "The user approved running `\(command)`. Run it now and continue answering the original question.", shots: [])
         } else {
             send(text: "The user declined running `\(command)`. Answer as well as you can without running commands.", shots: [])
@@ -61,43 +90,69 @@ final class AgySession: AssistantSession {
 
     func stop() {
         busy = false
+        try? stdin?.close()
+        stdin = nil
         if let p = proc, p.isRunning { p.terminate() }
         proc = nil
     }
 
+    private var modelArgs: [String] {
+        if lane == .fast { return ["--model", AgyModels.fastest] }
+        return (Settings.agyModel.map { ["--model", $0] } ?? []) + (Settings.effort.map { ["--effort", $0] } ?? [])
+    }
+
     func send(text: String, shots: [Shot]) {
-        stop()
-        guard let agy = cfg.agy else { onDone(nil, "Antigravity CLI (agy) wasn't found. Install Antigravity, sign in, and reopen VisionCLI."); return }
-        let resume = sessionId.map { FileManager.default.fileExists(atPath: TerminalProbe.agyTranscript($0).path) } ?? false
-        var prompt = resume ? "" : geminiVoicePrompt
+        guard cfg.agy != nil else { onDone(nil, "Antigravity CLI (agy) wasn't found. Install Antigravity, sign in, and reopen VisionCLI."); return }
+        // A question while one is still running, or a model/effort change: start over (same conversation).
+        if busy || (proc?.isRunning == true && launchArgs != modelArgs) { stop() }
+        if proc?.isRunning != true { start() }
+        guard let stdin else { return } // start() already reported why
+        var prompt = primed ? "" : geminiVoicePrompt
+        primed = true
         prompt += text
         let paths = shots.compactMap { $0.file?.path }
         if !paths.isEmpty { prompt += "\nScreenshot file(s) to view first: " + paths.joined(separator: ", ") }
+        let msg: [String: Any] = ["event": "user", "message": ["role": "user", "content": prompt]]
+        guard let data = try? JSONSerialization.data(withJSONObject: msg) else { return }
+        answer = ""
+        lastStderr = ""
+        gotResult = false
+        idleStop?.cancel()
+        do {
+            try stdin.write(contentsOf: data + Data([0x0A]))
+            busy = true
+            log("ask agy (\(cwd), \(sessionId.map { "conversation \($0)" } ?? "new")): \(text.prefix(200))")
+        } catch {
+            stop()
+            onDone(nil, "Antigravity stopped unexpectedly. Ask again.")
+        }
+    }
 
+    private func start() {
+        guard let agy = cfg.agy else { return }
+        let resume = sessionId.map { FileManager.default.fileExists(atPath: TerminalProbe.agyTranscript($0).path) } ?? false
+        primed = resume // a resumed conversation already has the voice instructions
         let p = Process()
         p.executableURL = URL(fileURLWithPath: agy)
-        p.arguments = ["-p", prompt, "--output-format", "stream-json"] + (resume ? ["--conversation", sessionId!] : [])
-            + (Settings.agyModel.map { ["--model", $0] } ?? [])
-            + (Settings.effort.map { ["--effort", $0] } ?? [])
+        launchArgs = modelArgs
+        p.arguments = ["-p", "", "--input-format", "stream-json", "--output-format", "stream-json"]
+            + (resume ? ["--conversation", sessionId!] : []) + launchArgs
         p.currentDirectoryURL = URL(fileURLWithPath: cwd)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = cfg.path
         p.environment = env
-        let out = Pipe(), err = Pipe()
+        let out = Pipe(), err = Pipe(), input = Pipe()
         p.standardOutput = out
         p.standardError = err
-        p.standardInput = FileHandle.nullDevice
+        p.standardInput = input
 
         let lines = LineSplitter(), stderrTail = TailText()
-        var gotResult = false
-        answer = ""
-        lastStderr = ""
         out.fileHandleForReading.readabilityHandler = { [weak self] h in
             lines.feed(h.availableData) { line in
                 guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { return }
                 DispatchQueue.main.async {
                     guard let self, self.proc === p else { return }
-                    if obj["event"] as? String == "result" { gotResult = true }
+                    if obj["event"] as? String == "result" { self.gotResult = true }
                     self.handle(obj)
                 }
             }
@@ -115,7 +170,8 @@ final class AgySession: AssistantSession {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 guard let self, self.proc === proc else { return }
                 self.proc = nil
-                if self.busy && !gotResult {
+                self.stdin = nil
+                if self.busy && !self.gotResult {
                     self.busy = false
                     let tail = errText.split(separator: "\n").suffix(3).joined(separator: "\n")
                     self.onDone(nil, tail.isEmpty ? "Antigravity stopped unexpectedly (exit \(proc.terminationStatus))." : tail)
@@ -125,8 +181,8 @@ final class AgySession: AssistantSession {
         do {
             try p.run()
             proc = p
-            busy = true
-            log("ask agy (\(cwd), \(resume ? "conversation \(sessionId!)" : "new")): \(text.prefix(200))")
+            stdin = input.fileHandleForWriting
+            log("agy started for \(cwd) (\(resume ? "conversation \(sessionId!)" : "new conversation"))")
         } catch {
             onDone(nil, "Couldn't start agy: \(error.localizedDescription)")
         }
@@ -159,6 +215,7 @@ final class AgySession: AssistantSession {
             }
         case "result":
             busy = false
+            scheduleIdleStop()
             if let rule = tempRule { AgySetup.removeAllowRule(rule); tempRule = nil } // "allow once" is over
             guard let r = obj["result"] as? [String: Any] else { return }
             let response = ((r["response"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? answer).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -262,6 +319,11 @@ extension String {
 
 /// The models agy offers (`agy models`), cached so the menu opens instantly.
 enum AgyModels {
+    /// The quickest model for the fast lane: the newest "Flash (Low)" agy lists.
+    static var fastest: String {
+        cached.map(\.id).first { $0.contains("flash-low") } ?? "gemini-3.8-flash-low"
+    }
+
     static var cached: [(id: String, name: String)] {
         (UserDefaults.standard.array(forKey: "agyModels") as? [[String]] ?? []).compactMap { $0.count == 2 ? ($0[0], $0[1]) : nil }
     }

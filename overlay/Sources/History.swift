@@ -162,7 +162,7 @@ struct HistoryView: View {
                 Spacer()
                 Picker("", selection: $filter.project) {
                     Text("All Projects").tag("")
-                    ForEach(projects, id: \.self) { p in Text((p as NSString).lastPathComponent).tag(p) }
+                    ForEach(projects, id: \.self) { p in Text(HomeProject.label(p)).tag(p) }
                 }
                 .frame(maxWidth: 200)
                 Button(filter.project.isEmpty ? "Clear History" : "Clear Project") { store.clear(project: filter.project.isEmpty ? nil : filter.project) }
@@ -188,7 +188,7 @@ struct HistoryView: View {
                                 Text(e.date, style: .relative).font(.caption).foregroundStyle(.secondary)
                             }
                             if filter.project.isEmpty {
-                                Text((e.project as NSString).lastPathComponent).font(.caption).foregroundStyle(.secondary)
+                                Text(HomeProject.label(e.project)).font(.caption).foregroundStyle(.secondary)
                             }
                             Text(Markup.display(e.answer)).font(.body).textSelection(.enabled)
                             HStack {
