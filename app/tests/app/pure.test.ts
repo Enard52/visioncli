@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { compareVersions, electronNodeWrapper, findNode, loadConfig, parseArgs, registryPath, serverArgs } from "../../src/main/app/config";
+import { compareVersions, electronNodeWrapper, findNode, loadConfig, mergePath, parseArgs, registryPath, serverArgs } from "../../src/main/app/config";
 import { drawMarks, makeShot, rawWindowUnderPointer, regionLabel, screenPoint, windowLabel, windowUnderPointer } from "../../src/main/app/shots";
 import { carryOver, cleanTranscript, hudTitle, meaningful, parseOpenLink, terminalQuestion, voiceQuestion } from "../../src/main/app/text";
 import { OverlayKeys } from "../../src/main/app/keys";
@@ -196,4 +196,11 @@ test("Windows: the saved Path from the registry, %VARS% expanded (finds CLIs ins
   const path = registryPath({ userprofile: "C:\\Users\\me", SystemRoot: "C:\\Windows" }, (k) => out[k] ?? "");
   assert.equal(path, "C:\\Users\\me\\.local\\bin;C:\\Tools;C:\\Windows\\system32;C:\\Windows");
   assert.equal(registryPath({}, () => ""), "");
+});
+
+test("the saved PATH is merged with this launch's (CLIs installed after the first run are found)", () => {
+  assert.equal(mergePath("/usr/bin:/bin", "/bin:/home/me/.local/bin", "linux"), "/usr/bin:/bin:/home/me/.local/bin");
+  assert.equal(mergePath("C:\\Windows;C:\\Tools", "c:\\tools;C:\\Users\\me\\AppData\\Local\\agy\\bin", "win32"),
+    "C:\\Windows;C:\\Tools;C:\\Users\\me\\AppData\\Local\\agy\\bin");
+  assert.equal(mergePath(null, "/bin", "linux"), "/bin");
 });

@@ -159,6 +159,18 @@ export function findClis(path: string): { claude: string | null; agy: string | n
   return { claude: findClaude(path), agy: find("agy", path), gemini: find("gemini", path) };
 }
 
+/** The saved PATH (overlay.json) plus this launch's: a CLI installed after the first run lives on the new one. */
+export function mergePath(saved: string | null | undefined, current: string | null | undefined, platform: string = process.platform): string {
+  const sep = isWindows(platform) ? ";" : ":";
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const d of [...(saved ?? "").split(sep), ...(current ?? "").split(sep)]) {
+    const k = isWindows(platform) ? d.toLowerCase() : d;
+    if (d && !seen.has(k)) { seen.add(k); out.push(d); }
+  }
+  return out.join(sep);
+}
+
 /** Launch arguments win and are remembered; otherwise overlay.json; anything missing is found on this computer. */
 export function loadConfig(o: LoadOptions): AppConfig {
   const file = o.file ?? OVERLAY_JSON;
@@ -171,7 +183,7 @@ export function loadConfig(o: LoadOptions): AppConfig {
     try { c = JSON.parse(readFileSync(file, "utf8")); } catch { firstRun = true; }
   }
   const cfg: AppConfig = {
-    cwd: c.cwd || home, claude: c.claude || "claude", path: c.path || process.env.PATH || "/usr/bin:/bin",
+    cwd: c.cwd || home, claude: c.claude || "claude", path: mergePath(c.path, process.env.PATH) || "/usr/bin:/bin",
     node: c.node ?? null, server: c.server ?? null, model: c.model ?? null, locale: c.locale ?? null,
     gemini: c.gemini ?? null, agy: c.agy ?? null,
   };

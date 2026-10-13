@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.2
+
+- **Assistant CLIs installed later are found (Linux and Windows):** VisionCLI kept the PATH from its first run, so Antigravity (`agy`) or Claude Code installed afterwards stayed "not installed" even after a restart. Now each launch adds the current PATH, Setup and Settings look again every few seconds, and on Windows the saved PATH (where installers write) is read too, along with Antigravity's own folder (`%LOCALAPPDATA%\agy\bin`).
+
 ## 0.10.1
 
 - **Windows installers published:** the 0.10.0 release build stopped on a PowerShell parsing slip in the Windows packaging script, so its Windows installers were missing (macOS and Linux were fine). 0.10.1 is the same app with the Windows preview installers (`VisionCLI-0.10.1-windows-x64.exe`, `-arm64.exe`). CI now parse-checks that script on every push.
