@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { CONFIG_DIR } from "./config.js";
 
 const run = promisify(execFile);
 
@@ -10,8 +10,22 @@ const run = promisify(execFile);
 // Tab/navigation commands work out of the box; reading the page, clicking and typing use
 // "execute javascript", which needs View → Developer → "Allow JavaScript from Apple Events" in the browser.
 
-export const BROWSERS = ["Brave Browser", "Google Chrome"] as const;
+export const BROWSERS = ["Brave Browser", "Google Chrome", "Chromium"] as const;
 export type BrowserName = (typeof BROWSERS)[number];
+
+/** macOS drives the browser with AppleScript; elsewhere every call goes over DevTools through browserd. */
+export const APPLESCRIPT = process.platform === "darwin";
+const daemon = async <T>(b: BrowserName, rpc: string, ...args: unknown[]): Promise<T> =>
+  (await import("./agent/browserd.js")).call<T>(b, rpc, ...args);
+
+/** Linux WM_CLASS → browser name (native, Flatpak and Snap builds). */
+export function browserFromClass(wmClass: string): BrowserName | undefined {
+  const c = wmClass.toLowerCase();
+  if (c.includes("brave")) return "Brave Browser";
+  if (c.includes("google-chrome") || c === "com.google.chrome") return "Google Chrome";
+  if (c.includes("chromium")) return "Chromium";
+  return undefined;
+}
 
 export interface Tab { id: string; window: number; index: number; title: string; url: string; active: boolean }
 export interface Element { id: string; kind: string; text: string; href?: string; state?: string; expanded?: boolean; value?: string; options?: string[] }
@@ -49,6 +63,11 @@ export function serial<T>(fn: () => Promise<T>): Promise<T> {
 /** Display name of the front-most app ("" if unknown). VISIONCLI_FRONT_APP (set by the app) skips the lookup. */
 export async function frontApp(): Promise<string> {
   if (process.env.VISIONCLI_FRONT_APP !== undefined) return process.env.VISIONCLI_FRONT_APP;
+  if (!APPLESCRIPT) {
+    const { activeWindowClass } = await import("./linux.js");
+    const cls = await activeWindowClass();
+    return browserFromClass(cls) ?? cls;
+  }
   try {
     const { stdout } = await run("/usr/bin/lsappinfo", ["info", "-only", "name", "front"]);
     return /"LSDisplayName"="([^"]+)"/.exec(stdout)?.[1] ?? "";
@@ -58,6 +77,16 @@ export async function frontApp(): Promise<string> {
 }
 
 async function firstRunning(): Promise<BrowserName | undefined> {
+  if (!APPLESCRIPT) {
+    // Process names differ per distro and package; a browser with remote debugging on is the one we can use.
+    const { wsUrl } = await import("./cdp.js");
+    const procs: Record<BrowserName, string> = { "Brave Browser": "brave", "Google Chrome": "chrome", Chromium: "chromium" };
+    for (const b of BROWSERS) {
+      const running = await run("pgrep", ["-f", procs[b]]).then(() => true, () => false);
+      if (running && wsUrl(b)) return b;
+    }
+    return BROWSERS.find((b) => wsUrl(b));
+  }
   try {
     const { stdout } = await run("/usr/bin/pgrep", ["-xl", BROWSERS.join("|")]);
     return BROWSERS.find((b) => stdout.split("\n").some((l) => l.replace(/^\d+\s+/, "") === b));
@@ -72,7 +101,7 @@ export async function pickWithFront(): Promise<{ browser: BrowserName; front: bo
   if ((BROWSERS as readonly string[]).includes(front)) return { browser: front as BrowserName, front: true };
   const running = await firstRunning();
   if (running) return { browser: running, front: false };
-  throw new Error("Neither Brave nor Chrome is running.");
+  throw new Error(APPLESCRIPT ? "Neither Brave nor Chrome is running." : "No Chrome, Brave or Chromium with remote debugging is running.");
 }
 
 /** The browser to act on: the front-most supported browser, else the first one running. */
@@ -86,6 +115,7 @@ export async function frontmostIsBrowser(): Promise<boolean> {
 
 export async function tabs(b?: BrowserName): Promise<Tab[]> {
   const browser = b ?? (await pick());
+  if (!APPLESCRIPT) return daemon<Tab[]>(browser, "tabs");
   // Three Apple events for all windows at once (per-tab property reads are what made this slow).
   const out = await osa(`const a = Application(${JSON.stringify(browser)});
     JSON.stringify([a.windows.activeTabIndex(), a.windows.tabs.title(), a.windows.tabs.url()])`, 8000, true);
@@ -113,6 +143,7 @@ export async function activeTab(b?: BrowserName): Promise<Tab | undefined> {
 
 export async function switchTo(tabId: string, b?: BrowserName) {
   const browser = b ?? (await pick());
+  if (!APPLESCRIPT) return void (await daemon(browser, "switch", tabId));
   const [w, i] = tabId.replace(/^t/, "").split(".").map(Number);
   await osa(`tell application ${q(browser)}
     set active tab index of window ${w} to ${i}
@@ -123,7 +154,7 @@ export async function switchTo(tabId: string, b?: BrowserName) {
 
 // The tab the assistant works in: later opens navigate it instead of piling up new tabs/windows.
 // Kept in a file because quick commands run as separate processes.
-const AGENT_TAB = join(homedir(), "Library", "Application Support", "visioncli", "agent-tab.json");
+const AGENT_TAB = join(CONFIG_DIR, "agent-tab.json");
 /** Same page, ignoring scheme, www., trailing slashes, #fragment and case. */
 export const sameUrl = (a: string, b: string) => {
   const norm = (u: string) => u.replace(/#.*$/, "").replace(/\/+$/, "").replace(/^https?:\/\/(www\.)?/i, "").toLowerCase();
@@ -142,6 +173,7 @@ export async function open(url: string, newTab = true, b?: BrowserName, knownTab
     await switchTo(existing.id, browser);
     return `Switched to the tab already showing ${url}`;
   }
+  if (!APPLESCRIPT) return openOverDevTools(url, newTab, browser);
   if (!newTab) {
     await osa(`tell application ${q(browser)}
       if (count of windows) = 0 then make new window
@@ -183,8 +215,29 @@ export async function open(url: string, newTab = true, b?: BrowserName, knownTab
   return `Opened ${url} in a new tab`;
 }
 
+/** open() without AppleScript: the same rules (current tab, the assistant's own tab, else one new tab). */
+async function openOverDevTools(url: string, newTab: boolean, browser: BrowserName): Promise<string> {
+  if (!newTab) {
+    await daemon(browser, "load", "", url);
+    return `Opened ${url} in the current tab`;
+  }
+  let agent: { browser?: string; id?: string } = {};
+  try { agent = JSON.parse(readFileSync(AGENT_TAB, "utf8")); } catch {}
+  if (agent.browser === browser && agent.id && (await daemon<string[]>(browser, "targets")).includes(agent.id)) {
+    await daemon(browser, "load", agent.id, url);
+    return `Opened ${url} (in the assistant's tab)`;
+  }
+  const id = await daemon<string>(browser, "create", url);
+  try {
+    mkdirSync(dirname(AGENT_TAB), { recursive: true });
+    writeFileSync(AGENT_TAB, JSON.stringify({ browser, id }));
+  } catch {}
+  return `Opened ${url} in a new tab`;
+}
+
 export async function navigate(action: "back" | "forward" | "reload" | "close" | "new", b?: BrowserName) {
   const browser = b ?? (await pick());
+  if (!APPLESCRIPT) return void (await daemon(browser, "navigate", action));
   const cmd = {
     back: "go back active tab of window 1",
     forward: "go forward active tab of window 1",
@@ -204,6 +257,7 @@ export async function js(code: string, b?: BrowserName): Promise<string> {
     return "ok";
   }
   const browser = b ?? (await pick());
+  if (!APPLESCRIPT) return daemon<string>(browser, "js", code);
   return osa(`tell application ${q(browser)} to execute active tab of window 1 javascript ${q(code)}`, 10000);
 }
 
@@ -286,8 +340,8 @@ export async function elements(b?: BrowserName): Promise<Element[]> {
 }
 
 // ---- AI cursor: a faint ghost pointer that glides to the target, ripples, then acts, so you can see
-// what Jev/Claude is doing. Off when ~/Library/Application Support/visioncli/ghost-off exists (menu toggle).
-const GHOST_OFF = join(homedir(), "Library", "Application Support", "visioncli", "ghost-off");
+// what Jev/Claude is doing. Off when CONFIG_DIR/ghost-off exists (menu toggle).
+const GHOST_OFF = join(CONFIG_DIR, "ghost-off");
 const ghostOn = () => !existsSync(GHOST_OFF);
 
 /** Page-side helper (defined once per page): window.__vcliGhost(x, y, then) moves the ghost and calls `then`. */

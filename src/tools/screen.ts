@@ -15,6 +15,7 @@ import {
   snapshot,
 } from "../capture.js";
 import * as computer from "../control.js";
+import { canListWindows } from "../linux.js";
 import { describe, errorResult, imageResult } from "./common.js";
 
 /** Screenshots: look, list_windows, select_region, clipboard_image, device_screenshot. */
@@ -44,7 +45,8 @@ export function register(server: McpServer) {
         const seq = computer.beginLook();
         const isMac = process.platform === "darwin";
         // One snapshot (windows + pointer + displays, from the app when it's running) serves the whole call.
-        const snap = isMac && target === "window" ? await snapshot() : undefined;
+        // Linux: X11 lists windows; on Wayland that's not allowed, so "window" falls back to the whole screen.
+        const snap = target !== "window" ? undefined : isMac || canListWindows() ? await snapshot() : undefined;
         let w: WindowInfo | undefined;
         if (snap) {
           try {

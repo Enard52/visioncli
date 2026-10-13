@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { CONFIG_DIR } from "./config.js";
 
 const run = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -12,7 +13,7 @@ const INSTALLED_APP = "/Applications/VisionCLI.app"; // the build script install
 const appPath = () => (existsSync(join(INSTALLED_APP, "Contents", "MacOS", "VisionCLI")) ? INSTALLED_APP : BUILT_APP);
 const LABEL = "dev.visioncli.overlay";
 const AGENT = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
-const SUPPORT = join(homedir(), "Library", "Application Support", "visioncli");
+const SUPPORT = CONFIG_DIR;
 
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 

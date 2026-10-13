@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { request } from "node:http";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { CONFIG_DIR } from "./config.js";
 
 // Computer control goes through VisionCLI.app, which holds the Accessibility permission. It listens on 127.0.0.1
 // with a per-launch token written to control.json (readable only by the user).
 
-const SUPPORT = join(homedir(), "Library", "Application Support", "visioncli");
+const SUPPORT = CONFIG_DIR;
 
 /** Where the last screenshot sits on screen (top-left global points), to turn image pixels into screen points. */
 export interface ShotMap {

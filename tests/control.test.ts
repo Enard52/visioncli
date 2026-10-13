@@ -15,9 +15,10 @@ import {
   timeoutFor,
   toScreen,
 } from "../src/control.js";
+import { CONFIG_DIR } from "../src/config.js";
 
 // tests/run.mjs points HOME at a temp dir, so this is a scratch copy of the app's support folder.
-const SUPPORT = join(homedir(), "Library", "Application Support", "visioncli");
+const SUPPORT = CONFIG_DIR;
 mkdirSync(SUPPORT, { recursive: true });
 assert.match(homedir(), /vcli-test-home-/, "run through `npm test` (it isolates HOME)");
 

@@ -7,10 +7,20 @@ import { join } from "node:path";
 // the browser then writes DevToolsActivePort into its profile and asks "Allow remote debugging?" for each new
 // connection. That's why one long-lived process (browserd) holds the socket instead of connecting per command.
 
-const PROFILES: Record<string, string> = {
-  "Google Chrome": "Library/Application Support/Google/Chrome",
-  "Brave Browser": "Library/Application Support/BraveSoftware/Brave-Browser",
-};
+// Profile folders that hold DevToolsActivePort, per browser (Linux: native, Flatpak and Snap installs).
+const PROFILES: Record<string, string[]> =
+  process.platform === "darwin"
+    ? {
+        "Google Chrome": ["Library/Application Support/Google/Chrome"],
+        "Brave Browser": ["Library/Application Support/BraveSoftware/Brave-Browser"],
+        Chromium: ["Library/Application Support/Chromium"],
+      }
+    : {
+        "Google Chrome": [".config/google-chrome", ".var/app/com.google.Chrome/config/google-chrome"],
+        "Brave Browser": [".config/BraveSoftware/Brave-Browser", ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
+          "snap/brave/current/.config/BraveSoftware/Brave-Browser"],
+        Chromium: [".config/chromium", ".var/app/org.chromium.Chromium/config/chromium", "snap/chromium/common/chromium"],
+      };
 
 export const SETUP_HELP =
   'Open chrome://inspect/#remote-debugging in Chrome, tick "Allow remote debugging for this browser instance", ' +
@@ -18,14 +28,15 @@ export const SETUP_HELP =
 
 /** The browser-level DevTools WebSocket URL a running browser advertises, if remote debugging is on. */
 export function wsUrl(browser: string): string | undefined {
-  const dir = PROFILES[browser];
-  if (!dir) return undefined;
-  try {
-    const [port, path] = readFileSync(join(homedir(), dir, "DevToolsActivePort"), "utf8").split("\n").map((s) => s.trim());
-    return port && path ? `ws://127.0.0.1:${port}${path}` : undefined;
-  } catch {
-    return undefined;
+  for (const dir of PROFILES[browser] ?? []) {
+    try {
+      const [port, path] = readFileSync(join(homedir(), dir, "DevToolsActivePort"), "utf8").split("\n").map((s) => s.trim());
+      if (port && path) return `ws://127.0.0.1:${port}${path}`;
+    } catch {
+      // not this install
+    }
   }
+  return undefined;
 }
 
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };

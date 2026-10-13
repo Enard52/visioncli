@@ -21,3 +21,25 @@ jobs:
         run: sh scripts/test-overlay.sh
       - name: Compile the overlay app
         run: VISIONCLI_NO_INSTALL=1 sh scripts/build-overlay.sh
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - name: Linux capture smoke test (X11 under Xvfb)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb openbox wmctrl x11-utils xdotool maim imagemagick x11-apps xterm
+          Xvfb :99 -screen 0 1440x900x24 & sleep 1
+          export DISPLAY=:99
+          openbox & sleep 1
+          xterm -geometry 100x30+0+0 & xclock -geometry 400x400+700+100 & sleep 2
+          xdotool mousemove 800 200
+          VISIONCLI_LINUX_SMOKE=1 npm test -- linux

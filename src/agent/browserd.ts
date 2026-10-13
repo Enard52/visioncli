@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import * as browser from "../browser.js";
+import { CdpTabs } from "../browser-cdp.js";
 import { CDP, SETUP_HELP, wsUrl } from "../cdp.js";
 import { CONFIG_DIR } from "../config.js";
 import { apiKey, type Answer } from "../quick.js";
@@ -12,6 +13,7 @@ import { type AgentEvent, type Driver, type Jev, runTask, StalePage } from "./ag
 // "Allow remote debugging?" prompt is answered once, not per voice command. `visioncli browse <goal>` connects over a
 // Unix socket (starting browserd if needed), sends the goal and streams the agent's steps back as JSON lines.
 // Closing the client socket (Esc in the app kills it) stops the task. browserd exits after 30 idle minutes.
+// Without AppleScript (Linux), browser.ts sends every tab/page call here too ({rpc, args} → one reply line).
 
 export const SOCKET = join(CONFIG_DIR, "browserd.sock");
 const IDLE_MS = 30 * 60_000;
@@ -67,7 +69,12 @@ export function cdpDriver(cdp: CDP, sessionId: string): Driver {
 }
 
 /** The tab the user is looking at, as a CDP target: matched by URL (then title) to the browser's active tab. */
-export async function activeTarget(cdp: CDP, b: browser.BrowserName): Promise<string> {
+export async function activeTarget(cdp: CDP, b: browser.BrowserName, tabs?: CdpTabs): Promise<string> {
+  if (tabs) {
+    const t = await tabs.activeTarget();
+    if (!t) throw new Error("No active browser tab.");
+    return t.targetId;
+  }
   const { targetInfos } = await cdp.send<{ targetInfos: { targetId: string; type: string; url: string; title: string }[] }>("Target.getTargets");
   const pages = targetInfos.filter((t) => t.type === "page" && !t.url.startsWith("devtools://"));
   const active = await browser.activeTab(b).catch(() => undefined);
@@ -92,6 +99,7 @@ export async function serve() {
   }
 
   let cdp: CDP | undefined;
+  let cdpTabs: CdpTabs | undefined;
   let cdpBrowser = "";
   let running: AbortController | undefined;
   let idle: NodeJS.Timeout | undefined;
@@ -105,8 +113,39 @@ export async function serve() {
     if (!url) throw new Error(`Remote debugging is off in ${b}. ${SETUP_HELP}`);
     emit({ type: "status", message: `Connecting to ${b}… click Allow if it asks about remote debugging.` });
     cdp = await CDP.connect(url, 60_000);
+    cdpTabs = new CdpTabs(cdp);
     cdpBrowser = b;
     return cdp;
+  }
+
+  /** Loads `url` in tab `id`, or the active tab (a new one if there's none). */
+  async function load(t: CdpTabs, id: string, url: string) {
+    const target = id ? await t.resolve(id) : (await t.activeTarget())?.targetId;
+    if (target) await t.load(target, url);
+    else await t.create(url);
+  }
+
+  /** One browser.ts call (tabs, switch, open, load, navigate, js) on the held connection. */
+  async function rpc(sock: Socket, req: { rpc: string; browser: browser.BrowserName; args?: unknown[] }) {
+    try {
+      await connect(req.browser, () => {});
+      const t = cdpTabs!;
+      const a = (req.args ?? []) as any[];
+      const result =
+        req.rpc === "tabs" ? (await t.tabs()).map(({ targetId: _, ...tab }) => tab) :
+        req.rpc === "switch" ? await t.switchTo(a[0]) :
+        req.rpc === "create" ? await t.create(a[0]) :
+        req.rpc === "load" ? await load(t, a[0], a[1]) :
+        req.rpc === "targets" ? (await t.pages()).map((p) => p.targetId) :
+        req.rpc === "navigate" ? await t.navigate(a[0]) :
+        req.rpc === "js" ? await t.js(a[0]) :
+        (() => { throw new Error(`Unknown browser call ${req.rpc}`); })();
+      sock.end(JSON.stringify({ ok: true, result: result ?? null }) + "\n");
+    } catch (err) {
+      sock.end(JSON.stringify({ ok: false, error: (err as Error).message }) + "\n");
+    } finally {
+      touch();
+    }
   }
 
   async function handle(sock: Socket, goal: string) {
@@ -122,7 +161,7 @@ export async function serve() {
       if (!key) throw new Error("No TypeSafe API key.");
       const { browser: b } = await browser.pickWithFront();
       c = await connect(b, emit);
-      const targetId = await activeTarget(c, b);
+      const targetId = await activeTarget(c, b, browser.APPLESCRIPT ? undefined : cdpTabs);
       ({ sessionId } = await c.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true }));
       await runTask(goal, cdpDriver(c, sessionId!), jevClient(key), emit, ctl.signal);
     } catch (err) {
@@ -145,7 +184,9 @@ export async function serve() {
       const line = buf.slice(0, nl);
       buf = "";
       let goal = "";
-      try { goal = String(JSON.parse(line).goal ?? "").trim(); } catch {}
+      let req: any;
+      try { req = JSON.parse(line); goal = String(req.goal ?? "").trim(); } catch {}
+      if (req?.rpc) { void rpc(sock, req); return; }
       if (!goal) { sock.end(JSON.stringify({ type: "end", status: "error", message: "No goal.", steps: 0, ms: 0, decisions: 0 }) + "\n"); return; }
       void handle(sock, goal);
     });
@@ -165,21 +206,45 @@ function dial(): Promise<Socket> {
   });
 }
 
-/** Run a browser task through browserd (started on demand), calling `onEvent` for each step; resolves at the end. */
-export async function browse(goal: string, onEvent: (e: BrowseEvent) => void): Promise<BrowseEvent | undefined> {
-  let sock: Socket | undefined;
+/** The connection to browserd, starting it if it isn't running. */
+async function connectDaemon(): Promise<Socket> {
   try {
-    sock = await dial();
+    return await dial();
   } catch {
     const child = spawn(process.execPath, [process.argv[1], "browserd"], { detached: true, stdio: "ignore" });
     child.unref();
-    for (let i = 0; i < 50 && !sock; i++) {
+    for (let i = 0; i < 50; i++) {
       await new Promise((r) => setTimeout(r, 100));
-      sock = await dial().catch(() => undefined);
+      const s = await dial().catch(() => undefined);
+      if (s) return s;
     }
-    if (!sock) throw new Error("Couldn't start the browser agent.");
+    throw new Error("Couldn't start the browser agent.");
   }
-  const s = sock;
+}
+
+/** One browser call through browserd (the non-AppleScript backend of browser.ts). */
+export async function call<T>(browserName: string, rpc: string, ...args: unknown[]): Promise<T> {
+  const s = await connectDaemon();
+  return new Promise((resolve, reject) => {
+    let buf = "";
+    s.on("data", (d) => { buf += d; });
+    s.on("close", () => {
+      try {
+        const r = JSON.parse(buf.split("\n")[0]);
+        if (r.ok) resolve(r.result as T);
+        else reject(new Error(r.error));
+      } catch {
+        reject(new Error("The browser connection closed unexpectedly."));
+      }
+    });
+    s.on("error", (e) => reject(e));
+    s.write(JSON.stringify({ rpc, browser: browserName, args }) + "\n");
+  });
+}
+
+/** Run a browser task through browserd (started on demand), calling `onEvent` for each step; resolves at the end. */
+export async function browse(goal: string, onEvent: (e: BrowseEvent) => void): Promise<BrowseEvent | undefined> {
+  const s = await connectDaemon();
   return new Promise((resolve) => {
     let last: BrowseEvent | undefined;
     let buf = "";

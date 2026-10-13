@@ -1,5 +1,5 @@
 // `npm test`: bundles tests/**/*.test.ts with esbuild (same settings as scripts/bundle.mjs) and runs them with Node's
-// built-in runner. Tests run with HOME in a temp dir, so nothing reads or writes the real ~/Library/Application Support.
+// built-in runner. Tests run with HOME in a temp dir, so nothing reads or writes the real config dir.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,6 +38,7 @@ await esbuild.build({
 
 const home = mkdtempSync(join(tmpdir(), "vcli-test-home-"));
 mkdirSync(join(home, "Library", "Application Support", "visioncli"), { recursive: true });
+mkdirSync(join(home, ".config", "visioncli"), { recursive: true }); // CONFIG_DIR on Linux
 const env = { ...process.env, HOME: home, VISIONCLI_REPO: root };
 for (const k of ["TYPESAFE_API_KEY", "DATABASE_URL", "VISIONCLI_DATABASE_URL", "VISIONCLI_QUICK_DRY", "VISIONCLI_FRONT_APP"]) delete env[k];
 

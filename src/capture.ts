@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { type AppWindow, type ControlRequests, displayBounds, displaysAndPointer, send } from "./control.js";
+import * as linux from "./linux.js";
 
 const run = promisify(execFile);
 
@@ -27,6 +28,9 @@ const TERMINAL_APPS = new Set(
   [
     "Terminal", "iTerm2", "Warp", "Ghostty", "kitty", "Alacritty", "WezTerm",
     "Hyper", "Tabby", "Rio", "Wave",
+    // Linux (WM_CLASS class names)
+    "Gnome-terminal", "Gnome-terminal-server", "org.gnome.Console", "kgx", "Konsole", "XTerm", "URxvt", "Tilix",
+    "Terminator", "foot", "Xfce4-terminal", "Mate-terminal", "Lxterminal", "Ptyxis",
     ...(process.env.VISIONCLI_IGNORE_APPS ?? "").split(","),
   ]
     .map((s) => s.trim().toLowerCase())
@@ -42,9 +46,10 @@ export const PERMISSION_HELP =
   "enable it, then fully quit and reopen that app.";
 
 const isMac = process.platform === "darwin";
+const isLinux = process.platform === "linux";
 
 function requireMac(feature: string) {
-  if (!isMac) throw new Error(`${feature} is only supported on macOS right now.`);
+  if (!isMac && !isLinux) throw new Error(`${feature} is only supported on macOS and Linux right now.`);
 }
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -98,7 +103,13 @@ export function fitSize(w: number, h: number, max = MAX_DIM): { width: number; h
 // Downscale to MAX_DIM and re-encode as JPEG to keep the payload small (one sips run).
 async function encode(dir: string, src: string): Promise<Capture> {
   if (!isMac) {
-    return { data: (await readFile(src)).toString("base64"), mimeType: "image/png" };
+    const size = await pngSize(src).catch(() => null);
+    const fit = size ? fitSize(size.w, size.h) : undefined;
+    const jpg = join(dir, "out.jpg");
+    if (isLinux && (await linux.toJpeg(src, jpg, MAX_DIM))) {
+      return { data: (await readFile(jpg)).toString("base64"), mimeType: "image/jpeg", width: fit?.width, height: fit?.height };
+    }
+    return { data: (await readFile(src)).toString("base64"), mimeType: "image/png", width: size?.w, height: size?.h };
   }
   const out = join(dir, "out.jpg");
   let size = await pngSize(src).catch(() => null);
@@ -149,6 +160,10 @@ async function listWindowsJXA(): Promise<WindowInfo[]> {
 
 export async function snapshot(): Promise<Snapshot> {
   requireMac("Listing windows");
+  if (isLinux) {
+    const [windows, pointer] = await Promise.all([linux.listWindows(), linux.pointer()]);
+    return { windows: windows.filter((w) => w.bounds.width >= 200 && w.bounds.height >= 150), pointer: pointer ?? undefined };
+  }
   const fast = await displaysAndPointer({ windows: true });
   const windows = Array.isArray(fast?.windows) ? fast.windows.map(fromApp) : await listWindowsJXA();
   // Drop tiny utility windows (menu-bar helpers, tooltips, etc).
@@ -176,6 +191,12 @@ function run() {
 export async function pointerLocation(snap?: Snapshot): Promise<{ x: number; y: number }> {
   requireMac("Pointer location");
   if (snap?.pointer) return snap.pointer;
+  if (isLinux) {
+    const p = await linux.pointer();
+    if (!p) throw new Error("The pointer position needs an X11 session with xdotool installed.");
+    if (snap) snap.pointer = p;
+    return p;
+  }
   const fast = (await displaysAndPointer())?.pointer; // the running app knows it instantly
   const p = fast ?? JSON.parse((await run("osascript", ["-l", "JavaScript", "-e", POINTER_JXA])).stdout);
   if (snap) snap.pointer = p;
@@ -243,6 +264,13 @@ async function captureViaApp(req: ControlRequests["capture"]): Promise<Capture |
 
 export async function captureWindow(w: WindowInfo): Promise<Capture> {
   requireMac("Window capture");
+  if (isLinux) {
+    return withTempDir(async (dir) => {
+      const src = join(dir, "win.png");
+      await linux.captureWindow(w, src);
+      return encode(dir, src);
+    });
+  }
   const fast = await captureViaApp({ window_id: w.id });
   if (fast) return fast;
   return withTempDir(async (dir) => {
@@ -267,7 +295,7 @@ export async function captureScreen(display?: number, bounds?: WindowInfo["bound
     } else if (process.platform === "win32") {
       await captureScreenWindows(src);
     } else {
-      await captureScreenLinux(src);
+      await linux.captureScreen(src);
     }
     return encode(dir, src);
   });
@@ -278,6 +306,7 @@ export async function captureRegion(): Promise<Capture | null> {
   requireMac("Region selection");
   return withTempDir(async (dir) => {
     const src = join(dir, "region.png");
+    if (isLinux) return (await linux.captureRegion(src)) ? encode(dir, src) : null;
     await screencapture(["-i", "-x", "-o", "-t", "png"], src);
     if (!(await exists(src))) return null;
     return encode(dir, src);
@@ -289,6 +318,7 @@ export async function captureClipboard(): Promise<Capture | null> {
   requireMac("Clipboard images");
   return withTempDir(async (dir) => {
     const src = join(dir, "clip.png");
+    if (isLinux) return (await linux.captureClipboard(src)) ? encode(dir, src) : null;
     const script = [
       `set f to open for access POSIX file "${src}" with write permission`,
       "try",
@@ -300,25 +330,6 @@ export async function captureClipboard(): Promise<Capture | null> {
     if (!(await exists(src))) return null;
     return encode(dir, src);
   });
-}
-
-async function captureScreenLinux(out: string) {
-  const attempts: [string, string[]][] = [
-    ["grim", [out]],
-    ["gnome-screenshot", ["-f", out]],
-    ["spectacle", ["-b", "-n", "-o", out]],
-    ["import", ["-window", "root", out]],
-    ["scrot", ["-o", out]],
-  ];
-  for (const [cmd, args] of attempts) {
-    try {
-      await run(cmd, args);
-      if (await exists(out)) return;
-    } catch {
-      // try the next tool
-    }
-  }
-  throw new Error("No screenshot tool found. Install one of: grim, gnome-screenshot, spectacle, imagemagick, scrot.");
 }
 
 async function captureScreenWindows(out: string) {
