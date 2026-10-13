@@ -29,6 +29,10 @@ export interface MenuModel {
     updated: string | null;            // ISO; when the limits were last read
     inMenuBar: boolean;                // Settings.usageInMenuBar
     weeklyInMenuBar: boolean;
+    /** Whose plan this is: "Claude" (Claude Code) or "Gemini" (Antigravity). */
+    name?: string;
+    /** Gemini: every model group's limits (Gemini models, Claude/GPT models), the active one first. */
+    groups?: { name: string; session: UsageWindow | null; week: UsageWindow | null }[];
   };
   updateStatus: string | null;         // "Downloading update…" while installing
   updateAvailable: string | null;      // version

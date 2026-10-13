@@ -76,7 +76,7 @@ fi
 # clipboard everywhere), base (terminal, accessibility, notifications, speech), pw / pa (audio), fuse (AppImage).
 pkgs() {
   case "$PM:$1" in
-    apt-get:x11) echo "xdotool wmctrl x11-utils maim imagemagick xclip" ;;
+    apt-get:x11) echo "xdotool xinput wmctrl x11-utils maim imagemagick xclip" ;;
     apt-get:wayland) echo "grim slurp" ;;
     apt-get:clip) echo "wl-clipboard" ;;
     apt-get:base) echo "tmux at-spi2-core libnotify-bin python3-gi gir1.2-atspi-2.0 espeak-ng xdg-utils" ;;
@@ -84,7 +84,7 @@ pkgs() {
     apt-get:pa) echo "pulseaudio-utils" ;;
     apt-get:fuse) if apt-cache show libfuse2t64 >/dev/null 2>&1; then echo libfuse2t64; else echo libfuse2; fi ;;
 
-    dnf*:x11) echo "xdotool wmctrl xprop xwininfo maim ImageMagick xclip" ;;
+    dnf*:x11) echo "xdotool xinput wmctrl xprop xwininfo maim ImageMagick xclip" ;;
     dnf*:wayland) echo "grim slurp" ;;
     dnf*:clip) echo "wl-clipboard" ;;
     dnf*:base) echo "tmux at-spi2-core libnotify python3-gobject espeak-ng xdg-utils" ;;
@@ -92,7 +92,7 @@ pkgs() {
     dnf*:pa) echo "pulseaudio-utils" ;;
     dnf*:fuse) echo "fuse-libs" ;;
 
-    pacman:x11) echo "xdotool wmctrl xorg-xprop xorg-xwininfo maim imagemagick xclip" ;;
+    pacman:x11) echo "xdotool xorg-xinput wmctrl xorg-xprop xorg-xwininfo maim imagemagick xclip" ;;
     pacman:wayland) echo "grim slurp" ;;
     pacman:clip) echo "wl-clipboard" ;;
     pacman:base) echo "tmux at-spi2-core libnotify python-gobject espeak-ng xdg-utils" ;;
@@ -100,7 +100,7 @@ pkgs() {
     pacman:pa) echo "libpulse" ;;
     pacman:fuse) echo "fuse2" ;;
 
-    zypper:x11) echo "xdotool wmctrl xprop xwininfo maim ImageMagick xclip" ;;
+    zypper:x11) echo "xdotool xinput wmctrl xprop xwininfo maim ImageMagick xclip" ;;
     zypper:wayland) echo "grim slurp" ;;
     zypper:clip) echo "wl-clipboard" ;;
     zypper:base) echo "tmux at-spi2-core libnotify-tools python3-gobject typelib-1_0-Atspi-2_0 espeak-ng xdg-utils" ;;
@@ -108,7 +108,7 @@ pkgs() {
     zypper:pa) echo "pulseaudio-utils" ;;
     zypper:fuse) echo "libfuse2" ;;
 
-    apk:x11) echo "xdotool wmctrl xprop xwininfo maim imagemagick xclip" ;;
+    apk:x11) echo "xdotool xinput wmctrl xprop xwininfo maim imagemagick xclip" ;;
     apk:wayland) echo "grim slurp" ;;
     apk:clip) echo "wl-clipboard" ;;
     apk:base) echo "tmux at-spi2-core libnotify py3-gobject3 espeak-ng xdg-utils" ;;
@@ -116,7 +116,7 @@ pkgs() {
     apk:pa) echo "pulseaudio-utils" ;;
     apk:fuse) echo "fuse" ;;
 
-    xbps-install:x11) echo "xdotool wmctrl xprop xwininfo maim ImageMagick xclip" ;;
+    xbps-install:x11) echo "xdotool xinput wmctrl xprop xwininfo maim ImageMagick xclip" ;;
     xbps-install:wayland) echo "grim slurp" ;;
     xbps-install:clip) echo "wl-clipboard" ;;
     xbps-install:base) echo "tmux at-spi2-core libnotify python3-gobject espeak-ng xdg-utils" ;;
@@ -124,7 +124,7 @@ pkgs() {
     xbps-install:pa) echo "pulseaudio-utils" ;;
     xbps-install:fuse) echo "fuse" ;;
 
-    eopkg:x11) echo "xdotool wmctrl xprop xwininfo maim imagemagick xclip" ;;
+    eopkg:x11) echo "xdotool xinput wmctrl xprop xwininfo maim imagemagick xclip" ;;
     eopkg:wayland) echo "grim slurp" ;;
     eopkg:clip) echo "wl-clipboard" ;;
     eopkg:base) echo "tmux at-spi2-core libnotify python-gobject espeak-ng xdg-utils" ;;

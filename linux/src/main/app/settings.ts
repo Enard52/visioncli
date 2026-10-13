@@ -86,7 +86,8 @@ App.prototype.settingsSnapshot = function (this: App): SettingsSnapshot {
     kokoroInstalled: kokoroAvailable && KokoroEngine.available(),
     installStatus: this.installer.status ?? this.setupBusy.transcription ?? null,
     speechEngine: engine,
-    hasParakeet: !!sherpaServer(),
+    // Offered on every 64-bit machine: choosing it downloads sherpa-onnx and the model (like macOS, where it ships).
+    hasParakeet: !!sherpaServer() || process.arch === "x64" || process.arch === "arm64",
     parakeetReady: engine === "parakeet",
     parakeetDownloaded: !!parakeetFiles(),
     parakeetProgress: this.parakeetProgress,

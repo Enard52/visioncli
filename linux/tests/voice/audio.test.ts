@@ -70,10 +70,12 @@ Source #1
   });
 
   it("parses arecord -L", () => {
-    const text = "null\n    Discard all samples\ndefault\n    Default ALSA Output\nhw:CARD=PCH,DEV=0\n    HDA Intel PCH, ALC3246 Analog\n    Direct hardware device\n";
+    const text = "null\n    Discard all samples\ndefault\n    Default ALSA Output\nlavrate\n    Rate Converter Plugin Using Libav/FFmpeg Library\n"
+      + "jack\n    JACK Audio Connection Kit\nhw:CARD=PCH,DEV=0\n    HDA Intel PCH, ALC3246 Analog\n    Direct hardware device\n"
+      + "plughw:CARD=PCH,DEV=0\n    HDA Intel PCH, ALC3246 Analog\n    Hardware device with all software conversions\n";
     assert.deepEqual(parseAlsaList(text), [
       { id: "default", name: "Default", isDefault: true },
-      { id: "hw:CARD=PCH,DEV=0", name: "HDA Intel PCH, ALC3246 Analog", isDefault: false },
+      { id: "plughw:CARD=PCH,DEV=0", name: "HDA Intel PCH, ALC3246 Analog", isDefault: false },
     ]);
   });
 

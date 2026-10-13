@@ -80,7 +80,7 @@ test("menu has the macOS items in order", () => {
   const items = buildMenu(model());
   assert.deepEqual(labels(items), [
     "Project: app", "Claude Usage: 22% session · 52% week", "History…", "New Conversation", "Copy Last Answer",
-    "Show Claude Terminal", "Settings…", "Quit visioncli",
+    "Show Claude Terminal", "Settings…", "Quit VisionCLI",
   ]);
   const bubble = buildMenu(model({ terminalMode: false, updateAvailable: "0.9.0", screenProblem: "Set Up Screen Capture…", pinnedProject: "/home/u/code/app" }));
   const l = labels(bubble);
@@ -91,6 +91,19 @@ test("menu has the macOS items in order", () => {
   const cont = bubble.find((i) => i.label === "Continue Conversation in Terminal")!;
   assert.equal(cont.enabled, false);
   assert.equal(labels(buildMenu(model({ updateStatus: "Downloading update…" }))).includes("Downloading update…"), true);
+});
+
+test("Gemini: Antigravity's limits under Gemini Usage, other model groups in the card", () => {
+  const m = model({ assistantName: "Gemini" });
+  const g = (p: number) => ({ percent: p, resetsAt: new Date(Date.now() + 3600e3).toISOString() });
+  m.usage = { ...m.usage, name: "Gemini", session: g(1), week: g(3),
+    groups: [{ name: "Gemini Models", session: g(1), week: g(3) }, { name: "Claude and GPT models", session: g(0), week: g(73) }] };
+  const usage = buildMenu(m).find((i) => i.label?.includes("Usage"))!;
+  assert.equal(usage.label, "Gemini Usage: 1% session · 3% week");
+  const rows = labels(usage.submenu!);
+  assert.ok(rows.includes("Claude and GPT models"));
+  assert.ok(!rows.some((l) => l?.startsWith("Today")));
+  assert.match(tooltip(m), /Gemini usage: 1% of this 5-hour session/);
 });
 
 test("project submenu: Auto, Home, candidates once each, Choose Folder", () => {

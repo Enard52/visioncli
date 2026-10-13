@@ -38,17 +38,34 @@ function listen(channel: string, id: number, cb: (data: any) => void) {
 }
 
 export class OverlayWindow {
-  readonly win: BrowserWindow;
+  private w: BrowserWindow | null = null;
   private loaded = false;
   /** The last message per channel, replayed whenever the page (re)loads. */
   private last = new Map<string, unknown>();
-  private readonly wcId: number;
+  private wcId = -1;
   private clickThrough: boolean;
   private lastBounds = "";
+  private rect: Rect;
+  private listeners: [string, (data: any) => void][] = [];
+  private idleTimer: NodeJS.Timeout | null = null;
+  private closed = false;
 
-  constructor(readonly opts: OverlayWindowOptions) {
-    const b = opts.bounds ?? { x: 0, y: 0, width: 10, height: 10 };
-    this.win = new BrowserWindow({
+  /** `lazy`: the window (and its renderer process, ~90 MB) exists only while needed: created on first show,
+   *  destroyed after `idleMs` hidden. For overlays that are rarely on screen (badge, task panel, suggestions). */
+  constructor(readonly opts: OverlayWindowOptions & { lazy?: { idleMs: number } }) {
+    this.rect = opts.bounds ?? { x: 0, y: 0, width: 10, height: 10 };
+    this.clickThrough = opts.clickThrough ?? true;
+    if (!opts.lazy) this.create();
+  }
+
+  /** The BrowserWindow, created if it isn't there (lazy windows). */
+  get win(): BrowserWindow { return this.create(); }
+
+  private create(): BrowserWindow {
+    if (this.w && !this.w.isDestroyed()) return this.w;
+    const opts = this.opts;
+    const b = this.rect;
+    const win = new BrowserWindow({
       ...b, show: false, frame: false, transparent: true, backgroundColor: "#00000000", hasShadow: false,
       resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
       skipTaskbar: true, focusable: !!opts.focusable, alwaysOnTop: true, enableLargerThanScreen: true,
@@ -58,70 +75,96 @@ export class OverlayWindow {
         backgroundThrottling: false, spellcheck: false,
       },
     });
-    this.wcId = this.win.webContents.id;
-    this.win.setAlwaysOnTop(true, "screen-saver");
-    this.win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
-    this.clickThrough = opts.clickThrough ?? true;
-    this.win.setIgnoreMouseEvents(this.clickThrough, { forward: true });
+    this.w = win;
+    this.loaded = false;
+    this.lastBounds = `${b.x},${b.y},${b.width},${b.height}`;
+    this.wcId = win.webContents.id;
+    for (const [c, cb] of this.listeners) listen(c, this.wcId, cb);
+    win.setAlwaysOnTop(true, "screen-saver");
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+    win.setIgnoreMouseEvents(this.clickThrough, { forward: true });
     // An answer's links never navigate the overlay itself; the page reports them as actions.
-    this.win.webContents.on("will-navigate", (e) => e.preventDefault());
-    this.win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    this.win.webContents.on("did-finish-load", () => {
+    win.webContents.on("will-navigate", (e) => e.preventDefault());
+    win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    win.webContents.on("did-finish-load", () => {
       this.loaded = true;
-      for (const [c, d] of this.last) this.win.webContents.send(c, d);
+      for (const [c, d] of this.last) win.webContents.send(c, d);
     });
     // A crashed page comes back with its last state rather than leaving a dead window on screen.
-    this.win.webContents.on("render-process-gone", (_e, details) => {
+    win.webContents.on("render-process-gone", (_e, details) => {
       log(`overlay: ${opts.page} renderer gone (${details.reason}, exit ${details.exitCode}); reloading`);
       this.loaded = false;
-      if (details.reason !== "clean-exit" && this.alive) setTimeout(() => { if (this.alive) this.win.webContents.reload(); }, 300);
+      if (details.reason !== "clean-exit" && !win.isDestroyed()) setTimeout(() => { if (!win.isDestroyed()) win.webContents.reload(); }, 300);
     });
-    const file = join(__dirname, "renderer", opts.page, "index.html");
-    void this.win.loadFile(file, { query: opts.query });
+    void win.loadFile(join(__dirname, "renderer", opts.page, "index.html"), { query: opts.query });
+    return win;
   }
 
-  get alive() { return !this.win.isDestroyed(); }
-  get visible() { return this.alive && this.win.isVisible(); }
-  get bounds(): Rect { return this.win.getBounds(); }
+  private get created() { return !!this.w && !this.w.isDestroyed(); }
+  get alive() { return !this.closed && (this.created || !!this.opts.lazy); }
+  get visible() { return this.created && this.w!.isVisible(); }
+  get bounds(): Rect { return this.created ? this.w!.getBounds() : this.rect; }
 
   send(channel: string, data?: unknown) {
     if (!this.alive) return;
     this.last.delete(channel); // keep replay order = send order
     this.last.set(channel, data);
-    if (this.loaded) this.win.webContents.send(channel, data);
+    if (this.created && this.loaded) this.w!.webContents.send(channel, data);
   }
 
-  on(channel: string, cb: (data: any) => void) { listen(channel, this.wcId, cb); }
+  on(channel: string, cb: (data: any) => void) {
+    this.listeners.push([channel, cb]);
+    if (this.created) listen(channel, this.wcId, cb);
+  }
 
   setBounds(r: Rect) {
-    const key = `${r.x},${r.y},${r.width},${r.height}`;
-    if (!this.alive || key === this.lastBounds) return;
+    this.rect = { x: Math.round(r.x), y: Math.round(r.y), width: Math.max(1, Math.round(r.width)), height: Math.max(1, Math.round(r.height)) };
+    const key = `${this.rect.x},${this.rect.y},${this.rect.width},${this.rect.height}`;
+    if (!this.created || key === this.lastBounds) return;
     this.lastBounds = key;
-    this.win.setBounds({ x: Math.round(r.x), y: Math.round(r.y), width: Math.max(1, Math.round(r.width)), height: Math.max(1, Math.round(r.height)) });
+    this.w!.setBounds(this.rect);
   }
 
   setClickThrough(on: boolean) {
-    if (!this.alive || on === this.clickThrough) return;
+    if (on === this.clickThrough) return;
     this.clickThrough = on;
-    this.win.setIgnoreMouseEvents(on, { forward: true });
+    if (this.created) this.w!.setIgnoreMouseEvents(on, { forward: true });
   }
 
   show() {
     if (!this.alive) return;
-    if (!this.win.isVisible()) {
-      if (this.opts.focusable) this.win.show(); else this.win.showInactive();
+    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
+    const win = this.create();
+    if (!win.isVisible()) {
+      if (this.opts.focusable) win.show(); else win.showInactive();
       // Some window managers drop the above-state of unmapped windows; assert it again on every map.
-      this.win.setAlwaysOnTop(true, "screen-saver");
-      this.win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+      win.setAlwaysOnTop(true, "screen-saver");
+      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
     }
   }
 
-  raise() { if (this.visible) this.win.moveTop(); }
+  raise() { if (this.visible) this.w!.moveTop(); }
 
-  hide() { if (this.alive && this.win.isVisible()) this.win.hide(); }
+  hide() {
+    if (this.visible) this.w!.hide();
+    const lazy = this.opts.lazy;
+    if (lazy && this.created && !this.idleTimer) {
+      this.idleTimer = setTimeout(() => {
+        this.idleTimer = null;
+        if (this.visible || !this.created) return;
+        for (const m of handlers.values()) m.delete(this.wcId);
+        this.w!.destroy();
+        this.w = null;
+        this.loaded = false;
+      }, lazy.idleMs);
+      this.idleTimer.unref?.();
+    }
+  }
 
   destroy() {
+    this.closed = true;
+    if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
     for (const m of handlers.values()) m.delete(this.wcId);
-    if (this.alive) this.win.destroy();
+    if (this.created) this.w!.destroy();
   }
 }

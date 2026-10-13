@@ -1,3 +1,4 @@
+import { meaningful, cleanTranscript } from "./text";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import type { HotkeyEvent } from "../contracts";
@@ -86,6 +87,7 @@ Object.defineProperty(App.prototype, "routingOn", {
 
 App.prototype.startListening = function (this: App, point: boolean, screen = false) {
   this.speaker.stop();
+  this.wakeVoice();
   this.ui.hideMarks();
   const s = this.state;
   s.pinned = false;
@@ -245,7 +247,8 @@ App.prototype.finishListening = async function (this: App) {
       if (this.pressedAt !== press || (this.state.phase as string) !== "thinking") return;
       if (this.engine) {
         this.state.status = "Transcribing…";
-        text = (await this.engine.transcribe(rec.file, this.vocabularyWords(), false)).trim();
+        // Under half a second is a slip of the finger, not a question (macOS treats it as a tap).
+        if (rec.seconds >= 0.5) text = cleanTranscript(await this.engine.transcribe(rec.file, this.vocabularyWords(), false));
       }
       log(`transcript (${rec.seconds.toFixed(1)}s, ${this.engine?.name ?? "no engine"}): live="${this.heard}" final="${text}"`);
     } catch (e) {
@@ -255,6 +258,7 @@ App.prototype.finishListening = async function (this: App) {
     }
   }
   if (this.pressedAt !== press || (this.state.phase as string) !== "thinking") return;
-  // The live caption is the fallback when the final pass has nothing (like Apple's text on macOS).
-  void this.questionReady(text || this.heard);
+  // The live caption is the fallback when the final pass has nothing usable (like Apple's text on macOS); Whisper
+  // sometimes returns "-" for a clip whose captions were fine.
+  void this.questionReady(meaningful(text) ? text : meaningful(this.heard) ? this.heard : "");
 };

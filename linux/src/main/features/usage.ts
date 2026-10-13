@@ -190,3 +190,60 @@ function parseLines(text: string, scan: FileScan, start: number) {
     scan.counts.set(id, [n("input_tokens") + n("cache_creation_input_tokens"), n("output_tokens"), n("cache_read_input_tokens")]);
   }
 }
+
+// ── Gemini (Antigravity) usage ──────────────────────────────────────────────────────────────────────────────────
+// `agy -p /usage --output-format json` reports each model group's 5-hour and weekly limits (remaining fraction and
+// reset time) without running a model, so it costs nothing. Gemini models and Claude/GPT models have separate groups.
+
+export interface AgyGroup { name: string; session: UsageWindow | null; week: UsageWindow | null }
+
+export class AgyUsage {
+  groups: AgyGroup[];
+  updated: number | null;
+  onChange: () => void = () => {};
+  private refreshing = false;
+
+  constructor(private store: Store = settings) {
+    this.groups = store.getStore<AgyGroup[]>("agyUsage.groups") ?? [];
+    this.updated = store.getStore<number>("agyUsage.updated") ?? null;
+  }
+
+  /** The `command.data.groups` of agy's JSON reply; utilization = the used fraction, like Claude's. */
+  static parse(json: string): AgyGroup[] {
+    type Bucket = { window?: string; remaining_fraction?: number; reset_time?: string };
+    const groups = (JSON.parse(json)?.command?.data?.groups ?? []) as { name?: string; buckets?: Bucket[] }[];
+    const win = (bs: Bucket[] | undefined, w: string): UsageWindow | null => {
+      const b = bs?.find((x) => x.window === w);
+      const at = b?.reset_time ? Date.parse(b.reset_time) : NaN;
+      return b && typeof b.remaining_fraction === "number" && !Number.isNaN(at) ? { utilization: Math.max(0, 1 - b.remaining_fraction), resetsAt: at } : null;
+    };
+    return groups.filter((g) => g.name).map((g) => ({ name: g.name!, session: win(g.buckets, "5h"), week: win(g.buckets, "weekly") }));
+  }
+
+  /** The group the chosen agy model draws from (Claude/GPT models have their own limits; everything else is Gemini). */
+  active(model: string | null): AgyGroup | null {
+    const thirdParty = !!model && /claude|gpt|opus|sonnet/i.test(model);
+    return this.groups.find((g) => (thirdParty ? /claude|gpt/i : /gemini/i).test(g.name)) ?? this.groups[0] ?? null;
+  }
+
+  isStale(now = Date.now(), maxAge = 10 * 60_000) { return now - (this.updated ?? 0) > maxAge; }
+
+  async refresh(agy: string, env?: NodeJS.ProcessEnv) {
+    if (this.refreshing) return;
+    this.refreshing = true;
+    try {
+      const { out } = await run(agy, ["-p", "/usage", "--output-format", "json", "--print-timeout", "60s"], { cwd: tmpdir(), env, timeout: 90_000 });
+      const groups = AgyUsage.parse(out.slice(out.indexOf("{")));
+      if (!groups.length) return;
+      this.groups = groups;
+      this.updated = Date.now();
+      this.store.setStore("agyUsage.groups", groups);
+      this.store.setStore("agyUsage.updated", this.updated);
+      this.onChange();
+    } catch {
+      // agy missing, signed out or offline: keep the last numbers
+    } finally {
+      this.refreshing = false;
+    }
+  }
+}

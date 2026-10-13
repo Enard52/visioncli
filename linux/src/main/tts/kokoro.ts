@@ -21,7 +21,8 @@ export function kokoroScript(): string | null {
     join(__dirname, "../../overlay/Resources/kokoro_server.py"),
     join(__dirname, "../../../overlay/Resources/kokoro_server.py"),
   ];
-  return candidates.find((p): p is string => !!p && existsSync(p)) ?? null;
+  // Electron's fs sees into app.asar, but python can't read from it: only real files count.
+  return candidates.find((p): p is string => !!p && !p.includes(".asar") && existsSync(p)) ?? null;
 }
 
 export class KokoroEngine {
@@ -42,17 +43,19 @@ export class KokoroEngine {
     mkdirSync(outDir, { recursive: true });
     const env = { ...process.env, PATH: [process.env.PATH, join(homedir(), ".local/bin"), join(homedir(), ".cargo/bin")].filter(Boolean).join(delimiter) };
     const p = VoiceModels.spawnHelper(uv, ["run", "--quiet", "--with", "kokoro-onnx", "--with", "soundfile", "python", script, model, voices, outDir],
-      { stdio: ["pipe", "pipe", "ignore"], env });
+      { stdio: ["pipe", "pipe", "pipe"], env });
     this.proc = p;
     const lines = new LineSplitter();
     p.stdout!.on("data", (d: Buffer) => lines.feed(d, (line) => {
       try { this.handle(JSON.parse(line.toString("utf8"))); } catch {}
     }));
     p.stdin!.on("error", () => {});
+    let stderr = "";
+    p.stderr!.on("data", (d: Buffer) => { stderr = (stderr + d.toString("utf8")).slice(-600); });
     p.on("error", (e) => log(`kokoro failed to start: ${e.message}`));
     p.on("exit", (code) => {
       if (this.proc !== p) return;
-      log(`kokoro exited (${code})`);
+      log(`kokoro exited (${code})${stderr.trim() ? `: ${stderr.trim().split("\n").slice(-3).join(" | ")}` : ""}`);
       this.proc = null;
       this.ready = false;
       this.failAll();

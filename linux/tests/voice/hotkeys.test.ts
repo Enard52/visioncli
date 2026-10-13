@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, test } from "node:test";
 import type { HotkeyEvent } from "../../src/main/contracts";
 import { EV_KEY, EV_REL, EV_SYN, KEY, REL_WHEEL, encodeEvents, eventSize, hasBit, parseEvents, parseProcDevices, type InputEvent } from "../../src/main/input/evdev";
 import { HoldMachine, type Clock } from "../../src/main/input/hold";
-import { XI2Parser, feedEvent, parseXTestIds } from "../../src/main/input/index";
+import { XI2Parser, feedEvent, modifierRemap, parseXTestIds } from "../../src/main/input/index";
 
 /** A manual clock: timers fire as time is advanced. */
 class FakeClock implements Clock {
@@ -272,7 +272,8 @@ describe("replay", () => {
 describe("XInput2 fallback", () => {
   it("parses xinput test-xi2 raw events", () => {
     const got: unknown[] = [];
-    const p = new XI2Parser((e) => got.push(e));
+    let moves = 0;
+    const p = new XI2Parser((e) => { if (e.type === "motion") moves++; else got.push(e); });
     p.feed("EVENT type 13 (RawKeyPress)\n    device: 11 (11)\n    detail: 64\n    flags: \n    valuators:\n\nEVENT type 14 (RawKeyRel");
     p.feed("ease)\n    device: 11 (11)\n    detail: 64\n\nEVENT type 17 (RawMotion)\n    device: 2 (10)\n    detail: 0\n");
     p.feed("EVENT type 15 (RawButtonPress)\n    device: 10 (10)\n    detail: 1\n");
@@ -281,6 +282,7 @@ describe("XInput2 fallback", () => {
       { type: "release", device: 11, source: 11, detail: 64 },
       { type: "button", device: 10, source: 10, detail: 1 },
     ]);
+    assert.equal(moves, 1, "RawMotion is reported as motion");
   });
 
   it("finds the XTest devices to ignore", () => {
@@ -321,4 +323,19 @@ describe("Alt as part of a shortcut", () => {
     t.release(KEY.LEFTALT);
     assert.deepEqual(t.types(), ["pointMode", "tap"]);
   });
+});
+
+test("VNC virtual modifier keys map to Alt and Super (a Mac's Command through noVNC)", () => {
+  const map = modifierRemap([
+    "keycode  64 = Alt_L Meta_L Alt_L Meta_L",
+    "keycode 133 = Super_L NoSymbol Super_L",
+    "keycode 204 = NoSymbol Alt_L NoSymbol Alt_L",
+    "keycode 205 = NoSymbol Meta_L NoSymbol Meta_L",
+    "keycode 206 = NoSymbol Super_L NoSymbol Super_L",
+    "keycode 207 = NoSymbol Hyper_L NoSymbol Hyper_L",
+    "keycode  92 = ISO_Level3_Shift NoSymbol ISO_Level3_Shift",
+    "keycode 203 = Mode_switch NoSymbol Mode_switch",
+    "keycode  38 = a A a A",
+  ].join("\n"));
+  assert.deepEqual([...map], [[204, 56], [205, 125], [206, 125], [207, 125], [203, 125]]);
 });

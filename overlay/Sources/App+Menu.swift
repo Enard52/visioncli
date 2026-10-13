@@ -13,9 +13,11 @@ extension AppDelegate {
         menu.delegate = self
         statusItem.menu = menu
         UsageTracker.shared.onChange = { [weak self] in self?.updateStatusTitle() }
+        AgyUsage.shared.onChange = { [weak self] in self?.updateStatusTitle() }
+        if Settings.assistant != .claude { AgyUsage.shared.refresh(agy: cfg.agy) } // free: no model runs
         UsageTracker.shared.scanToday()
         // Fresh limits on launch if what we have is old (a tiny Haiku request); replies keep them current after that.
-        if Date().timeIntervalSince(UsageTracker.shared.updated ?? .distantPast) > 3 * 3600 { UsageTracker.shared.refresh(claude: cfg.claude) }
+        if Settings.assistant == .claude, Date().timeIntervalSince(UsageTracker.shared.updated ?? .distantPast) > 3 * 3600 { UsageTracker.shared.refresh(claude: cfg.claude) }
         Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.updateStatusTitle() } // resets roll over
     }
 
@@ -85,16 +87,29 @@ extension AppDelegate {
         item("Quit visioncli", #selector(quit), in: menu, key: "q")
     }
 
-    /// Claude plan usage at the top of the menu, with a submenu to refresh it or hide it from the menu bar.
+    /// The session / week windows shown for the assistant in use: Claude's plan, or the Antigravity model group the
+    /// chosen agy model draws from.
+    func usageWindows() -> (name: String, session: UsageTracker.Window?, week: UsageTracker.Window?) {
+        if Settings.assistant == .claude { return ("Claude", UsageTracker.shared.session, UsageTracker.shared.week) }
+        let g = AgyUsage.shared.active(model: Settings.agyModel)
+        return ("Gemini", g?.session, g?.week)
+    }
+
+    /// Plan usage (Claude, or Gemini through Antigravity) at the top of the menu, with a submenu to refresh it or hide
+    /// it from the menu bar.
     func usageItems(in menu: NSMenu, item: (String, Selector?, NSMenu, String, Bool, Any?) -> NSMenuItem) {
         let u = UsageTracker.shared
-        u.scanToday()
-        let s = u.percent(u.session), w = u.percent(u.week)
+        let gemini = Settings.assistant != .claude
+        if gemini { if AgyUsage.shared.isStale { AgyUsage.shared.refresh(agy: cfg.agy) } } else { u.scanToday() }
+        let (who, session, week) = usageWindows()
+        let s = u.percent(session), w = u.percent(week)
         let sub = NSMenu()
         let card = NSMenuItem()
+        let active = AgyUsage.shared.active(model: Settings.agyModel)
         let host = NSHostingView(rootView: UsageCard(
-            session: s.flatMap { p in u.session.map { (p, $0.resetsAt) } }, week: w.flatMap { p in u.week.map { (p, $0.resetsAt) } },
-            today: u.today, updated: u.updated))
+            session: s.flatMap { p in session.map { (p, $0.resetsAt) } }, week: w.flatMap { p in week.map { (p, $0.resetsAt) } },
+            today: u.today, updated: gemini ? AgyUsage.shared.updated : u.updated,
+            gemini: gemini ? AgyUsage.shared.groups.filter { $0.name != active?.name } : nil))
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
         card.view = host
         sub.addItem(card)
@@ -102,13 +117,15 @@ extension AppDelegate {
         item("Refresh Usage", #selector(refreshUsage), sub, "", false, nil).image = UsageArt.symbol("arrow.clockwise")
         item("Show Session in Menu Bar", #selector(toggleUsageInMenuBar), sub, "", Settings.usageInMenuBar, nil).image = UsageArt.symbol("menubar.rectangle")
         item("Show Weekly in Menu Bar", Settings.usageInMenuBar ? #selector(toggleWeeklyInMenuBar) : nil, sub, "", Settings.weeklyInMenuBar, nil).image = UsageArt.symbol("calendar")
-        let i = NSMenuItem(title: s != nil && w != nil ? "Claude Usage: \(s!)% session · \(w!)% week" : "Claude Usage", action: nil, keyEquivalent: "")
+        let i = NSMenuItem(title: s != nil && w != nil ? "\(who) Usage: \(s!)% session · \(w!)% week" : "\(who) Usage", action: nil, keyEquivalent: "")
         i.image = (max(s ?? 0, w ?? 0) >= 80 ? UsageArt.symbol("exclamationmark.triangle.fill") : UsageArt.symbol("gauge.with.dots.needle.33percent", fallback: "gauge"))
         i.submenu = sub
         menu.addItem(i)
     }
 
-    @objc func refreshUsage() { UsageTracker.shared.refresh(claude: cfg.claude) }
+    @objc func refreshUsage() {
+        if Settings.assistant == .claude { UsageTracker.shared.refresh(claude: cfg.claude) } else { AgyUsage.shared.refresh(agy: cfg.agy) }
+    }
 
     @objc func toggleWeeklyInMenuBar() {
         Settings.weeklyInMenuBar.toggle()
@@ -125,10 +142,11 @@ extension AppDelegate {
         let name = HomeProject.label(currentProject)
         let title = " " + (name.count > 18 ? String(name.prefix(17)) + "…" : name)
         let u = UsageTracker.shared
-        if Settings.usageInMenuBar, let sp = u.percent(u.session), let wp = u.percent(u.week) {
+        let (who, session, week) = usageWindows()
+        if Settings.usageInMenuBar, let sp = u.percent(session), let wp = u.percent(week) {
             // Colored rings: the current 5-hour session, plus the week when turned on.
             statusItem?.button?.attributedTitle = UsageArt.barTitle(prefix: title, session: sp, week: Settings.weeklyInMenuBar ? wp : nil)
-            statusItem?.button?.toolTip = "VisionCLI · Claude usage: \(sp)% of this 5-hour session, \(wp)% of this week"
+            statusItem?.button?.toolTip = "VisionCLI · \(who) usage: \(sp)% of this 5-hour session, \(wp)% of this week"
         } else {
             statusItem?.button?.title = title
             statusItem?.button?.font = NSFont.menuBarFont(ofSize: 0)

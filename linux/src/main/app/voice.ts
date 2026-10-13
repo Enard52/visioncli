@@ -136,3 +136,35 @@ App.prototype.editVocabulary = function (this: App) {
   }
   void shell.openPath(VOCABULARY_FILE);
 };
+
+// ── Idle unloading ──────────────────────────────────────────────────────────────────────────────────────────────
+// Parakeet (~850 MB) and Kokoro (~600 MB) stay in memory while in use; after a quiet spell they're stopped and start
+// again on the next key-down (speech) or answer (voice), in the background while you talk.
+
+export const SPEECH_IDLE_MS = 30 * 60_000;
+export const VOICE_IDLE_MS = 10 * 60_000;
+
+/** Which models to unload after `idleMs` without voice use (pure, for tests). */
+export function idleUnload(idleMs: number, speaking: boolean): { speech: boolean; voice: boolean } {
+  return { speech: idleMs > SPEECH_IDLE_MS, voice: idleMs > VOICE_IDLE_MS && !speaking };
+}
+
+declare module "./core" {
+  interface App {
+    /** Key-down: note the use and start loading the speech engine if it was unloaded. */
+    wakeVoice(): void;
+    unloadIdleVoice(): void;
+  }
+}
+
+App.prototype.wakeVoice = function (this: App) {
+  this.voiceUsedAt = Date.now();
+  (this.engine as { start?: () => unknown } | null)?.start?.();
+};
+
+App.prototype.unloadIdleVoice = function (this: App) {
+  const u = idleUnload(Date.now() - this.voiceUsedAt, this.speaker.speaking);
+  if (u.speech && (this.engine as { isRunning?: boolean } | null)?.isRunning) { log("voice: speech engine idle, unloading"); this.engine!.stop(); }
+  const kokoro = (this.speaker as { kokoro?: { isRunning: boolean; stop(): void } }).kokoro;
+  if (u.voice && kokoro?.isRunning) { log("voice: Kokoro idle, unloading"); kokoro.stop(); }
+};

@@ -131,20 +131,26 @@ export class LinuxSpeaker extends EventEmitter implements Speaker {
     this.enqueue(async () => {
       const file = await this.kokoro.synth(text, voice, speed);
       log(`tts: sentence ready (${file ? "ok" : "failed"})`);
-      return file ? { file } : null;
+      if (file) return { file };
+      // Kokoro never came up (broken install): the system voice says it instead of silence. A sentence that fails
+      // while Kokoro runs is still skipped, so two voices never talk over each other.
+      return this.kokoro.ready ? null : this.systemJob(text, settings.get("voice"));
     });
   }
 
   private enqueueSystem(text: string, voice: string | null) {
+    if (!SystemVoice.backend()) { log("tts: no system voice (install speech-dispatcher or espeak-ng)"); return; }
+    this.enqueue(() => this.systemJob(text, voice));
+  }
+
+  private async systemJob(text: string, voice: string | null): Promise<Job | null> {
     const backend = SystemVoice.backend();
-    if (!backend) { log("tts: no system voice (install speech-dispatcher or espeak-ng)"); return; }
+    if (!backend) return null;
     // speech-dispatcher can't pick a device: with a chosen speaker, render a WAV and play it there instead.
-    if (backend === "spd-say" && !settings.get("outputDevice")) { this.enqueue(async () => ({ spd: text, voice })); return; }
+    if (backend === "spd-say" && !settings.get("outputDevice")) return { spd: text, voice };
     const out = join(TMP, `visioncli-say-${process.pid}-${++this.renders}.wav`);
-    this.enqueue(async () => {
-      const file = await SystemVoice.render(text, out, settings.get("speechSpeed"), voice);
-      return file ? { file } : null;
-    });
+    const file = await SystemVoice.render(text, out, settings.get("speechSpeed"), voice);
+    return file ? { file } : null;
   }
 
   private pump() {

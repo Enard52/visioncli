@@ -131,6 +131,7 @@ extension AppDelegate {
     }
 
     @objc func newConversation() {
+        instructed.removeAll()
         AgySetup.clearSessionRules()
         sessions.values.forEach { $0.reset() }
         terminals.values.forEach { $0.reset() }

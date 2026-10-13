@@ -42,6 +42,9 @@ extraResources:
     to: gnome-extension
   - from: resources/kwin
     to: kwin
+  # kokoro_server.py runs under python (uv), which can't read files inside app.asar.
+  - from: build/assets/kokoro_server.py
+    to: assets/kokoro_server.py
 
 # dbus-next and marked are pure JS; there is nothing native to rebuild.
 npmRebuild: false
@@ -95,6 +98,8 @@ deb:
   recommends:
     # X11 sessions (and XWayland windows)
     - xdotool
+    # Hold-to-talk without the input group reads keys through XInput2
+    - xinput
     - wmctrl
     - x11-utils
     - maim | imagemagick

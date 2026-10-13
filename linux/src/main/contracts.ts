@@ -27,6 +27,9 @@ export interface Hotkeys extends EventEmitter {
   /** While the overlay is up (or computer control runs), Esc / Alt+P / Alt+O / Alt+Enter are reported. */
   setOverlayKeys(on: boolean): void;
   stop(): void;
+  /** When the pointer last moved (epoch ms), if this backend sees mouse movement (`seesMotion`). */
+  readonly lastMotion?: number;
+  readonly seesMotion?: boolean;
   on(event: "hotkey", listener: (e: HotkeyEvent) => void): this;
 }
 

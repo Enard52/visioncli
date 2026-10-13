@@ -87,10 +87,12 @@ App.prototype.setAssistant = function (this: App, a) {
   settings.set("assistant", a);
   this.state.assistantName = a === "claude" ? "Claude" : "Gemini";
   log(`assistant: ${a}`);
+  this.windows.refreshMenu(); // the Claude usage item and tray rings only show with Claude
 };
 
 App.prototype.newConversation = function (this: App) {
   this.sessions.newConversation(this.currentProject);
+  this.instructed.clear();
 };
 
 App.prototype.continueInTerminal = function (this: App) {

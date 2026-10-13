@@ -34,6 +34,11 @@ const usageWindow = (u: UsageTracker, w: { utilization: number; resetsAt: number
 
 App.prototype.menuModel = function (this: App): MenuModel {
   const u = this.usage;
+  const gemini = settings.get("assistant") !== "claude";
+  // Gemini: Antigravity's own limits, re-read when the menu is rebuilt and they're older than 10 minutes.
+  if (gemini && this.cfg.agy && this.agyUsage.isStale()) void this.agyUsage.refresh(this.cfg.agy, { ...process.env, PATH: this.cfg.path });
+  const active = gemini ? this.agyUsage.active(settings.get("agyModel")) : null;
+  const groups = gemini ? [active, ...this.agyUsage.groups.filter((g) => g !== active)].filter((g): g is NonNullable<typeof g> => !!g) : [];
   const recent = [this.currentProject];
   const seen = new Set<string>();
   for (const e of this.history.entries.slice(0, 50)) seen.add(e.project);
@@ -46,9 +51,12 @@ App.prototype.menuModel = function (this: App): MenuModel {
     windows: this.candidates.windows,
     recent,
     usage: {
-      session: usageWindow(u, u.session), week: usageWindow(u, u.week), today: u.today,
-      updated: u.updated ? new Date(u.updated).toISOString() : null,
+      session: usageWindow(u, gemini ? active?.session ?? null : u.session), week: usageWindow(u, gemini ? active?.week ?? null : u.week),
+      today: u.today,
+      updated: (gemini ? this.agyUsage.updated : u.updated) ? new Date((gemini ? this.agyUsage.updated : u.updated)!).toISOString() : null,
       inMenuBar: settings.get("usageInMenuBar"), weeklyInMenuBar: settings.get("weeklyInMenuBar"),
+      name: gemini ? "Gemini" : "Claude",
+      groups: groups.map((g) => ({ name: g.name, session: usageWindow(u, g.session), week: usageWindow(u, g.week) })),
     },
     updateStatus: this.updater?.status ?? null,
     updateAvailable: this.updater?.available?.version ?? null,
@@ -64,7 +72,10 @@ App.prototype.onMenu = function (this: App, id: MenuId, arg?: string | null) {
   switch (id) {
     case "pickProject": this.pickProject(arg ?? null); break;
     case "chooseFolder": void this.chooseProjectFolder(); break;
-    case "refreshUsage": void this.usage.refresh(this.cfg.claude, { ...process.env, PATH: this.cfg.path }); break;
+    case "refreshUsage":
+      if (settings.get("assistant") !== "claude") { if (this.cfg.agy) void this.agyUsage.refresh(this.cfg.agy, { ...process.env, PATH: this.cfg.path }); }
+      else void this.usage.refresh(this.cfg.claude, { ...process.env, PATH: this.cfg.path });
+      break;
     case "toggleUsageInMenuBar": settings.set("usageInMenuBar", !settings.get("usageInMenuBar")); break;
     case "toggleWeeklyInMenuBar": settings.set("weeklyInMenuBar", !settings.get("weeklyInMenuBar")); break;
     case "installUpdate": void this.installUpdate(); break;

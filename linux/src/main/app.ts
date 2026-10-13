@@ -18,7 +18,7 @@ import { HistoryStore } from "./features/history";
 import { ModelInstaller } from "./features/installer";
 import { ProjectResolver } from "./features/projects";
 import { Updater } from "./features/updater";
-import { UsageTracker } from "./features/usage";
+import { AgyUsage, UsageTracker } from "./features/usage";
 import { createHotkeys } from "./input";
 import { log } from "./log";
 import { settings } from "./settings";
@@ -106,13 +106,17 @@ export async function launch(o: { argv: string[]; crash: CrashReporter; recovere
   });
 
   // ── The overlay and its keys ──
-  a.ui = createOverlayUI({ pointer: () => desktop.pointer() });
+  a.ui = createOverlayUI({
+    pointer: () => desktop.pointer(),
+    motion: () => (a.hotkeys?.seesMotion ? a.hotkeys.lastMotion ?? 0 : null),
+  });
   a.ui.onAction((act) => a.bubbleAction(act));
   a.keys = new OverlayKeys(globalShortcut, (k) => a.overlayKey(k));
 
   // ── Data and features ──
   a.history = new HistoryStore();
   a.usage = new UsageTracker();
+  a.agyUsage = new AgyUsage();
   a.projects = new ProjectResolver();
   a.projects.refreshIfStale();
   a.crashWatcher = new CrashWatcher();
@@ -131,7 +135,7 @@ export async function launch(o: { argv: string[]; crash: CrashReporter; recovere
   a.recorder = createRecorder();
   a.engines = createSpeechEngines();
   a.speaker = createSpeaker(a.audio);
-  a.speaker.on("speaking", (on: boolean) => { a.state.speaking = on; });
+  a.speaker.on("speaking", (on: boolean) => { a.state.speaking = on; if (on) a.voiceUsedAt = Date.now(); });
 
   // ── Windows: tray, Settings, History, Setup ──
   a.windows = createWindowsUI({
@@ -210,10 +214,13 @@ export async function launch(o: { argv: string[]; crash: CrashReporter; recovere
   // ── Speech engines, menus, usage ──
   await a.startVoiceEngines();
   a.usage.onChange = () => a.windows.refreshMenu();
+  a.agyUsage.onChange = () => a.windows.refreshMenu();
   a.usage.scanToday();
   // Fresh limits on launch if what we have is old (a tiny Haiku request); replies keep them current after that.
-  if (a.usage.isStale()) void a.usage.refresh(cfg.claude, { ...process.env, PATH: cfg.path });
-  setInterval(() => { a.usage.scanToday(); a.windows.refreshMenu(); }, 60_000).unref(); // resets roll over
+  // Each plan's limits for the assistant in use (Claude's refresh spends a tiny Haiku request; agy's is free).
+  if (settings.get("assistant") === "claude") { if (a.usage.isStale()) void a.usage.refresh(cfg.claude, { ...process.env, PATH: cfg.path }); }
+  else if (cfg.agy) void a.agyUsage.refresh(cfg.agy, { ...process.env, PATH: cfg.path });
+  setInterval(() => { a.usage.scanToday(); a.windows.refreshMenu(); a.unloadIdleVoice(); }, 60_000).unref(); // resets roll over; idle models
   settings.on("change", (k: string) => {
     if (k === "assistant") a.state.assistantName = settings.get("assistant") === "claude" ? "Claude" : "Gemini";
     a.windows.refreshMenu();

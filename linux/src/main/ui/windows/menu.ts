@@ -56,7 +56,7 @@ export function tooltip(m: MenuModel): string {
   const name = shortName(projectLabel(m.currentProject, m.homeProject));
   const { session, week } = m.usage;
   if (m.usage.inMenuBar && session && week) {
-    return `VisionCLI · ${name}\nClaude usage: ${session.percent}% of this 5-hour session, ${week.percent}% of this week`;
+    return `VisionCLI · ${name}\n${m.usage.name ?? "Claude"} usage: ${session.percent}% of this 5-hour session, ${week.percent}% of this week`;
   }
   return `VisionCLI · ${name}`;
 }
@@ -116,13 +116,15 @@ export function buildMenu(m: MenuModel, now = new Date()): MItem[] {
       { id: "continueInTerminal", label: "Continue Conversation in Terminal", enabled: m.canContinueInTerminal },
     );
   }
-  items.push(sep, { id: "settings", label: "Settings…" }, { id: "quit", label: "Quit visioncli" });
+  items.push(sep, { id: "settings", label: "Settings…" }, { id: "quit", label: "Quit VisionCLI" });
   return items;
 }
 
-/** Claude plan usage with its card (UsageCard) as plain rows: Electron menus can't host custom views. */
+/** Plan usage (Claude, or Gemini through Antigravity) with its card (UsageCard) as plain rows: Electron menus can't
+ *  host custom views. */
 function usageItem(m: MenuModel, now: Date): MItem {
   const { session, week, today, updated } = m.usage;
+  const who = m.usage.name ?? "Claude";
   const card: MItem[] = [];
   const meter = (title: string, w: { percent: number; resetsAt: string }) => {
     card.push({ label: `${title}   ${w.percent}%`, enabled: false, icon: { ring: w.percent } });
@@ -132,16 +134,26 @@ function usageItem(m: MenuModel, now: Date): MItem {
   if (week) meter("This week", week);
   if (!session && !week) card.push({ label: "No usage yet: ask something or Refresh", enabled: false, icon: "gauge" });
   card.push(sep);
-  card.push({ label: `Today   ${today.requests} requests`, enabled: false });
-  card.push({ label: `      ↑ ${tokens(today.input)} in   ↓ ${tokens(today.output)} out   ${tokens(today.cached)} cached`, enabled: false });
-  card.push({ label: `      All Claude Code sessions on this computer${updated ? " · limits " + relative(updated, now) : ""}`, enabled: false });
+  if (who === "Claude") {
+    card.push({ label: `Today   ${today.requests} requests`, enabled: false });
+    card.push({ label: `      ↑ ${tokens(today.input)} in   ↓ ${tokens(today.output)} out   ${tokens(today.cached)} cached`, enabled: false });
+    card.push({ label: `      All Claude Code sessions on this computer${updated ? " · limits " + relative(updated, now) : ""}`, enabled: false });
+  } else {
+    // The other model groups' limits (e.g. Claude and GPT models used through Antigravity).
+    for (const g of (m.usage.groups ?? []).slice(1)) {
+      card.push({ label: g.name, enabled: false });
+      if (g.session) card.push({ label: `      5 hours ${g.session.percent}% · resets ${resets(g.session.resetsAt, now)}`, enabled: false, icon: { ring: g.session.percent } });
+      if (g.week) card.push({ label: `      Week ${g.week.percent}% · resets ${resets(g.week.resetsAt, now)}`, enabled: false, icon: { ring: g.week.percent } });
+    }
+    card.push({ label: `Antigravity plan${updated ? " · " + relative(updated, now) : ""}`, enabled: false });
+  }
   card.push(sep);
   card.push({ id: "refreshUsage", label: "Refresh Usage" });
   card.push({ id: "toggleUsageInMenuBar", label: "Show Session on Tray Icon", type: "checkbox", checked: m.usage.inMenuBar });
   card.push({ id: "toggleWeeklyInMenuBar", label: "Show Weekly on Tray Icon", type: "checkbox", checked: m.usage.weeklyInMenuBar, enabled: m.usage.inMenuBar });
   const both = session && week;
   return {
-    label: both ? `Claude Usage: ${session.percent}% session · ${week.percent}% week` : "Claude Usage",
+    label: both ? `${who} Usage: ${session.percent}% session · ${week.percent}% week` : `${who} Usage`,
     icon: Math.max(session?.percent ?? 0, week?.percent ?? 0) >= 80 ? "warning" : "gauge",
     submenu: card,
   };

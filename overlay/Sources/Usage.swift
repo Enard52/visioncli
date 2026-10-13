@@ -222,11 +222,78 @@ enum UsageArt {
 }
 
 /// The card at the top of the Claude Usage submenu.
+// Gemini (Antigravity) usage: `agy -p /usage --output-format json` reports each model group's 5-hour and weekly limits
+// (remaining fraction + reset time) without running a model, so it costs nothing. Gemini models and Claude/GPT models
+// used through Antigravity have separate groups.
+final class AgyUsage {
+    static let shared = AgyUsage()
+
+    struct Group: Codable { var name: String; var session: UsageTracker.Window?; var week: UsageTracker.Window? }
+
+    private(set) var groups: [Group] = []
+    private(set) var updated: Date?
+    var onChange: () -> Void = {}
+    private var refreshing = false
+    private let defaults = UserDefaults.standard
+
+    init() {
+        if let d = defaults.data(forKey: "agyUsage.groups"), let g = try? JSONDecoder().decode([Group].self, from: d) { groups = g }
+        updated = defaults.object(forKey: "agyUsage.updated") as? Date
+    }
+
+    /// The `command.data.groups` of agy's JSON reply; utilization = the used fraction, like Claude's.
+    static func parse(_ data: Data) -> [Group] {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let groups = ((obj["command"] as? [String: Any])?["data"] as? [String: Any])?["groups"] as? [[String: Any]] else { return [] }
+        let iso = ISO8601DateFormatter()
+        func window(_ buckets: [[String: Any]], _ w: String) -> UsageTracker.Window? {
+            guard let b = buckets.first(where: { $0["window"] as? String == w }),
+                  let remaining = (b["remaining_fraction"] as? NSNumber)?.doubleValue,
+                  let reset = (b["reset_time"] as? String).flatMap(iso.date(from:)) else { return nil }
+            return UsageTracker.Window(utilization: max(0, 1 - remaining), resetsAt: reset)
+        }
+        return groups.compactMap { g in
+            guard let name = g["name"] as? String else { return nil }
+            let buckets = g["buckets"] as? [[String: Any]] ?? []
+            return Group(name: name, session: window(buckets, "5h"), week: window(buckets, "weekly"))
+        }
+    }
+
+    /// The group the chosen agy model draws from (Claude/GPT models have their own limits; everything else is Gemini).
+    func active(model: String?) -> Group? {
+        let thirdParty = model.map { $0.range(of: "claude|gpt|opus|sonnet", options: [.regularExpression, .caseInsensitive]) != nil } ?? false
+        return groups.first { $0.name.range(of: thirdParty ? "claude|gpt" : "gemini", options: [.regularExpression, .caseInsensitive]) != nil } ?? groups.first
+    }
+
+    var isStale: Bool { Date().timeIntervalSince(updated ?? .distantPast) > 600 }
+
+    func refresh(agy: String?) {
+        guard let agy, !refreshing else { return }
+        refreshing = true
+        DispatchQueue.global(qos: .utility).async {
+            let (_, out, _) = shell(agy, ["-p", "/usage", "--output-format", "json", "--print-timeout", "60s"], cwd: NSTemporaryDirectory())
+            let json = out.firstIndex(of: "{").map { String(out[$0...]) } ?? ""
+            let parsed = Self.parse(Data(json.utf8))
+            DispatchQueue.main.async {
+                self.refreshing = false
+                guard !parsed.isEmpty else { return } // agy missing, signed out or offline: keep the last numbers
+                self.groups = parsed
+                self.updated = Date()
+                if let d = try? JSONEncoder().encode(parsed) { self.defaults.set(d, forKey: "agyUsage.groups") }
+                self.defaults.set(self.updated, forKey: "agyUsage.updated")
+                self.onChange()
+            }
+        }
+    }
+}
+
 struct UsageCard: View {
     let session: (Int, Date)?
     let week: (Int, Date)?
     let today: UsageTracker.Today
     let updated: Date?
+    /// Gemini: the other Antigravity model groups (shown instead of Claude Code's token counts).
+    var gemini: [AgyUsage.Group]? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -237,6 +304,15 @@ struct UsageCard: View {
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Divider()
+            if let gemini {
+                ForEach(Array(gemini.enumerated()), id: \.offset) { _, g in
+                    Text(g.name).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    if let s = g.session { meter(icon: "clock", title: "5 hours", percent: Int((s.utilization * 100).rounded()), resets: s.resetsAt) }
+                    if let w = g.week { meter(icon: "calendar", title: "This week", percent: Int((w.utilization * 100).rounded()), resets: w.resetsAt) }
+                }
+                Text("Antigravity plan" + (updated.map { " · " + RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()) } ?? ""))
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+            } else {
             HStack(spacing: 6) {
                 Image(systemName: "chart.bar.fill").foregroundStyle(.blue).frame(width: 16)
                 Text("Today").font(.system(size: 12, weight: .semibold))
@@ -251,6 +327,7 @@ struct UsageCard: View {
             .padding(.leading, 22)
             Text("All Claude Code sessions on this Mac" + (updated.map { " · limits " + RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()) } ?? ""))
                 .font(.system(size: 10)).foregroundStyle(.tertiary).padding(.leading, 22)
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .frame(width: 300, alignment: .leading)

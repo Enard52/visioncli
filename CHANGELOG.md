@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.1
+
+- **Gemini usage:** with Gemini (Antigravity) as the assistant, the menu shows *Gemini Usage* (Antigravity's 5-hour and weekly limits, plus the Claude/GPT models you use through it) instead of Claude's, with the same menu-bar rings. Reading it costs nothing. Mac and Linux.
+- **Shorter terminal questions for Gemini:** the voice instructions go with the first question of a conversation only; later ones carry just `[voice]`. Mac and Linux.
+- **Linux, much lighter when idle:** about 3% CPU instead of 30% (the pointer is read only after the mouse moves; answers re-place twice a second instead of 60 times), about 400 MB less memory (rarely used overlays open on demand), and Parakeet/Kokoro unload after a quiet spell and reload as you start talking.
+- **Linux voice fixes:** Whisper's final transcript is accurate again and allowed more time on slower CPUs; a junk transcript ("-", "[BLANK_AUDIO]", "Mm-hmm") or a slip of the finger no longer gets sent; Parakeet is offered in Settings (it downloads on first use) with a progress bar; Kokoro voices play in the AppImage (it couldn't read its script from the app archive), and the system voice speaks if Kokoro can't start.
+- **Linux keys:** a Mac's Command key works as Super through VNC/remote desktops (Alt+Super attaches a screenshot), and `xinput` is now a dependency for hold-to-talk without the input group.
+- **Linux:** the microphone list shows real sound cards instead of ALSA plugins; the menu says "Quit VisionCLI".
+
 ## 0.9.0
 
 - **VisionCLI for Linux:** the whole app now runs on Linux, any distribution, on X11 and Wayland (GNOME, KDE, Sway, Hyprland): hold Alt to ask (Alt+Super with a screenshot), Visi, the answer bubble with Mermaid and on-screen markers, terminal and bubble modes with Claude Code, Antigravity and Gemini, computer control with approvals, Autopilot, crash watching, history, usage, Settings, the setup wizard, start at login and quick browser commands and tasks. Download the AppImage or .deb (x86_64 and arm64) from the release. Built with Electron; transcription is Whisper or Parakeet (the same model as on the Mac), voices are Kokoro or the system voice. Not available on Linux: Wispr Flow (no Linux app). See docs/LINUX.md for what each desktop needs.

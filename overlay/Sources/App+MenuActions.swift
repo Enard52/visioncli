@@ -20,6 +20,8 @@ extension AppDelegate {
     func setAssistant(_ a: Assistant) {
         Settings.assistant = a
         log("assistant: \(a.appName)")
+        if a != .claude { AgyUsage.shared.refresh(agy: cfg.agy) }
+        updateStatusTitle() // the usage rings follow the assistant
     }
 
     /// A Claude Code alias (MenuLabels.claudeModels). A running terminal Claude switches too.

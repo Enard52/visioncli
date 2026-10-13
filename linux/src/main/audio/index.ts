@@ -185,15 +185,20 @@ export function parsePactlText(text: string, kind: "sources" | "sinks", def: str
   return out;
 }
 
-/** `arecord -L` / `aplay -L`: PCM names at the start of a line, their description indented below. */
+/** `arecord -L` / `aplay -L`: PCM names at the start of a line, their description indented below. Only real sound
+ *  cards (default, sysdefault:/plughw:) are listed, not ALSA's converter and mixer plugins (lavrate, speex, jack, oss,
+ *  upmix…), which aren't microphones or speakers. */
 export function parseAlsaList(text: string): AudioDevice[] {
   const out: AudioDevice[] = [];
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const id = lines[i];
-    if (!id || /^\s/.test(id) || id === "null") continue;
+    if (!id || /^\s/.test(id) || !(id === "default" || /^(sysdefault|plughw|hw):/.test(id))) continue;
     const desc = lines[i + 1]?.startsWith(" ") ? lines[i + 1].trim() : id;
-    out.push({ id, name: id === "default" ? "Default" : desc, isDefault: id === "default" });
+    // hw: only takes the card's own formats; plughw: converts to the 16 kHz mono we record.
+    const dev = id.replace(/^hw:/, "plughw:");
+    if (out.some((d) => d.id === dev)) continue;
+    out.push({ id: dev, name: id === "default" ? "Default" : desc, isDefault: id === "default" });
   }
   return out;
 }

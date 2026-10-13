@@ -227,8 +227,9 @@ extension AppDelegate {
             // Only when the mouse really is over another app: over the terminal itself there's nothing to point at
             // (the fallback to the front-most other window is for screenshots, not for this hint).
             if saved.isEmpty, let under = Screen.rawWindowUnderPointer(), !under.isTerminal { parts.append("mouse over \(under.label)") }
-            // Gemini can't take a system prompt in its interactive mode, so the voice instructions ride along.
-            if briefInstructions { parts.append(assistant == .antigravity && !saved.isEmpty ? "View the screenshot file(s) first. " : ""); parts.append("Asked out loud: the reply is also shown in a bubble on screen and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line; for flows or relationships you may add one small ```mermaid diagram; put any [[box/arrow/circle/step]] drawing markers on the last line.") }
+            // Gemini can't take a system prompt in its interactive mode, so the voice instructions ride along, with the
+            // first question of each conversation only (later ones keep just the [voice · …] tag).
+            let instructions = "Asked out loud: the reply is also shown in a bubble on screen and read aloud, so answer in plain text, under about 100 words; \"this\" means what's under the pointer; cite files as path:line; for flows or relationships you may add one small ```mermaid diagram; put any [[box/arrow/circle/step]] drawing markers on the last line."
             let t = terminal(for: currentProject, assistant: assistant)
             // Prefer one the user already runs: the tab they pointed at, else any tab for this project.
             if let ctx = terminalContext, ctx.assistant == assistant, let tab = ctx.itermSession {
@@ -244,6 +245,12 @@ extension AppDelegate {
             state.raw = ""
             state.status = "Sending to \(assistant.name) in the terminal…"
             if state.phase != .thinking { set(.thinking) }
+            let key = "\(assistant.rawValue)|\(currentProject)|\(t.sessionId)"
+            if briefInstructions && !instructed.contains(key) {
+                if assistant == .antigravity && !saved.isEmpty { parts.append("View the screenshot file(s) first.") }
+                parts.append(instructions)
+                instructed.insert(key)
+            }
             t.ask("\(question) [voice\(parts.isEmpty ? "" : " · ")\(parts.joined(separator: " · "))]")
             return
         }

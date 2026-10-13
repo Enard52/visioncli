@@ -213,11 +213,20 @@ App.prototype.ask = async function (this: App, original: string, shots: Shot[], 
       const under = rawWindowUnderPointer(wins, p);
       if (under && !isTerminal(under)) mouseOver = windowLabel(under);
     }
-    const line = terminalQuestion(original, { assistant, shots: infos, paths, mouseOver });
+    // gemini/agy have no system prompt in a terminal, so the voice instructions go with the first question of each
+    // conversation only (keyed by CLI, pane and conversation); later questions carry just the [voice · …] tag.
+    const key = () => `${assistant}|${JSON.stringify(t.delivery)}|${t.sessionId()}`;
+    const brief = !this.instructed.has(key());
+    const line = terminalQuestion(original, { assistant, shots: infos, paths, mouseOver, brief });
+    if (brief) this.instructed.add(key());
     this.current = t;
     this.state.status = `Sending to ${name} in the terminal…`;
     if (this.state.phase !== "thinking") this.set("thinking");
-    t.ask({ text: line, images: files, project: this.currentProject, lane: "strong" }, this.answerHandlers(t));
+    const handlers = this.answerHandlers(t);
+    const onDone = handlers.onDone.bind(handlers);
+    // agy picks its conversation id only after the first question: remember that one too.
+    handlers.onDone = (r) => { if (brief) this.instructed.add(key()); onDone(r); };
+    t.ask({ text: line, images: files, project: this.currentProject, lane: "strong" }, handlers);
     return;
   }
 

@@ -78,6 +78,7 @@ export class ParakeetEngine implements SpeechEngine {
   }
 
   async ready(): Promise<boolean> { return this.isReady; }
+  get isRunning() { return !!this.proc; }
 
   stop() {
     const p = this.proc;

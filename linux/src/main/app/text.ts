@@ -32,6 +32,8 @@ export function terminalQuestion(question: string, o: {
   paths: string[];
   /** The app under the mouse when there's no screenshot and it isn't the terminal itself. */
   mouseOver: string | null;
+  /** Include the voice instructions (gemini/agy): only the first question of a conversation needs them. */
+  brief?: boolean;
 }): string {
   const gemini = o.assistant === "gemini";
   const parts: string[] = [];
@@ -42,11 +44,28 @@ export function terminalQuestion(question: string, o: {
   });
   if (!o.shots.length && o.mouseOver) parts.push(`mouse over ${o.mouseOver}`);
   // No system prompt in gemini/agy interactive mode: the voice instructions ride along.
-  if (o.assistant !== "claude") {
-    parts.push(o.assistant === "antigravity" && o.shots.length ? "View the screenshot file(s) first. " : "");
+  if (o.assistant !== "claude" && o.brief !== false) {
+    if (o.assistant === "antigravity" && o.shots.length) parts.push("View the screenshot file(s) first.");
     parts.push(BRIEF_INSTRUCTIONS);
   }
   return `${question} [voice${parts.length ? " · " : ""}${parts.join(" · ")}]`;
+}
+
+/** Whisper's dialogue dashes and stray quotes around a transcript ("- Hello", "— hi"): not part of the question. */
+export function cleanTranscript(t: string): string {
+  return t.replace(/^[\s\-–—•"']+/, "").replace(/[\s"']+$/, "").trim();
+}
+
+/** Only hesitation sounds ("Mm-hmm.", "Uh", "Hmm…"): what an accidental hold picks up, not a question. */
+export function onlyFiller(t: string): boolean {
+  const words = t.toLowerCase().replace(/[^\p{L}\s-]/gu, " ").split(/[\s-]+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => /^(u+h+|u+m+|h?m+|m+-?h+m+|a+h+|e+r+|o+h+|hm+|mhm+|huh)$/.test(w));
+}
+
+/** A transcript worth sending: Whisper turns silence or noise into "-", "…", "[BLANK_AUDIO]" or "(music)". */
+export function meaningful(t: string): boolean {
+  const s = t.replace(/\[[^\]]*\]|\([^)]*\)|\*[^*]*\*/g, " ").trim();
+  return /[\p{L}\p{N}]/u.test(s) && !onlyFiller(s);
 }
 
 /** Switching lanes changes conversations: the last couple of exchanges in this project, oldest first. */

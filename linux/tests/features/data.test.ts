@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import { HistoryStore } from "../../src/main/features/history";
-import { UsageTracker } from "../../src/main/features/usage";
+import { AgyUsage, UsageTracker } from "../../src/main/features/usage";
 import { ProjectResolver, tokens } from "../../src/main/features/projects";
 import { AnnounceQueue, announceSeconds } from "../../src/main/features/announce";
 import { HOME_NOTE, HomeProject } from "../../src/main/features/home";
@@ -164,4 +164,24 @@ describe("HomeProject", () => {
     assert.equal(HomeProject.label(HomeProject.path), "Home");
     assert.equal(HomeProject.label("/x/myapp"), "myapp");
   });
+});
+
+test("Antigravity /usage: each group's 5-hour and weekly limits, and the group for the chosen model", () => {
+  const json = JSON.stringify({ command: { name: "usage", data: { groups: [
+    { name: "Gemini Models", buckets: [
+      { window: "weekly", remaining_fraction: 0.97, reset_time: "2026-10-19T04:55:01Z" },
+      { window: "5h", remaining_fraction: 0.99, reset_time: "2026-10-13T18:39:20Z" }] },
+    { name: "Claude and GPT models", buckets: [{ window: "weekly", remaining_fraction: 0.27, reset_time: "2026-10-16T07:54:50Z" }] },
+  ] } } });
+  const groups = AgyUsage.parse(json);
+  assert.equal(groups.length, 2);
+  assert.ok(Math.abs(groups[0].session!.utilization - 0.01) < 1e-9);
+  assert.equal(groups[0].week!.resetsAt, Date.parse("2026-10-19T04:55:01Z"));
+  assert.equal(groups[1].session, null);
+  const store = new Map<string, unknown>();
+  const u = new AgyUsage({ getStore: (k) => store.get(k) as never, setStore: (k, v) => store.set(k, v) });
+  u.groups = groups;
+  assert.equal(u.active("gemini-3.8-flash")?.name, "Gemini Models");
+  assert.equal(u.active("claude-opus-5-5")?.name, "Claude and GPT models");
+  assert.equal(u.active(null)?.name, "Gemini Models");
 });

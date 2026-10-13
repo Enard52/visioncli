@@ -7,8 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compareVersions, electronNodeWrapper, findNode, loadConfig, parseArgs, serverArgs } from "../../src/main/app/config";
 import { drawMarks, makeShot, rawWindowUnderPointer, regionLabel, screenPoint, windowLabel, windowUnderPointer } from "../../src/main/app/shots";
-import { carryOver, hudTitle, parseOpenLink, terminalQuestion, voiceQuestion } from "../../src/main/app/text";
+import { carryOver, cleanTranscript, hudTitle, meaningful, parseOpenLink, terminalQuestion, voiceQuestion } from "../../src/main/app/text";
 import { OverlayKeys } from "../../src/main/app/keys";
+import { idleUnload } from "../../src/main/app/voice";
 import { TaskModel } from "../../src/main/app/tasks";
 import { ancestorPids, emulatorWindow } from "../../src/main/app/keyboard";
 import { appChoices } from "../../src/main/app/choices";
@@ -98,6 +99,7 @@ test("question text: bubble and terminal tags", () => {
   const g = terminalQuestion("q", { assistant: "gemini", shots: [shot], paths: ["/c/1.png"], mouseOver: null });
   assert.ok(g.startsWith("q [voice · screenshot @/c/1.png  (mouse at 5,6) · "), g);
   assert.match(terminalQuestion("q", { assistant: "antigravity", shots: [shot], paths: ["/s/1.jpg"], mouseOver: null }), /View the screenshot file\(s\) first\./);
+  assert.doesNotMatch(terminalQuestion("q", { assistant: "antigravity", shots: [], paths: [], mouseOver: null }), / · · /);
 });
 
 test("carryOver, links, HUD title", () => {
@@ -162,4 +164,22 @@ test("Autopilot app choices and the control card preview", () => {
   assert.deepEqual(appChoices(wins, ["slack"], 1), [{ id: "firefox", name: "Firefox" }, { id: "org.gnome.gedit", name: "gedit" }, { id: "slack", name: "slack" }]);
   assert.equal(cardPreview({ detail: [{ text: "hello", kind: "added" }, { text: "Sensitive", kind: "removed" }, { text: "Esc stops", kind: "context" }] }),
     "+ hello\n- Sensitive\n  Esc stops");
+});
+
+test("voice instructions only when asked for, and junk transcripts", () => {
+  const q = (brief?: boolean) => terminalQuestion("q", { assistant: "antigravity", shots: [], paths: [], mouseOver: null, brief });
+  assert.match(q(), /Asked out loud/);
+  assert.equal(q(false), "q [voice]");
+  for (const junk of ["-", " … ", "[BLANK_AUDIO]", "(music)", "*silence*", ""]) assert.equal(meaningful(junk), false, junk);
+  for (const ok of ["Can you hear me?", "2", "écoute", "Um, open the file"]) assert.equal(meaningful(ok), true, ok);
+  for (const filler of ["Mm-hmm.", "Uh", "Hmm…", "um um"]) assert.equal(meaningful(filler), false, filler);
+  assert.equal(cleanTranscript(" - Hello, How are you?\n"), "Hello, How are you?");
+  assert.equal(cleanTranscript("— don't stop"), "don't stop");
+});
+
+test("idle voice models unload: Kokoro after 10 minutes (not mid-sentence), speech after 30", () => {
+  assert.deepEqual(idleUnload(5 * 60_000, false), { speech: false, voice: false });
+  assert.deepEqual(idleUnload(11 * 60_000, false), { speech: false, voice: true });
+  assert.deepEqual(idleUnload(11 * 60_000, true), { speech: false, voice: false });
+  assert.deepEqual(idleUnload(31 * 60_000, false), { speech: true, voice: true });
 });

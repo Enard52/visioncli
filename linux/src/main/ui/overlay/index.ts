@@ -58,6 +58,8 @@ export interface OverlayUI {
 }
 
 export interface OverlayOptions {
+  /** When the pointer last moved (epoch ms), from the hotkey reader; null = unknown, so the pointer is always read. */
+  motion?: () => number | null;
   /** The pointer in global pixels: pass Desktop.pointer. Electron's screen.getCursorScreenPoint() is not usable on
    *  Linux: it only updates while the pointer moves over our own windows (verified under Xvfb/openbox). Without this,
    *  `xdotool getmouselocation` is used on X11. */
@@ -83,10 +85,15 @@ export function createOverlayUI(opts: OverlayOptions = {}): OverlayUI {
   const readPointer = opts.pointer ?? (process.env.DISPLAY ? xdotoolPointer : async () => null);
   let latestPointer: Point | null = null;
   let pointerLoop = true;
+  let lastRead = 0;
   const trackPointer = async () => {
     while (pointerLoop) {
       const anyShown = allWindows().some((w) => w.visible) || !!pendingShow || mascotShown;
-      if (anyShown) {
+      // Reading the pointer can mean spawning a process (xdotool, hyprctl): skip it while the mouse hasn't moved,
+      // which is most of the time someone is talking.
+      const moved = opts.motion?.() ?? null;
+      if (anyShown && (moved === null || !latestPointer || moved >= lastRead)) {
+        lastRead = Date.now();
         try { latestPointer = (await readPointer()) ?? latestPointer; } catch { /* keep the last one */ }
       }
       await new Promise((r) => setTimeout(r, rides() ? 16 : anyShown ? 250 : 400));
@@ -102,6 +109,7 @@ export function createOverlayUI(opts: OverlayOptions = {}): OverlayUI {
   let state: OverlayState | null = null;
   let size: Size = { width: 1, height: 1 };
   let followTimer: NodeJS.Timeout | null = null;
+  let followCadence = 0;
   let lastLayout = 0;
   let pendingShow: NodeJS.Timeout | null = null;
   let actionCb: (a: BubbleAction) => void = () => {};
@@ -158,7 +166,10 @@ export function createOverlayUI(opts: OverlayOptions = {}): OverlayUI {
     if (key !== lastSent) { lastSent = key; bubble.send("overlay:state", state); }
     else bubble.send("overlay:level", state.level);
     bubble.setClickThrough(!takesMouse());
-    if (!followTimer) followTimer = setInterval(() => follow(), 1000 / 60);
+    // 60 fps only while the pill rides the pointer; an answer is re-placed twice a second (pointer's screen).
+    const cadence = rides() ? 1000 / 60 : 500;
+    if (followTimer && followCadence !== cadence) { clearInterval(followTimer); followTimer = null; }
+    if (!followTimer) { followTimer = setInterval(() => follow(), cadence); followCadence = cadence; }
     if (prev?.phase !== next.phase || prev?.pinned !== next.pinned) {
       follow(true);
       bubble.raise(); // above a spotlight or marks shown meanwhile
@@ -253,7 +264,7 @@ export function createOverlayUI(opts: OverlayOptions = {}): OverlayUI {
 
   // ── Activity badge + control glow (Badge.swift) ──────────────────────────────────────────────────────────────────
 
-  const badgeWin = new OverlayWindow({ page: "badge" });
+  const badgeWin = new OverlayWindow({ page: "badge", lazy: { idleMs: 60_000 } });
   let badgeSize: Size = { width: 240, height: 36 };
   let badgeTimer: NodeJS.Timeout | null = null;
   const placeBadgeNow = () => badgeWin.setBounds(placeBadge(badgeSize, pointerDisplay().workArea));
@@ -291,7 +302,7 @@ export function createOverlayUI(opts: OverlayOptions = {}): OverlayUI {
 
   // ── Task HUD (Tasks.swift) ───────────────────────────────────────────────────────────────────────────────────────
 
-  const hudWin = new OverlayWindow({ page: "hud", clickThrough: false });
+  const hudWin = new OverlayWindow({ page: "hud", clickThrough: false, lazy: { idleMs: 60_000 } });
   let hudSize: Size = { width: 328, height: 120 };
   let hudArea: Rect | null = null;
   let hudTimer: NodeJS.Timeout | null = null;
@@ -329,7 +340,7 @@ export function createOverlayUI(opts: OverlayOptions = {}): OverlayUI {
 
   // ── Autopilot suggestion card ────────────────────────────────────────────────────────────────────────────────────
 
-  const sugWin = new OverlayWindow({ page: "suggestion", clickThrough: false });
+  const sugWin = new OverlayWindow({ page: "suggestion", clickThrough: false, lazy: { idleMs: 60_000 } });
   let sugSize: Size = { width: 348, height: 120 };
   let sugArea: Rect | null = null;
   let sugHover = false;

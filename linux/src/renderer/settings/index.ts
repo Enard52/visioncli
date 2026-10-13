@@ -141,7 +141,8 @@ const PAGES: Record<SettingsSection, (s: SettingsSnapshot) => Child> = {
     if (s.hasParakeet) {
       speech.push(radioRow("Parakeet", "Local and fastest. Knows your project's names." + (s.parakeetDownloaded ? "" : " Downloads about 540 MB on first use."),
         s.speechEngine === "parakeet", () => act("chooseSpeech", "parakeet"), true,
-        s.speechEngine === "parakeet" && !s.parakeetReady ? parakeetProgress(s) : null));
+        // While it downloads the engine is still the old one: show the bar whenever a download runs.
+        s.parakeetProgress != null || (s.speechEngine === "parakeet" && !s.parakeetReady) ? parakeetProgress(s) : null));
     }
     for (const m of s.whisperModels) speech.push(radioRow(`Whisper ${m}`, "Local. Good with accents.", s.speechEngine === `whisper:${m}`, () => act("chooseSpeech", `whisper:${m}`)));
     if (s.systemSpeech) speech.push(radioRow("System", "On-device, no download. Less accurate with code words and names.", s.speechEngine === "system", () => act("chooseSpeech", "system")));

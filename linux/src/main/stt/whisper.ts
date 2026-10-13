@@ -51,7 +51,8 @@ export class WhisperEngine implements SpeechEngine {
     if (this.proc) return this.starting ?? Promise.resolve(this.isReady);
     this.isReady = false;
     this.port = 18100 + Math.floor(Math.random() * 900);
-    const threads = String(Math.max(1, Math.min(4, cpus().length)));
+    // Linux runs Whisper on the CPU (no Metal): use most cores, leaving one for the UI.
+    const threads = String(Math.max(1, Math.min(8, cpus().length - 1)));
     const p = VoiceModels.spawnHelper(this.binary, ["-m", this.modelPath, "--host", "127.0.0.1", "--port", String(this.port), "-t", threads]);
     this.proc = p;
     p.on("error", (e) => log(`whisper-server failed to start: ${e.message}`));
@@ -80,6 +81,7 @@ export class WhisperEngine implements SpeechEngine {
   }
 
   async ready(): Promise<boolean> { return this.isReady; }
+  get isRunning() { return !!this.proc; }
 
   stop() {
     const p = this.proc;
@@ -116,19 +118,21 @@ export class WhisperEngine implements SpeechEngine {
       form.append("response_format", "json");
       form.append("temperature", "0");
       const seconds = Math.max(0, audio.length - 44) / 32000;
+      // No timestamps needed: fewer tokens to decode.
+      form.append("no_timestamps", "true");
       if (partial) {
         // Captions: no temperature fallback, and an encoder context sized to the audio instead of Whisper's fixed
-        // 30 s window (50 positions a second), which is most of the cost of a short snippet on a CPU (4–8× faster).
-        // At least 256: a context barely longer than a 1 s snippet made it return junk.
+        // 30 s window (50 positions a second), most of the cost of a short snippet on a CPU (4–8× faster). Not for the
+        // final text: a shrunken context garbles longer clips ("what is this is this is"). At least 256: a context
+        // barely longer than a 1 s snippet made it return junk.
         form.append("temperature_inc", "0");
-        form.append("no_timestamps", "true");
         form.append("audio_ctx", String(Math.min(1500, Math.max(256, Math.ceil(seconds * 50) + 128))));
       }
       const prompt = whisperPrompt(vocabulary);
       if (prompt) form.append("prompt", prompt);
       form.append("file", new Blob([audio], { type: "audio/wav" }), "q.wav");
-      // CPUs vary far more than Macs do: allow the longer of 6 s and the audio's own length.
-      const timeout = partial ? 4000 : Math.round(Math.max(6000, seconds * 1000));
+      // CPUs vary far more than Macs do: allow the longer of 10 s and twice the audio's length.
+      const timeout = partial ? 4000 : Math.round(Math.max(10_000, seconds * 2000));
       const res = await fetch(`http://127.0.0.1:${this.port}/inference`, { method: "POST", body: form, signal: AbortSignal.timeout(timeout) });
       const text = whisperText(await res.text());
       if (!partial) log(`whisper: ${((Date.now() - started) / 1000).toFixed(2)}s`);

@@ -15,7 +15,7 @@ import { HomeProject } from "../features/home";
 import type { ModelInstaller } from "../features/installer";
 import type { ProjectResolver } from "../features/projects";
 import type { Updater } from "../features/updater";
-import type { UsageTracker } from "../features/usage";
+import type { AgyUsage, UsageTracker } from "../features/usage";
 import type { LinuxSpeaker } from "../tts";
 import type { OverlayUI } from "../ui/overlay";
 import type { WindowsUI } from "../ui/windows";
@@ -48,6 +48,7 @@ export class App {
   tasks!: TaskModel;
   history!: HistoryStore;
   usage!: UsageTracker;
+  agyUsage!: AgyUsage;
   projects!: ProjectResolver;
   crashWatcher!: CrashWatcher;
   autopilot!: Autopilot;
@@ -78,6 +79,8 @@ export class App {
 
   /** The transcription engine in use (null until chosen). */
   engine: SpeechEngine | null = null;
+  /** Last time voice was used (key-down or speech): models unload after a while without it (app/voice.ts). */
+  voiceUsedAt = Date.now();
   hotkeyInfo: { backend: string; problem?: string } = { backend: "none" };
   hotkeysStarted = false;
 
@@ -105,6 +108,8 @@ export class App {
   maxTimer: NodeJS.Timeout | null = null;
   hideTimer: NodeJS.Timeout | null = null;
   heard = "";
+  /** Terminal conversations that already got the voice instructions (see questions.ts). */
+  instructed = new Set<string>();
 
   // ── Where the question goes ──
   current: AssistantSession | null = null;
