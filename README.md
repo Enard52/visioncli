@@ -9,7 +9,7 @@ by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or
 </p>
 
 <p align="center">
-<a href="https://github.com/thethirdsourcers/visioncli/releases/latest"><b>Download VisionCLI for macOS or Linux</b></a>
+<a href="https://github.com/thethirdsourcers/visioncli/releases/latest"><b>Download VisionCLI for macOS, Linux or Windows</b></a>
 </p>
 
 ---
@@ -29,7 +29,7 @@ by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or
 
 ### Requirements
 
-- macOS 13 or later (Apple Silicon or Intel), or Linux (x86_64 or arm64; X11 or Wayland: see [Linux](#linux))
+- macOS 13 or later (Apple Silicon or Intel), Linux (x86_64 or arm64; X11 or Wayland: see [Linux](#linux)), or Windows 10/11 (x64 or Arm, preview: see [Windows](#windows))
 - At least one AI CLI, installed and signed in: [Claude Code](https://claude.com/claude-code) (`claude`), [Antigravity CLI](https://antigravity.google) (`agy`, Gemini on a Google account), or [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`)
 - [Node.js](https://nodejs.org) 18 or later
 
@@ -84,6 +84,12 @@ Models are saved in `~/Library/Application Support/visioncli/models/`. Whisper a
    - **Terminal mode** types into `claude` running in tmux, kitty or WezTerm, or into any terminal window directly.
 
 Keys: ⌥ is **Alt**, ⌘ is **Super**. Everything else matches the macOS app.
+
+## Windows
+
+Preview. Download **`VisionCLI-<version>-windows-x64.exe`** (or `-arm64`) from the [latest release](https://github.com/thethirdsourcers/visioncli/releases/latest) and run it: it installs for your user only, no admin rights. The installer isn't code-signed yet, so SmartScreen asks once: *More info → Run anyway*.
+
+Keys: ⌥ is **Alt**, ⌘ is the **Win** key (hold Alt to ask, Alt + Win with a screenshot, Alt + Shift + Space to drag a region). Terminal mode types into `claude` in Windows Terminal, WezTerm or any console window, including Claude Code inside WSL. Nothing else to install: keyboard, screen, UI Automation and the microphone work out of the box; the setup wizard downloads the speech models.
 
 ## Gemini (Antigravity CLI or Gemini CLI)
 

@@ -105,7 +105,9 @@ export interface SettingsSnapshot {
   // Computer Control
   computerControl: "ask" | "auto" | "off";
   keyboardAccess: boolean;             // in the input group (evdev), or the XInput2 fallback works
-  keyboardBackend: string | null;      // "evdev" | "xinput2"
+  keyboardBackend: string | null;      // "evdev" | "xinput2" | "hooks" (Windows)
+  /** process.platform of the app: "linux" | "win32" (wording differs per system). */
+  platform?: string;
   keyboardProblem: string | null;      // what's missing ("Join the input group, then log out and in")
   atspi: boolean;                      // AT-SPI accessibility bus enabled
   inputBackend: string | null;         // "xtest" | "portal" | "uinput"; null = can't click or type yet

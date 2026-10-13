@@ -177,10 +177,18 @@ const PAGES: Record<SettingsSection, (s: SettingsSnapshot) => Child> = {
       { id: "off", name: "Off", detail: "The assistant can look at your screen, but not click or type." },
     ];
     const INPUT_NAMES: Record<string, string> = { xtest: "X11 (XTest)", portal: "Remote Desktop portal", uinput: "Virtual keyboard and mouse (uinput)" };
+    const windows = s.platform === "win32";
+    // Windows needs no setup for any of these: keyboard hooks, UI Automation and SendInput are always available.
+    const access = windows ? [
+      row("Keyboard access", s.keyboardAccess ? "Notices when you hold Alt (and Win for a screenshot)." : s.keyboardProblem ?? "VisionCLI's helper isn't running.",
+        s.keyboardAccess ? allowed() : button("Try Again", () => act("grantKeyboardAccess"))),
+      row("UI Automation", "Lets the assistant find buttons and fields in apps, and Autopilot read the front window.", s.atspi ? allowed("On") : allowed("Built in")),
+      row("Clicking and typing", "Through Windows input (SendInput).", allowed()),
+    ] : null;
     return [
       card(null, "Passwords, payments and system settings always ask. Press Esc to stop it.",
         modes.map((m) => radioRow(m.name, m.detail, s.computerControl === m.id, () => act("setComputerControl", m.id)))),
-      card(null, null, [
+      card(null, null, access ?? [
         row("Keyboard access (input group)",
           s.keyboardAccess
             ? (s.keyboardBackend === "xinput2" ? "Using the X11 fallback (XInput2). Join the input group to make it work on Wayland too." : "Notices when you hold Alt, on X11 and Wayland.")
@@ -197,7 +205,7 @@ const PAGES: Record<SettingsSection, (s: SettingsSnapshot) => Child> = {
         switchRow("Instant browser commands (Jev)", "Simple browser commands run right away through Jev before asking the assistant. Needs a TypeSafe API key (Integrations).", s.quickCommands, (on) => act("setQuickCommands", on)),
       ]),
       card(null, null, [
-        switchRow("Watch for app crashes", "Notices when an app crashes (systemd-coredump or Apport) and offers to explain why.", s.watchCrashes, (on) => act("setWatchCrashes", on)),
+        switchRow("Watch for app crashes", `Notices when an app crashes (${windows ? "Windows Error Reporting" : "systemd-coredump or Apport"}) and offers to explain why.`, s.watchCrashes, (on) => act("setWatchCrashes", on)),
       ]),
     ];
   },

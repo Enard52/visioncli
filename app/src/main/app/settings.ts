@@ -38,6 +38,7 @@ App.prototype.autopilotChoices = [];
 
 App.prototype.desktopLabel = function (this: App) {
   const wm = process.env.XDG_CURRENT_DESKTOP || process.env.DESKTOP_SESSION || "";
+  if (process.platform === "win32") return "Windows";
   switch (this.desktop.backend) {
     case "x11": return `X11${wm ? " · " + wm : ""}`;
     case "gnome": return "GNOME (Wayland)";
@@ -104,6 +105,7 @@ App.prototype.settingsSnapshot = function (this: App): SettingsSnapshot {
     computerControl: settings.get("computerControl"),
     keyboardAccess: !this.hotkeyInfo.problem && this.hotkeyInfo.backend !== "none",
     keyboardBackend: this.hotkeyInfo.backend === "none" ? null : this.hotkeyInfo.backend,
+    platform: process.platform,
     keyboardProblem: this.hotkeyInfo.problem ?? null,
     atspi: p.atspi,
     inputBackend: this.inputBackend && this.inputBackend !== "none" ? this.inputBackend : null,
