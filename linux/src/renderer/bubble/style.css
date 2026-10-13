@@ -1,0 +1,91 @@
+/* Views.swift: Pill, AnswerBubble, ApprovalCard. The window is sized to #root; 6 px padding leaves room for the
+   anti-aliased edges and the shadow (OverlayView .padding(6)). */
+#root { position: absolute; top: 0; left: 0; width: max-content; padding: 6px; }
+#root:empty { width: 1px; height: 1px; padding: 0; }
+.spacer { flex: 1 1 auto; min-width: 8px; }
+
+/* Pill */
+.pill { display: flex; align-items: center; gap: 9px; padding: 8px 12px; border-radius: 18px; background: var(--fill);
+  box-shadow: inset 0 0 0 1px var(--stroke), 0 2px 5px rgba(0, 0, 0, 0.35); }
+.pill .leading { display: flex; align-items: center; }
+.pill .texts { display: flex; flex-direction: column; gap: 2px; }
+.pill .text { font-size: 12.5px; font-weight: 500; line-height: 16px; max-width: 300px; max-height: 32px; overflow: hidden;
+  overflow-wrap: anywhere; color: #fff; }
+.pill .text.placeholder { color: rgba(255, 255, 255, 0.55); }
+.pill .badge { font-size: 10px; color: rgba(255, 255, 255, 0.4); display: flex; align-items: center; gap: 4px; }
+.pill .badge svg { width: 10px; height: 10px; }
+.bars { display: flex; align-items: center; gap: 2.5px; height: 20px; }
+.bars i { display: block; width: 3px; height: 4px; border-radius: 1.5px; background: linear-gradient(to top, var(--cyan), var(--purple));
+  transition: height 80ms ease-out; }
+
+/* Answer bubble */
+.bubble { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 14px; background: var(--fill);
+  box-shadow: inset 0 0 0 1px var(--stroke), 0 3px 8px rgba(0, 0, 0, 0.35); }
+.bubble.pinned { box-shadow: inset 0 0 0 1px rgba(100, 210, 255, 0.35), 0 3px 8px rgba(0, 0, 0, 0.35); }
+.header { display: flex; align-items: center; gap: 7px; width: 432px; min-width: 0; }
+.header .state { display: flex; color: var(--cyan); }
+.header .state svg { width: 11px; height: 11px; }
+.header .state.error { color: var(--orange); }
+.header .question { font-size: 11px; font-weight: 500; color: rgba(255, 255, 255, 0.5); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.header .project { font-size: 10px; font-weight: 500; color: rgba(255, 255, 255, 0.45); padding: 2px 6px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08); white-space: nowrap; flex: none; }
+
+/* Full bubble width so the scroll bar sits on the right edge, with room beside the text for it. */
+.scroll { max-height: 560px; overflow-y: auto; margin-right: -10px; }
+.bubble.pinned .scroll { max-height: 460px; }
+.scroll::-webkit-scrollbar { width: 8px; }
+.scroll::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.28); border-radius: 4px; border: 1px solid transparent; background-clip: padding-box; }
+.scroll::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.45); }
+.answer { display: flex; flex-direction: column; gap: 8px; padding-right: 12px; width: 432px; user-select: text; cursor: auto; }
+
+.answer .text { width: 420px; font-size: 13.5px; line-height: 19px; color: rgba(255, 255, 255, 0.95); overflow-wrap: anywhere; }
+.answer .text > :first-child { margin-top: 0; }
+.answer .text > :last-child { margin-bottom: 0; }
+.answer .text p { margin: 0 0 8px; }
+.answer .text h1, .answer .text h2, .answer .text h3, .answer .text h4 { font-size: 14px; font-weight: 700; margin: 10px 0 4px; }
+.answer .text h1 { font-size: 15.5px; }
+.answer .text ul, .answer .text ol { margin: 0 0 8px; padding-left: 20px; }
+.answer .text li { margin: 2px 0; }
+.answer .text a { color: var(--cyan); text-decoration: underline; cursor: pointer; }
+.answer .text code { font-family: var(--mono); font-size: 12.5px; background: rgba(255, 255, 255, 0.08); border-radius: 4px; padding: 1px 4px; }
+.answer .text a code { background: none; padding: 0; color: inherit; }
+.answer .text pre { margin: 0 0 8px; padding: 8px 10px; background: rgba(0, 0, 0, 0.35); border-radius: 8px; overflow-x: auto;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06); }
+.answer .text pre code { background: none; padding: 0; font-size: 12px; line-height: 17px; white-space: pre; }
+.answer .text pre::-webkit-scrollbar { height: 6px; }
+.answer .text pre::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 3px; }
+.answer .text blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 2px solid rgba(255, 255, 255, 0.2); color: rgba(255, 255, 255, 0.75); }
+.answer .text table { border-collapse: collapse; margin: 0 0 8px; font-size: 12.5px; }
+.answer .text th, .answer .text td { border: 1px solid rgba(255, 255, 255, 0.15); padding: 3px 7px; }
+.answer .text hr { border: 0; border-top: 1px solid rgba(255, 255, 255, 0.12); margin: 8px 0; }
+
+.answer .diagram { width: 420px; max-height: 520px; overflow: hidden; display: flex; justify-content: center; padding: 4px 0;
+  background: rgba(255, 255, 255, 0.03); border-radius: 8px; color: #e6e6ea; }
+.answer .diagram svg { max-width: 100%; height: auto; }
+.answer .diagram .err { color: #ff9b8a; font: 12px var(--mono); padding: 6px 8px; align-self: center; }
+.answer .pending { width: 420px; height: 40px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: rgba(255, 255, 255, 0.55); }
+
+.toolbar { display: flex; align-items: center; gap: 2px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.08); width: 432px; }
+.toolbar[hidden] { display: none; }
+.toolbar .toast { font-size: 10.5px; color: rgba(255, 255, 255, 0.55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-right: 4px; }
+[hidden] { display: none !important; }
+
+/* Approval card */
+.approval { width: 460px; display: flex; flex-direction: column; gap: 9px; padding: 14px; border-radius: 14px; background: var(--fill);
+  box-shadow: inset 0 0 0 1px rgba(255, 214, 10, 0.35), 0 3px 8px rgba(0, 0, 0, 0.35); }
+.approval .title-row { display: flex; align-items: center; gap: 7px; }
+.approval .hand { color: var(--yellow); display: flex; }
+.approval .hand svg { width: 12px; height: 12px; }
+.approval .title { font-size: 13px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.approval .project { font-size: 10px; color: rgba(255, 255, 255, 0.4); white-space: nowrap; }
+.approval .tool { font: 10.5px var(--mono); color: rgba(255, 255, 255, 0.45); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.approval .diff { padding: 8px; border-radius: 8px; background: rgba(0, 0, 0, 0.35); display: flex; flex-direction: column; gap: 1px;
+  user-select: text; }
+.approval .diff div { font: 11px/14px var(--mono); white-space: pre; overflow: hidden; text-overflow: ellipsis; color: rgba(255, 255, 255, 0.8); }
+.approval .diff .added { color: var(--green); }
+.approval .diff .removed { color: rgba(255, 69, 58, 0.9); }
+.approval .buttons { display: flex; align-items: center; gap: 8px; }
+.approval .queue { white-space: nowrap; font-size: 10.5px; color: rgba(255, 255, 255, 0.4); }
+.approval .deny { font-size: 12px; color: rgba(255, 255, 255, 0.6); white-space: pre; }
+.approval .deny:hover { color: rgba(255, 255, 255, 0.9); }

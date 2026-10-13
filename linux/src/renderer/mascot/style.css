@@ -1,0 +1,8 @@
+/* Mascot.swift MascotView: the window is the visible slice (sideroom + the body up to its cut edge); the rest of the
+   body is clipped by the screen edge. */
+#root { position: absolute; inset: 0; overflow: hidden; }
+.figure { position: absolute; left: 0; height: 130px; transform-origin: right center; }
+.frame { display: block; width: 100%; height: 100%; image-rendering: auto; }
+.glow { position: absolute; width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; mix-blend-mode: screen; pointer-events: none; }
+.glow i { position: absolute; border-radius: 50%; }
+.glow .dot { width: 5px; height: 5px; filter: blur(1px); }

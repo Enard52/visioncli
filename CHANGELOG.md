@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0
+
+- **VisionCLI for Linux:** the whole app now runs on Linux, any distribution, on X11 and Wayland (GNOME, KDE, Sway, Hyprland): hold Alt to ask (Alt+Super with a screenshot), Visi, the answer bubble with Mermaid and on-screen markers, terminal and bubble modes with Claude Code, Antigravity and Gemini, computer control with approvals, Autopilot, crash watching, history, usage, Settings, the setup wizard, start at login and quick browser commands and tasks. Download the AppImage or .deb (x86_64 and arm64) from the release. Built with Electron; transcription is Whisper or Parakeet (the same model as on the Mac), voices are Kokoro or the system voice. Not available on Linux: Wispr Flow (no Linux app). See docs/LINUX.md for what each desktop needs.
+- **MCP server on Linux:** `look`, `list_windows`, `select_region`, `clipboard_image` and every `browser_*` tool work on Linux. Browser control goes over DevTools (Chrome, Brave, Chromium; native, Flatpak and Snap).
+- CI now also runs on Ubuntu, including a real X11 capture test and the Linux app's 212 tests.
+
 ## 0.8.0
 
 - **Multi-step browser tasks:** say a task for the page in front, like "find a stay in Lisbon for 3 nights with a pool and free cancellation, then open it", and a Jev agent does it step by step: it reads the page, one Jev request picks the next operation (click, type, choose from a dropdown, scroll, wait, done) and its target, and it acts, about 0.3–0.5 s per step. Each step shows in the bubble as it happens; Esc stops it. Text it types comes from your own words. It never confirms a purchase, payment, booking, deletion or message unless you asked for that step, and stops when it needs a password or personal details. Works with Chrome (and Brave) over DevTools: tick *Allow remote debugging* at chrome://inspect/#remote-debugging and click Allow when it connects. Design after browser-use/jev-ultrafast.

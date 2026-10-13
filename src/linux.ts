@@ -61,7 +61,7 @@ export function appName(wmClass: string): string {
 
 /** Window ids from `xprop -root _NET_CLIENT_LIST_STACKING` (bottom → top), returned front-most first. */
 export function parseStacking(out: string): number[] {
-  const ids = /#\s*(.*)$/.exec(out)?.[1] ?? "";
+  const ids = /#\s*(.*)$/.exec(out.trim())?.[1] ?? ""; // xprop ends with a newline
   return ids.split(",").map((s) => parseInt(s.trim(), 16)).filter((n) => !Number.isNaN(n)).reverse();
 }
 

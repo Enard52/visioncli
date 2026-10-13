@@ -9,7 +9,7 @@ by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or
 </p>
 
 <p align="center">
-<a href="https://github.com/thethirdsourcers/visioncli/releases/latest"><b>Download VisionCLI for macOS</b></a>
+<a href="https://github.com/thethirdsourcers/visioncli/releases/latest"><b>Download VisionCLI for macOS or Linux</b></a>
 </p>
 
 ---
@@ -29,7 +29,7 @@ by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or
 
 ### Requirements
 
-- macOS 13 or later (Apple Silicon or Intel)
+- macOS 13 or later (Apple Silicon or Intel), or Linux (x86_64 or arm64; X11 or Wayland: see [Linux](#linux))
 - At least one AI CLI, installed and signed in: [Claude Code](https://claude.com/claude-code) (`claude`), [Antigravity CLI](https://antigravity.google) (`agy`, Gemini on a Google account), or [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`)
 - [Node.js](https://nodejs.org) 18 or later
 
@@ -72,6 +72,18 @@ If something doesn't work, check System Settings → Privacy & Security, and Vis
 | **Browser control** | Click, scroll and read pages | in Chrome or Brave: **View → Developer → Allow JavaScript from Apple Events** |
 
 Models are saved in `~/Library/Application Support/visioncli/models/`. Whisper and Kokoro models you already have from other tools (e.g. in `~/.cache/whisper`) are picked up automatically. Without them, VisionCLI uses Apple's on-device speech recognition and the system voice.
+
+## Linux
+
+1. Download **`VisionCLI-<version>-linux-x86_64.AppImage`** (or `-arm64`), or the **`.deb`** for Debian/Ubuntu, from the [latest release](https://github.com/thethirdsourcers/visioncli/releases/latest).
+2. Install the desktop tools VisionCLI uses (the script detects apt/dnf/pacman/zypper and your desktop, and asks before installing): `sh linux/scripts/install-deps.sh` from the repo, or see [docs/LINUX.md](docs/LINUX.md).
+3. Start VisionCLI. The setup wizard checks each piece and offers fixes:
+   - **Hold Alt to talk** reads the keyboard directly, so join the `input` group once (`sudo usermod -aG input $USER`, then log out and in). On X11 it also works without it.
+   - **GNOME on Wayland:** VisionCLI installs a small GNOME Shell extension so it can see windows and the pointer (log out and in once). KDE, Sway and Hyprland need nothing extra.
+   - **Computer control on Wayland** asks once through the desktop's Remote Desktop permission.
+   - **Terminal mode** types into `claude` running in tmux, kitty or WezTerm, or into any terminal window directly.
+
+Keys: ⌥ is **Alt**, ⌘ is **Super**. Everything else matches the macOS app.
 
 ## Gemini (Antigravity CLI or Gemini CLI)
 

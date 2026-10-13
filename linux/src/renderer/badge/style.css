@@ -1,0 +1,12 @@
+/* BadgeView: black 82 % capsule with a tinted outline; a pulsing dot behind the icon. Fades in 0.15 s, out 0.3 s. */
+#root { position: absolute; top: 0; left: 0; width: max-content; padding: 4px; opacity: 0; transition: opacity 0.3s; }
+body.on #root { opacity: 1; transition-duration: 0.15s; }
+.pill { --tint: var(--cyan); display: flex; align-items: center; gap: 7px; padding: 5px 12px 5px 6px; border-radius: 999px;
+  background: rgba(0, 0, 0, 0.82); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tint) 45%, transparent); }
+.mark { position: relative; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: var(--tint); }
+.pulse { position: absolute; inset: 0; border-radius: 50%; background: color-mix(in srgb, var(--tint) 35%, transparent);
+  animation: pulse 0.8s ease-in-out infinite alternate; }
+@keyframes pulse { from { transform: scale(0.85); opacity: 0.8; } to { transform: scale(1.25); opacity: 0.2; } }
+.icon { position: relative; display: flex; }
+.icon svg { width: 12px; height: 12px; }
+.text { font-size: 12px; font-weight: 500; color: #fff; white-space: nowrap; }

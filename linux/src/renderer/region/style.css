@@ -1,0 +1,7 @@
+/* SelectionView: 28 % black dim, cyan 2 px rounded box, hint 90 pt from the top. */
+#root { position: absolute; inset: 0; cursor: crosshair; }
+.canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.dim { fill: rgba(0, 0, 0, 0.28); }
+.sel { fill: none; stroke: var(--cyan); stroke-width: 2; }
+.hint { position: absolute; left: 0; right: 0; top: 70px; text-align: center; font-size: 15px; font-weight: 500; color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5); }

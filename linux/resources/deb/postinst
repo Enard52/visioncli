@@ -1,0 +1,46 @@
+#!/bin/sh
+# .deb post-install (electron-builder template: only executable and sanitizedProductName macros are expanded,
+# so plain $var shell syntax only, never the braced form).
+set -e
+APP='/opt/${sanitizedProductName}'
+EXE='${executable}'
+
+# /usr/bin/visioncli → the launcher (same as electron-builder's default script).
+if command -v update-alternatives >/dev/null 2>&1; then
+  if [ -L "/usr/bin/$EXE" ] && [ "$(readlink "/usr/bin/$EXE")" != "/etc/alternatives/$EXE" ]; then rm -f "/usr/bin/$EXE"; fi
+  update-alternatives --install "/usr/bin/$EXE" "$EXE" "$APP/$EXE" 100 || ln -sf "$APP/$EXE" "/usr/bin/$EXE"
+else
+  ln -sf "$APP/$EXE" "/usr/bin/$EXE"
+fi
+
+# Chromium's sandbox: user namespaces when the kernel allows them, else the setuid helper (Chromium only falls
+# back to it). Ubuntu 24.04+ restricts namespaces through AppArmor: an "unconfined + userns" profile lifts that for us.
+chmod 4755 "$APP/chrome-sandbox" || true
+if [ -d /etc/apparmor.d ] && [ -e /etc/apparmor.d/abi/4.0 ] && command -v apparmor_parser >/dev/null 2>&1; then
+  cat > /etc/apparmor.d/visioncli <<EOF
+# VisionCLI: lets Electron create the user namespaces its sandbox needs (installed by the visioncli package).
+abi <abi/4.0>,
+include <tunables/global>
+
+profile visioncli $APP/visioncli.bin flags=(unconfined) {
+  userns,
+  include if exists <local/visioncli>
+}
+EOF
+  apparmor_parser --replace --write-cache --skip-read-cache /etc/apparmor.d/visioncli >/dev/null 2>&1 || true
+fi
+
+command -v update-mime-database >/dev/null 2>&1 && update-mime-database /usr/share/mime || true
+command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications || true
+command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t /usr/share/icons/hicolor || true
+
+# The one-time setup the package can't do for you.
+cat <<'EOF'
+
+VisionCLI is installed. Start it from your app menu or run: visioncli
+  Hotkeys and computer control on Wayland read /dev/input and write /dev/uinput, which needs the "input" group:
+    sudo usermod -aG input "$USER"     (then log out and back in)
+  Desktop tools for your session (X11, GNOME, KDE, Sway, Hyprland):
+    sh /opt/VisionCLI/resources/bin/install-deps.sh
+EOF
+exit 0

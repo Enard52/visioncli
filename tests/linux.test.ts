@@ -34,6 +34,7 @@ describe("linux window listing", () => {
   test("stacking order comes back front-most first", () => {
     assert.deepEqual(parseStacking("_NET_CLIENT_LIST_STACKING(WINDOW): window id # 0x5000001, 0x3a00003, 0x4400006"),
       [0x4400006, 0x3a00003, 0x5000001]);
+    assert.deepEqual(parseStacking("_NET_CLIENT_LIST_STACKING(WINDOW): window id # 0x1, 0x2\n"), [2, 1]);
     assert.deepEqual(parseStacking(""), []);
   });
 

@@ -1,0 +1,34 @@
+#!/bin/sh
+# visioncli-mcp: VisionCLI's MCP server, run by the app's own Electron in Node mode (ELECTRON_RUN_AS_NODE=1),
+# so no separate Node install is needed. The app copies this to ~/.local/bin on every start (setup-user.sh) and
+# registers it once:  claude mcp add visioncli --scope user -- ~/.local/bin/visioncli-mcp
+# Any arguments go to the server's CLI, e.g. `visioncli-mcp install` or `visioncli-mcp quick "open github"`.
+#
+# Which app: $VISIONCLI_APP, else ~/.local/bin/VisionCLI.AppImage (a symlink the app refreshes to the current
+# $APPIMAGE, so updates that move the file keep working), else the .deb's /opt/VisionCLI.
+# The server lives inside the app at resources/server/index.mjs. An AppImage mounts somewhere new each run,
+# so the path is resolved from the running binary itself (process.execPath), not written down here.
+app=$VISIONCLI_APP
+if [ -z "$app" ]; then
+  for c in "$HOME/.local/bin/VisionCLI.AppImage" /opt/VisionCLI/visioncli; do
+    if [ -x "$c" ]; then app=$c; break; fi
+  done
+fi
+if [ -z "$app" ]; then
+  echo "visioncli-mcp: VisionCLI isn't installed (no ~/.local/bin/VisionCLI.AppImage or /opt/VisionCLI). Start the app once." >&2
+  exit 1
+fi
+
+# The bootstrap drops ELECTRON_RUN_AS_NODE from the environment so programs the server starts (VS Code and
+# other Electron apps, the VisionCLI app itself) run normally. (No single quotes inside it: it's one sh string.)
+export ELECTRON_RUN_AS_NODE=1
+exec "$app" -e '
+const p = require("node:path");
+const server = p.join(p.dirname(process.execPath), "resources", "server", "index.mjs");
+delete process.env.ELECTRON_RUN_AS_NODE;
+// AppRun puts the AppImage mount on PATH; it is gone once this exits, so keep it out of what the server saves.
+const mount = process.env.APPDIR;
+if (mount) process.env.PATH = (process.env.PATH || "").split(":").filter((d) => !d.startsWith(mount)).join(":");
+process.argv.splice(1, 0, server);
+import(require("node:url").pathToFileURL(server).href).catch((e) => { console.error(e); process.exit(1); });
+' -- "$@"

@@ -33,12 +33,9 @@ For Wayland (wlroots: Sway, Hyprland): `sudo apt install grim slurp wl-clipboard
 
 - **Browser tools** (`browser_*`, quick commands, multi-step tasks): on Linux every `browser.ts` call goes over DevTools through browserd (`src/browser-cdp.ts`), so Chrome's "Allow remote debugging?" is answered once. It supports Chrome, Brave and Chromium, including native, Flatpak and Snap installs. Verified against real Chromium: tabs, open, type, pick a suggestion, select, tick, click, read, new and close tab.
 
-Still to do in phase 1:
+When the Linux app is running, the MCP server asks it for windows and captures, so `look` works on Wayland too: GNOME uses the extension, KDE a KWin script, Sway `swaymsg` and Hyprland `hyprctl`.
 
-- [ ] Front app on Wayland (X11 uses `xdotool` + `xprop`). GNOME needs a small Shell extension; KDE has KWin scripting; Sway has `swaymsg -t get_tree`; Hyprland has `hyprctl activewindow -j`.
-- [ ] `visioncli install` / `voice` without launchd: a systemd user unit, plus registering the MCP server with `claude` / `gemini` / `agy`.
-
-## Phase 2: the Linux app (full parity with the macOS app)
+## Phase 2: the Linux app (full parity with the macOS app) — done in 0.9.0
 
 **Goal: every macOS feature behaves the same on any Linux distribution, on X11 and Wayland.**
 
@@ -79,8 +76,14 @@ Each macOS piece maps to Linux as follows.
 | Updater (codesign + swap) | AppImage zsync / GitHub release check with a signature check (minisign) |
 | Model installer (brew) | Prebuilt whisper-server binary download (no Homebrew), same model downloads |
 
-Order of work: shell (tray, push-to-talk, bubble) → speech in/out → question flow (bubble mode, then terminal mode) → overlays and mascot → computer control (X11, then Wayland) → Autopilot, crash watch, history, usage, settings, setup → updater.
+The code is in `linux/src/main/` (one folder per row above) and `linux/src/renderer/`, with `linux/src/main/app/` as the port of `AppDelegate` + `App+*.swift`. Tests: `cd linux && npm test`.
 
-## Phase 3: packaging
+Known differences:
+- **Wispr Flow:** there is no Linux Wispr Flow app.
+- **Sway:** Sway's IPC never reports the pointer, so "window under the mouse" uses the focused window there.
+- **Updater:** it needs a signing key (`UPDATE_PUBLIC_KEY` in `linux/src/main/features/updater.ts`). Until it's set, updates are announced and the release page opens instead of installing in place.
+- **Not yet tested on real hardware:** GNOME and KDE on Wayland were tested against stand-ins of their D-Bus services. X11 and Sway were tested for real.
 
-AppImage and `.deb` from GitHub Actions on `v*` tags, next to the macOS `.dmg`, plus the updater.
+## Phase 3: packaging — done in 0.9.0
+
+AppImage and `.deb` (x86_64, arm64) are built by GitHub Actions on `v*` tags, next to the macOS `.dmg`. Config: `linux/electron-builder.yml`; dependency installer: `linux/scripts/install-deps.sh`.

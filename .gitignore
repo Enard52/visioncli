@@ -7,3 +7,6 @@ release/
 .claude/settings.local.json
 overlay/helpers/parakeet/vendor/
 overlay/helpers/parakeet/.build/
+linux/build/
+linux/dist/
+graphify-out/

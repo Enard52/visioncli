@@ -1,0 +1,45 @@
+/* Overlays.swift DrawingView, Spotlight.swift DimView, Badge.swift GlowEdges. */
+#root { position: absolute; inset: 0; pointer-events: none; }
+.canvas { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+
+/* Appear (0.55 s ease-out), then pulse the glow forever (0.9 s ease-in-out, autoreversing). */
+.box, .box-svg, .step, .trim, .label { opacity: 0; animation: appear 0.55s ease-out forwards, pulse-cyan 0.9s ease-in-out infinite alternate; }
+/* The angular-gradient stroke is a conic plate masked to its border; the glow sits on the unmasked wrapper. */
+.box { position: absolute; }
+.box .plate { position: absolute; inset: 0; border-radius: 8px; padding: 3px; background: conic-gradient(from 90deg, #64d2ff, #0a84ff, #bf5af2, #ff375f, #64d2ff);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+.box-svg { fill: none; stroke-width: 3; transform-box: fill-box; transform-origin: center; }
+.box-svg.dashed { stroke-dasharray: 8 5; }
+@keyframes appear { from { opacity: 0; transform: scale(1.08); } to { opacity: 1; transform: scale(1); } }
+@keyframes pulse-cyan { from { filter: drop-shadow(0 0 5px rgba(100, 210, 255, 0.4)); } to { filter: drop-shadow(0 0 12px rgba(100, 210, 255, 0.9)); } }
+@keyframes pulse-pink { from { filter: drop-shadow(0 0 5px rgba(255, 55, 95, 0.4)); } to { filter: drop-shadow(0 0 12px rgba(255, 55, 95, 0.9)); } }
+@keyframes pulse-purple { from { filter: drop-shadow(0 0 4px rgba(191, 90, 242, 0.4)); } to { filter: drop-shadow(0 0 10px rgba(191, 90, 242, 0.9)); } }
+
+/* Circles and arrows draw themselves (trim 0 → 1). */
+.trim { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1 1; stroke-dashoffset: 1;
+  animation-name: draw, pulse-pink; }
+.trim.arrow { stroke-width: 3.5; animation-name: draw, pulse-purple; }
+@keyframes draw { from { opacity: 1; stroke-dashoffset: 1; } to { opacity: 1; stroke-dashoffset: 0; } }
+
+.step { position: absolute; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #64d2ff, #bf5af2); box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.85);
+  font: 700 15px/1 "Nunito", "Varela Round", "Ubuntu", var(--font); color: #fff; animation-name: pop, pulse-cyan; }
+@keyframes pop { from { opacity: 0; transform: scale(0.3); } to { opacity: 1; transform: scale(1); } }
+
+.label { position: absolute; white-space: nowrap; font-size: 12px; font-weight: 600; color: #fff; padding: 4px 8px; border-radius: 999px;
+  background: var(--fill); box-shadow: inset 0 0 0 1px var(--stroke); animation: fade 0.55s ease-out forwards; }
+@keyframes fade { to { opacity: 1; } }
+
+/* Spotlight: fades in over 0.18 s. */
+body[data-mode="spotlight"] #root { opacity: 0; transition: opacity 0.18s; }
+body[data-mode="spotlight"].on #root { opacity: 1; }
+
+/* Glow: a 5 px gradient border, blurred, breathing; fades in 0.25 s, out 0.4 s. */
+body[data-mode="glow"] #root { opacity: 0; transition: opacity 0.4s; }
+body[data-mode="glow"].on #root { opacity: 1; transition-duration: 0.25s; }
+.edges { position: absolute; inset: 0; filter: blur(6px); animation: breathe 1.2s ease-in-out infinite alternate; }
+.edges .ring { position: absolute; inset: 0; border-radius: 12px; padding: 5px;
+  background: linear-gradient(135deg, #64d2ff, #bf5af2, #64d2ff) 0 0 / 200% 200%; animation: sweep 1.2s ease-in-out infinite alternate;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; }
+@keyframes breathe { from { opacity: 0.55; } to { opacity: 0.95; } }
+@keyframes sweep { from { background-position: 100% 100%; } to { background-position: 0 0; } }

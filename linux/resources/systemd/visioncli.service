@@ -1,0 +1,15 @@
+# VisionCLI's user service, the Linux counterpart of the macOS launchd agent: restarted after a crash, not after
+# a normal quit. setup-user.sh fills in ExecStart; `systemctl --user enable visioncli` makes it start at login.
+[Unit]
+Description=VisionCLI voice overlay
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@EXEC@
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=graphical-session.target

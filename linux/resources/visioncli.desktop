@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=VisionCLI
+Comment=Voice and screen co-assistant for developers
+Exec=@EXEC@ %U
+Icon=visioncli
+Terminal=false
+Type=Application
+Categories=Development;
+Keywords=voice;assistant;claude;screen;ai;
+StartupWMClass=VisionCLI
+StartupNotify=false

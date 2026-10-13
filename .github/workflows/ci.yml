@@ -43,3 +43,20 @@ jobs:
           xterm -geometry 100x30+0+0 & xclock -geometry 400x400+700+100 & sleep 2
           xdotool mousemove 800 200
           VISIONCLI_LINUX_SMOKE=1 npm test -- linux
+
+  # The Linux app (linux/): build, its tests, and a packaging dry run (electron-builder config and hooks).
+  linux-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            linux/package-lock.json
+      - run: npm ci # build.mjs bundles the MCP server from ../src
+      - run: cd linux && npm ci && npm test
+      - name: Package (unpacked dir, no installers)
+        run: cd linux && npx electron-builder --linux dir --publish never && ls dist/linux-unpacked dist/linux-unpacked/resources

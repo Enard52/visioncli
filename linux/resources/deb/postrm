@@ -1,0 +1,17 @@
+#!/bin/sh
+# .deb post-remove (electron-builder template: plain $var shell syntax only).
+EXE='${executable}'
+
+if command -v update-alternatives >/dev/null 2>&1; then
+  update-alternatives --remove "$EXE" "/usr/bin/$EXE" || true
+else
+  rm -f "/usr/bin/$EXE"
+fi
+
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+  if [ -e /etc/apparmor.d/visioncli ]; then
+    command -v apparmor_parser >/dev/null 2>&1 && apparmor_parser --remove /etc/apparmor.d/visioncli >/dev/null 2>&1 || true
+    rm -f /etc/apparmor.d/visioncli
+  fi
+fi
+exit 0

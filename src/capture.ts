@@ -161,6 +161,11 @@ async function listWindowsJXA(): Promise<WindowInfo[]> {
 export async function snapshot(): Promise<Snapshot> {
   requireMac("Listing windows");
   if (isLinux) {
+    // The running Linux app knows windows on every desktop (GNOME/KDE/Sway/Hyprland); the CLI tools only on X11.
+    const fast = await displaysAndPointer({ windows: true });
+    if (Array.isArray(fast?.windows)) {
+      return { windows: fast.windows.map(fromApp).filter((w) => w.bounds.width >= 200 && w.bounds.height >= 150), pointer: fast.pointer, displays: fast.displays };
+    }
     const [windows, pointer] = await Promise.all([linux.listWindows(), linux.pointer()]);
     return { windows: windows.filter((w) => w.bounds.width >= 200 && w.bounds.height >= 150), pointer: pointer ?? undefined };
   }
@@ -192,7 +197,7 @@ export async function pointerLocation(snap?: Snapshot): Promise<{ x: number; y: 
   requireMac("Pointer location");
   if (snap?.pointer) return snap.pointer;
   if (isLinux) {
-    const p = await linux.pointer();
+    const p = (await displaysAndPointer())?.pointer ?? (await linux.pointer());
     if (!p) throw new Error("The pointer position needs an X11 session with xdotool installed.");
     if (snap) snap.pointer = p;
     return p;
@@ -265,6 +270,8 @@ async function captureViaApp(req: ControlRequests["capture"]): Promise<Capture |
 export async function captureWindow(w: WindowInfo): Promise<Capture> {
   requireMac("Window capture");
   if (isLinux) {
+    const fast = await captureViaApp({ window_id: w.id });
+    if (fast) return fast;
     return withTempDir(async (dir) => {
       const src = join(dir, "win.png");
       await linux.captureWindow(w, src);
@@ -283,7 +290,7 @@ export async function captureWindow(w: WindowInfo): Promise<Capture> {
 
 /** `bounds`: display's screen rect when the caller already has it (saves a request to the app). */
 export async function captureScreen(display?: number, bounds?: WindowInfo["bounds"] | null): Promise<Capture> {
-  if (isMac) {
+  if (isMac || isLinux) {
     const b = bounds ?? (await displayBounds(display ?? 1));
     const fast = b && (await captureViaApp({ x: b.x, y: b.y, width: b.width, height: b.height }));
     if (fast) return fast;
