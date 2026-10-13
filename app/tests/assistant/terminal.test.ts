@@ -105,6 +105,12 @@ test("transcripts: session files under a synthetic HOME", () => {
   writeFileSync(t, JSON.stringify({ type: "USER_INPUT", content: "why is the build red [voice]" }) + "\n");
   assert.equal(agyConversation("why is the build red"), "conv-42");
   assert.equal(agyConversation("something else"), undefined);
+  // A Windows screenshot path is JSON-escaped in the transcript (\\ for \): still found.
+  const w = agyTranscript("conv-win");
+  mkdirSync(join(w, ".."), { recursive: true });
+  const q = "What do you see? [voice · screenshot C:\\Users\\me\\shots\\1.jpg (mouse at 5,6)]";
+  writeFileSync(w, JSON.stringify({ type: "USER_INPUT", content: q }) + "\n");
+  assert.equal(agyConversation(q), "conv-win");
 });
 
 test("terminal: follows a Claude transcript to the end of the turn", async () => {

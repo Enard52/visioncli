@@ -157,8 +157,11 @@ export function agyConversation(marker: string, withinSeconds = 180): string | u
     .map((r) => ({ ...r, m: mtime(r.t) }))
     .filter((r) => r.m > 0 && now - r.m < withinSeconds * 1000)
     .sort((a, b) => b.m - a.m);
+  // The transcript is JSON: a question with a Windows path (C:\Users\…) or quotes is stored escaped, so look for
+  // that form as well as the plain one.
+  const escaped = JSON.stringify(marker).slice(1, -1);
   for (const r of recent) {
-    try { if (readFileSync(r.t, "utf8").includes(marker)) return r.id; } catch {}
+    try { const text = readFileSync(r.t, "utf8"); if (text.includes(marker) || text.includes(escaped)) return r.id; } catch {}
   }
   return undefined;
 }

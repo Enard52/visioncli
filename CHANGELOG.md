@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.3
+
+- **Windows, Gemini in the terminal:** a voice question with a screenshot kept showing "Sending to Gemini…" after Gemini had answered. VisionCLI finds the conversation by the question's text, and Antigravity's transcript stores the screenshot's Windows path with escaped backslashes, so it never matched. It now matches both forms.
+
 ## 0.10.2
 
 - **Assistant CLIs installed later are found (Linux and Windows):** VisionCLI kept the PATH from its first run, so Antigravity (`agy`) or Claude Code installed afterwards stayed "not installed" even after a restart. Now each launch adds the current PATH, Setup and Settings look again every few seconds, and on Windows the saved PATH (where installers write) is read too, along with Antigravity's own folder (`%LOCALAPPDATA%\agy\bin`).
