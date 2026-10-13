@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Staylist · test fixture</title>
+<style>
+  body { font: 15px system-ui, sans-serif; max-width: 640px; margin: 40px auto; color: #222; }
+  label { display: block; margin: 10px 0 4px; }
+  input[type=text], select { font: inherit; padding: 6px 8px; width: 260px; }
+  [role=listbox] { border: 1px solid #ccc; width: 276px; margin: 0; padding: 0; list-style: none; }
+  [role=option] { padding: 6px 8px; cursor: pointer; }
+  [role=option]:hover { background: #eef; }
+  fieldset { margin: 14px 0; }
+  .result { padding: 8px 0; border-bottom: 1px solid #eee; }
+  #detail h1 { margin-top: 0; }
+</style>
+</head>
+<body>
+<main id="search">
+  <h1>Find a stay</h1>
+  <label for="where">Destination</label>
+  <input id="where" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="where-list" autocomplete="off" placeholder="Where to?">
+  <ul id="where-list" role="listbox" hidden></ul>
+
+  <label for="nights">Nights</label>
+  <select id="nights">
+    <option value="1">1 night</option>
+    <option value="2">2 nights</option>
+    <option value="3">3 nights</option>
+    <option value="7">1 week</option>
+  </select>
+
+  <fieldset>
+    <legend>Filters</legend>
+    <label><input type="checkbox" id="pool"> Pool</label>
+    <label><input type="checkbox" id="cancel"> Free cancellation</label>
+    <label><input type="checkbox" id="pets"> Pet friendly</label>
+  </fieldset>
+
+  <button id="go" type="button">Search</button>
+  <p id="status" aria-live="polite"></p>
+  <div id="results"></div>
+</main>
+<section id="detail" hidden>
+  <h1 id="detail-name"></h1>
+  <p id="detail-info"></p>
+  <button type="button" id="back">Back to results</button>
+</section>
+<script>
+  const CITIES = ["Lisbon", "Lyon", "London", "Lima", "Ljubljana"];
+  const STAYS = [
+    { name: "Casa Azul", city: "Lisbon", pool: true, cancel: false, pets: true },
+    { name: "Hotel Miradouro", city: "Lisbon", pool: true, cancel: true, pets: false },
+    { name: "Alfama Rooms", city: "Lisbon", pool: false, cancel: true, pets: true },
+    { name: "Le Petit Lyon", city: "Lyon", pool: false, cancel: true, pets: false },
+    { name: "Thames House", city: "London", pool: true, cancel: true, pets: true },
+  ];
+  const where = document.getElementById("where"), list = document.getElementById("where-list");
+  let chosen = "";
+  where.addEventListener("input", () => {
+    chosen = "";
+    const q = where.value.trim().toLowerCase();
+    setTimeout(() => {
+      const hits = q ? CITIES.filter((c) => c.toLowerCase().startsWith(q.slice(0, 3))) : [];
+      list.innerHTML = hits.map((c) => `<li role="option" tabindex="-1">${c}, ${c === "Lisbon" ? "Portugal" : c === "Lyon" ? "France" : c === "London" ? "United Kingdom" : c === "Lima" ? "Peru" : "Slovenia"}</li>`).join("");
+      list.hidden = !hits.length;
+      where.setAttribute("aria-expanded", String(!!hits.length));
+    }, 80);
+  });
+  list.addEventListener("click", (e) => {
+    const li = e.target.closest("[role=option]");
+    if (!li) return;
+    where.value = li.textContent;
+    chosen = li.textContent.split(",")[0];
+    list.hidden = true;
+    where.setAttribute("aria-expanded", "false");
+  });
+  document.getElementById("go").addEventListener("click", () => {
+    const status = document.getElementById("status"), results = document.getElementById("results");
+    results.innerHTML = "";
+    if (!chosen) { status.textContent = "Pick a destination from the suggestions first."; return; }
+    status.textContent = "Loading…";
+    setTimeout(() => {
+      const f = { pool: pool.checked, cancel: cancel.checked, pets: pets.checked };
+      const hits = STAYS.filter((s) => s.city === chosen && (!f.pool || s.pool) && (!f.cancel || s.cancel) && (!f.pets || s.pets));
+      status.textContent = `${hits.length} stays in ${chosen} for ${nights.selectedOptions[0].text}`;
+      results.innerHTML = hits.map((s) => `<div class="result"><a href="#${encodeURIComponent(s.name)}">${s.name}</a> · ${[s.pool && "pool", s.cancel && "free cancellation", s.pets && "pet friendly"].filter(Boolean).join(", ")}</div>`).join("");
+    }, 300);
+  });
+  document.getElementById("results").addEventListener("click", (e) => {
+    const a = e.target.closest("a");
+    if (!a) return;
+    e.preventDefault();
+    document.getElementById("search").hidden = true;
+    document.getElementById("detail").hidden = false;
+    document.getElementById("detail-name").textContent = a.textContent;
+    document.getElementById("detail-info").textContent = `You are viewing ${a.textContent}, ${chosen}, ${nights.selectedOptions[0].text}.`;
+    document.title = `${a.textContent} · Staylist`;
+  });
+  document.getElementById("back").addEventListener("click", () => {
+    document.getElementById("search").hidden = false;
+    document.getElementById("detail").hidden = true;
+    document.title = "Staylist · test fixture";
+  });
+</script>
+</body>
+</html>

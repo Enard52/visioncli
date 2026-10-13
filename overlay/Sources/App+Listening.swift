@@ -17,9 +17,9 @@ extension AppDelegate {
         case (.talk, false), (.point, false), (.screen, false):
             keysReleased()
         case (.dismiss, true): dismiss()
-        case (.pin, true): togglePin()
-        case (.open, true): openFirstReference()
-        case (.allow, true): approve(true, always: false)
+        case (.pin, true): modifierHold.cancel(); togglePin()
+        case (.open, true): modifierHold.cancel(); openFirstReference()
+        case (.allow, true): modifierHold.cancel(); approve(true, always: false)
         default: break
         }
     }

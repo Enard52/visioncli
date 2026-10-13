@@ -22,6 +22,8 @@ extension AppDelegate {
     }
 
     var frozen: Bool { state.pinned || state.phase == .approval }
+    /// Answers sit in the corner rather than under the pointer, so they take the mouse: scroll, click links, buttons.
+    var takesMouse: Bool { frozen || [.answering, .done, .error].contains(state.phase) }
 
     func set(_ phase: Phase) {
         state.phase = phase
@@ -49,8 +51,8 @@ extension AppDelegate {
         hotkeys.set(.pin, [.answering, .done, .error].contains(phase))
         hotkeys.set(.open, phase == .done)
         hotkeys.set(.allow, phase == .approval)
-        panel.interactive = frozen
-        panel.ignoresMouseEvents = !frozen
+        panel.interactive = takesMouse
+        panel.ignoresMouseEvents = !takesMouse
         layoutDirtyUntil = Date().addingTimeInterval(0.3)
         lastLayout = .distantPast // place it for the new phase right away
         if followTimer == nil {
@@ -110,6 +112,8 @@ extension AppDelegate {
         guard !state.pinned else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.state.pinned else { return }
+            // Still reading (pointer on the bubble): check again shortly.
+            if self.panel.frame.contains(NSEvent.mouseLocation) { self.scheduleHide(after: 5); return }
             self.set(.hidden)
             self.highlight.hide()
         }

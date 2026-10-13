@@ -96,7 +96,8 @@ final class ModifierHold {
         DispatchQueue.main.asyncAfter(deadline: .now() + (immediate() ? 0 : 0.3), execute: work)
     }
 
-    private func cancel() {
+    /// A ⌥ chord (⌥P, ⌥O, ⌥↩) was pressed: the ⌥ was part of a shortcut, not the start of a hold.
+    func cancel() {
         pending?.cancel()
         pending = nil
         candidate = nil

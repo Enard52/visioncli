@@ -1,0 +1,199 @@
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { createConnection, createServer, type Socket } from "node:net";
+import { join } from "node:path";
+import * as browser from "../browser.js";
+import { CDP, SETUP_HELP, wsUrl } from "../cdp.js";
+import { CONFIG_DIR } from "../config.js";
+import { apiKey, type Answer } from "../quick.js";
+import { type AgentEvent, type Driver, type Jev, runTask, StalePage } from "./agent.js";
+
+// browserd: one long-lived process that holds the DevTools connection to the user's browser, so Chrome's
+// "Allow remote debugging?" prompt is answered once, not per voice command. `visioncli browse <goal>` connects over a
+// Unix socket (starting browserd if needed), sends the goal and streams the agent's steps back as JSON lines.
+// Closing the client socket (Esc in the app kills it) stops the task. browserd exits after 30 idle minutes.
+
+export const SOCKET = join(CONFIG_DIR, "browserd.sock");
+const IDLE_MS = 30 * 60_000;
+
+export type BrowseEvent = AgentEvent | { type: "status"; message: string };
+
+const jevClient = (key: string): Jev => async (state, questions) => {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch("https://api.typesafe.ai/v1/systemone", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: "jev-latest", state, questions }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if ([429, 503, 529].includes(res.status) && attempt < 2) { await new Promise((r) => setTimeout(r, 400 * 2 ** attempt)); continue; }
+    if (!res.ok) throw new Error(`TypeSafe ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    return (await res.json()).answers as Record<string, Answer>;
+  }
+};
+
+/** A Driver over one attached tab (flat CDP session). */
+export function cdpDriver(cdp: CDP, sessionId: string): Driver {
+  const send = (method: string, params: Record<string, unknown> = {}) => cdp.send(method, params, sessionId);
+  return {
+    async evaluate(expression, awaitPromise = false) {
+      let r: any;
+      try {
+        r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise });
+      } catch (err) {
+        // The document went away mid-call (navigation): the caller observes again.
+        if (/context|navigat|destroyed|detached/i.test((err as Error).message)) throw new StalePage((err as Error).message);
+        throw err;
+      }
+      if (r.exceptionDetails) throw new StalePage("The document changed during evaluation.");
+      return r.result?.value;
+    },
+    async click(x, y) {
+      await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        await send("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
+      }
+    },
+    async replaceText(text) {
+      await send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 4, commands: ["selectAll"] });
+      await send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 4 });
+      await send("Input.insertText", { text });
+    },
+    async wheel(deltaY) {
+      const [x, y] = (await this.evaluate<[number, number]>("[innerWidth / 2, innerHeight / 2]")) ?? [400, 400];
+      await send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY });
+    },
+  };
+}
+
+/** The tab the user is looking at, as a CDP target: matched by URL (then title) to the browser's active tab. */
+export async function activeTarget(cdp: CDP, b: browser.BrowserName): Promise<string> {
+  const { targetInfos } = await cdp.send<{ targetInfos: { targetId: string; type: string; url: string; title: string }[] }>("Target.getTargets");
+  const pages = targetInfos.filter((t) => t.type === "page" && !t.url.startsWith("devtools://"));
+  const active = await browser.activeTab(b).catch(() => undefined);
+  const match = active && (
+    pages.find((p) => p.url === active.url) ??
+    pages.find((p) => browser.sameUrl(p.url, active.url)) ??
+    pages.find((p) => p.title === active.title));
+  if (!match) throw new Error(active ? "Couldn't find the active tab over DevTools." : "No active browser tab.");
+  return match.targetId;
+}
+
+export async function serve() {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  if (existsSync(SOCKET)) {
+    // Another browserd answering? Then this one isn't needed.
+    const alive = await new Promise<boolean>((r) => {
+      const s = createConnection(SOCKET, () => { s.destroy(); r(true); });
+      s.on("error", () => r(false));
+    });
+    if (alive) return;
+    try { unlinkSync(SOCKET); } catch {}
+  }
+
+  let cdp: CDP | undefined;
+  let cdpBrowser = "";
+  let running: AbortController | undefined;
+  let idle: NodeJS.Timeout | undefined;
+  const touch = () => { clearTimeout(idle); idle = setTimeout(() => { cdp?.close(); process.exit(0); }, IDLE_MS); };
+  touch();
+
+  async function connect(b: browser.BrowserName, emit: (e: BrowseEvent) => void): Promise<CDP> {
+    if (cdp && !cdp.closed && cdpBrowser === b) return cdp;
+    cdp?.close();
+    const url = wsUrl(b);
+    if (!url) throw new Error(`Remote debugging is off in ${b}. ${SETUP_HELP}`);
+    emit({ type: "status", message: `Connecting to ${b}… click Allow if it asks about remote debugging.` });
+    cdp = await CDP.connect(url, 60_000);
+    cdpBrowser = b;
+    return cdp;
+  }
+
+  async function handle(sock: Socket, goal: string) {
+    running?.abort();
+    const ctl = new AbortController();
+    running = ctl;
+    sock.on("close", () => ctl.abort());
+    const emit = (e: BrowseEvent) => { if (!sock.destroyed) sock.write(JSON.stringify(e) + "\n"); };
+    let sessionId: string | undefined;
+    let c: CDP | undefined;
+    try {
+      const key = apiKey();
+      if (!key) throw new Error("No TypeSafe API key.");
+      const { browser: b } = await browser.pickWithFront();
+      c = await connect(b, emit);
+      const targetId = await activeTarget(c, b);
+      ({ sessionId } = await c.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true }));
+      await runTask(goal, cdpDriver(c, sessionId!), jevClient(key), emit, ctl.signal);
+    } catch (err) {
+      emit({ type: "end", status: "error", message: (err as Error).message, steps: 0, ms: 0, decisions: 0 });
+    } finally {
+      if (sessionId && c && !c.closed) c.send("Target.detachFromTarget", { sessionId }).catch(() => {});
+      if (running === ctl) running = undefined;
+      touch();
+      sock.end();
+    }
+  }
+
+  const server = createServer((sock) => {
+    touch();
+    let buf = "";
+    sock.on("data", (d) => {
+      buf += d;
+      const nl = buf.indexOf("\n");
+      if (nl < 0) return;
+      const line = buf.slice(0, nl);
+      buf = "";
+      let goal = "";
+      try { goal = String(JSON.parse(line).goal ?? "").trim(); } catch {}
+      if (!goal) { sock.end(JSON.stringify({ type: "end", status: "error", message: "No goal.", steps: 0, ms: 0, decisions: 0 }) + "\n"); return; }
+      void handle(sock, goal);
+    });
+    sock.on("error", () => {});
+  });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(SOCKET, resolve); });
+  const cleanup = () => { try { unlinkSync(SOCKET); } catch {} process.exit(0); };
+  process.on("SIGTERM", cleanup);
+  process.on("SIGINT", cleanup);
+  await new Promise(() => {}); // serve until idle
+}
+
+function dial(): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    const s = createConnection(SOCKET, () => resolve(s));
+    s.once("error", reject);
+  });
+}
+
+/** Run a browser task through browserd (started on demand), calling `onEvent` for each step; resolves at the end. */
+export async function browse(goal: string, onEvent: (e: BrowseEvent) => void): Promise<BrowseEvent | undefined> {
+  let sock: Socket | undefined;
+  try {
+    sock = await dial();
+  } catch {
+    const child = spawn(process.execPath, [process.argv[1], "browserd"], { detached: true, stdio: "ignore" });
+    child.unref();
+    for (let i = 0; i < 50 && !sock; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      sock = await dial().catch(() => undefined);
+    }
+    if (!sock) throw new Error("Couldn't start the browser agent.");
+  }
+  const s = sock;
+  return new Promise((resolve) => {
+    let last: BrowseEvent | undefined;
+    let buf = "";
+    s.on("data", (d) => {
+      buf += d;
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        try { last = JSON.parse(line); onEvent(last!); } catch {}
+      }
+    });
+    s.on("close", () => resolve(last));
+    s.on("error", () => resolve(last));
+    s.write(JSON.stringify({ goal }) + "\n");
+  });
+}

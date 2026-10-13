@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0
+
+- **Multi-step browser tasks:** say a task for the page in front, like "find a stay in Lisbon for 3 nights with a pool and free cancellation, then open it", and a Jev agent does it step by step: it reads the page, one Jev request picks the next operation (click, type, choose from a dropdown, scroll, wait, done) and its target, and it acts, about 0.3–0.5 s per step. Each step shows in the bubble as it happens; Esc stops it. Text it types comes from your own words. It never confirms a purchase, payment, booking, deletion or message unless you asked for that step, and stops when it needs a password or personal details. Works with Chrome (and Brave) over DevTools: tick *Allow remote debugging* at chrome://inspect/#remote-debugging and click Allow when it connects. Design after browser-use/jev-ultrafast.
+- **Scrollable answers:** the answer bubble scrolls in place with a visible scroll bar on the right, and links work without pinning. The ⌥ shortcut hint is replaced by buttons (copy, read aloud, history, open file, pin, close), and the bubble stays open while the pointer is on it.
+- **Fix:** ⌥P / ⌥O could also start listening, since ⌥ alone is the talk key.
+
 ## 0.7.9
 
 - **Settings window:** the nested Settings menus are replaced by one window in the style of macOS System Settings (VisionCLI menu → Settings…, or ⌘,). Sections: General, Assistant, Voice, Computer Control, Autopilot, Integrations and Advanced; changes apply immediately. Voices play a sample when picked, downloads show progress, the speaker has a Test button, and Integrations connects VisionCLI's tools to Claude Code, Antigravity and Gemini CLI without pop-ups.

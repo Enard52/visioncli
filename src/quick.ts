@@ -13,6 +13,7 @@ export interface QuickResult {
   confidence?: number;
   ms?: number;
   reason?: string;        // why it fell through to Claude
+  task?: boolean;         // a multi-step task on the current page: run `visioncli browse` (the Jev agent) instead
 }
 
 const INTENTS: Record<string, string> = {
@@ -31,9 +32,12 @@ const INTENTS: Record<string, string> = {
   reload: "Reload / refresh the current page.",
   close_tab: "Close the current browser tab.",
   new_tab: "Open a new empty browser tab.",
+  browser_task:
+    "Do a multi-step task on the web page that is open in front, e.g. fill in a form, search on this site and open a result, " +
+    "set filters, pick options, add something to a cart. Several clicks or typing on the page, all said in the command.",
   ask_claude:
-    "Anything else: a question about what is on screen or in the code, an explanation, a code change, typing or filling in text, " +
-    "running commands, or a multi-step task. Also any request that is not clearly one simple browser action.",
+    "Anything else: a question about what is on screen or in the code, an explanation, a code change, typing outside a web page, " +
+    "running commands, or a task outside the open web page. Also any request that is not clearly a browser action.",
 };
 
 export function apiKey(): string | undefined {
@@ -80,12 +84,14 @@ export const MIN_TARGET = 0.55;
 export const MAX_ELEMENTS = 60; // page elements offered to Jev (in page order): enough for a screenful, keeps the request fast
 
 /** The Jev questions: the intent, plus which open tab / page element is meant when there are candidates. */
-export function quickQuestions(tabList: browser.Tab[], els: browser.Element[]): Record<string, unknown> {
+export function quickQuestions(tabList: browser.Tab[], els: browser.Element[], pageTasks = false): Record<string, unknown> {
+  // Multi-step page tasks only make sense with the browser in front (they act on the page you're looking at).
+  const criteria = pageTasks ? INTENTS : Object.fromEntries(Object.entries(INTENTS).filter(([k]) => k !== "browser_task"));
   const questions: Record<string, unknown> = {
     intent: {
       type: "choice",
       instructions: "What does the user want done with `spoken_command`? Pick the single matching action.",
-      criteria: INTENTS,
+      criteria,
     },
   };
   if (tabList.length) {
@@ -185,7 +191,7 @@ export async function quick(utterance: string): Promise<QuickResult> {
     current_tab: active ? { title: active.title.slice(0, 80), url: active.url.slice(0, 100) } : null,
   };
 
-  const questions = quickQuestions(tabList, els);
+  const questions = quickQuestions(tabList, els, inFront);
 
   let a: Record<string, Answer>;
   try {
@@ -197,6 +203,7 @@ export async function quick(utterance: string): Promise<QuickResult> {
   const base = { intent, confidence: conf, ms: 0 };
   const fallthrough = (reason: string): QuickResult => ({ handled: false, ...base, reason, ms: Date.now() - started });
   if (why) return fallthrough(why);
+  if (intent === "browser_task") return { handled: false, ...base, task: true, reason: "browser task", ms: Date.now() - started };
   if (process.env.VISIONCLI_QUICK_DRY === "1") {
     const target = intent === "switch_tab" ? a.tab : intent === "click" ? a.element : undefined;
     const label = target?.choice && target.choice !== "none"

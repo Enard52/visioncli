@@ -70,3 +70,33 @@ enum Vocabulary {
         return custom.components(separatedBy: CharacterSet(charactersIn: ",\n")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 }
+
+/// One line per executed step of a browser task, for the bubble.
+enum BrowserTaskText {
+    static func line(_ step: [String: Any]) -> String? {
+        let label = step["label"] as? String ?? ""
+        switch step["kind"] as? String {
+        case "fill": return "Typed “\(step["text"] as? String ?? "")” into \(label)"
+        case "click": return "Clicked \(label)"
+        case "select":
+            let parts = label.components(separatedBy: " → ")
+            return parts.count > 1 ? "Chose \(parts.dropFirst().joined(separator: " → ")) in \(parts[0])" : "Chose \(label)"
+        case "scroll": return label
+        case "wait": return "Waited for the page"
+        default: return nil // done / blocked: the summary says it
+        }
+    }
+
+    static func summary(status: String, message: String, steps: Int, ms: Int) -> String {
+        let secs = String(format: "%.1f", Double(ms) / 1000)
+        switch status {
+        case "done": return "Done in \(secs) s (\(steps) step\(steps == 1 ? "" : "s"))."
+        case "stopped": return "Stopped."
+        default: return message.isEmpty ? "I couldn't finish that." : message
+        }
+    }
+
+    static func body(header: String, lines: [String]) -> String {
+        ([header] + (lines.isEmpty ? [] : [""] + lines.enumerated().map { "\($0.offset + 1). \($0.element)" })).joined(separator: "\n")
+    }
+}

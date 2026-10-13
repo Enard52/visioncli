@@ -22,6 +22,7 @@ by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or
 - **Notices crashes.** When your app (Mac or Simulator) crashes, VisionCLI offers to explain it, and the next question already knows which crash report to read.
 - **Points and draws.** Answers point at things on your real screen (boxes, circles, arrows, numbered steps) and can include **Mermaid diagrams** rendered in the bubble.
 - **Fast browser control.** "Open the Stripe tab", "click sign in", "pause the video" run in under a second (via TypeSafe Jev), with a visible AI cursor. Forms, dropdowns, toggles and framed portals work through the page itself, without opening stray tabs.
+- **Multi-step browser tasks.** "Find a stay in Lisbon with a pool and free cancellation and open it": a Jev agent works through the page in front one step at a time (type, click, pick, scroll), about 0.3–0.5 s per step, with each step shown in the bubble. Needs Chrome's *Allow remote debugging* (chrome://inspect/#remote-debugging) and a click on Allow when it first connects.
 - **Knows your data.** Read-only database questions ("how are payments and orders related?") using your project's `.env`.
 
 ## Install
@@ -67,7 +68,7 @@ If something doesn't work, check System Settings → Privacy & Security, and Vis
 | **Wispr Flow** | Use your own Wispr Flow account: hold ⌥ and speak as usual | Have Flow running with its push-to-talk key on fn, then pick **Wispr Flow** in Speech Recognition |
 | **Whisper** | More accurate transcription of names and jargon (~0.7s, local) | VisionCLI menu → Settings… → Voice → Speech recognition → Whisper **Download…** (installs `whisper-cpp` via Homebrew, then downloads the ~490 MB model) |
 | **Kokoro** | Natural voices for spoken answers (local) | VisionCLI menu → Settings… → Voice → Natural voices **Download…** (installs [`uv`](https://docs.astral.sh/uv/) if needed, then downloads ~350 MB) |
-| **TypeSafe Jev** | Instant browser commands | add your key via VisionCLI menu → Settings… → Integrations → *Edit API Keys…*, or set `TYPESAFE_API_KEY` |
+| **TypeSafe Jev** | Instant browser commands and multi-step browser tasks | add your key via VisionCLI menu → Settings… → Integrations → *Edit API Keys…*, or set `TYPESAFE_API_KEY` |
 | **Browser control** | Click, scroll and read pages | in Chrome or Brave: **View → Developer → Allow JavaScript from Apple Events** |
 
 Models are saved in `~/Library/Application Support/visioncli/models/`. Whisper and Kokoro models you already have from other tools (e.g. in `~/.cache/whisper`) are picked up automatically. Without them, VisionCLI uses Apple's on-device speech recognition and the system voice.
@@ -172,7 +173,7 @@ VisionCLI menu → Settings… → Integrations → *Edit API Keys…* opens `~/
 ## Privacy
 
 - Screenshots and questions go to the assistant you picked (Claude Code or Antigravity), through your own login.
-- With Jev enabled, quick commands send your spoken words, open tab titles and URLs, and visible link/button text to api.typesafe.ai. Turn it off in Settings.
+- With Jev enabled, quick commands send your spoken words, open tab titles and URLs, and visible link/button text to api.typesafe.ai. Browser tasks also send the visible text, controls and field values of the page in front (never password fields). Turn it off in Settings.
 - Computer control runs locally: the MCP server talks to VisionCLI.app over 127.0.0.1 with a per-launch secret token (in a file only you can read). Nothing is clicked or typed unless an assistant asks and you allow it (or chose *Allow All Actions*).
 - Whisper and Kokoro run locally. History is stored in `~/Library/Application Support/visioncli/`.
 

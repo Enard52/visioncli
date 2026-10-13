@@ -26,6 +26,7 @@ extension AppDelegate {
             return
         }
         if state.phase == .approval { approve(false, always: false); return }
+        browseProc?.terminate() // stops a browser task (browserd stops when this client goes away)
         if selector.isActive { selector.cancel() }
         flow.cancel()
         keyPoll?.invalidate()
@@ -39,8 +40,8 @@ extension AppDelegate {
     func togglePin() {
         guard [.answering, .done, .error].contains(state.phase) else { return }
         state.pinned.toggle()
-        panel.interactive = frozen
-        panel.ignoresMouseEvents = !frozen
+        panel.interactive = takesMouse
+        panel.ignoresMouseEvents = !takesMouse
         if state.pinned {
             hideWork?.cancel()
             panel.makeKey()

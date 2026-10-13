@@ -22,6 +22,7 @@ extension AppDelegate {
         let started = Date()
         runQuick(text, timeout: 3) { [weak self] result in
             guard let self, self.state.phase == .thinking, self.state.question == text else { return }
+            if result?["task"] as? Bool == true { self.runBrowserTask(text); return } // several steps: the Jev agent
             let handled = result?["handled"] as? Bool ?? false
             log("quick: \(handled ? "handled" : "→ claude") intent=\(result?["intent"] ?? "-") conf=\(result?["confidence"] ?? "-") \(result?["reason"] ?? "") \(Int(Date().timeIntervalSince(started) * 1000))ms")
             guard handled, let message = result?["message"] as? String else { self.captureAndAsk(text); return }

@@ -106,6 +106,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, Bubble
     /// bubble and spoken, even with Speak Answers off. Waits while the user is in the middle of a question.
     var pendingAnnouncements: [String] = []
     var quickProc: Process?
+    /// A running `visioncli browse` (multi-step browser task); Esc terminates it.
+    var browseProc: Process?
     /// Smart routing state: the lane chosen for the next question, and the last question/lane per project (follow-ups).
     var nextLane: Lane = .strong
     var lastLane: [String: (lane: Lane, at: Date, question: String)] = [:]

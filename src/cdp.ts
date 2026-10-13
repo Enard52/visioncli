@@ -1,0 +1,96 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+// A minimal Chrome DevTools Protocol client for the user's own browser (no extension, no relaunch).
+// Chrome 144+: tick "Allow remote debugging for this browser instance" once at chrome://inspect/#remote-debugging;
+// the browser then writes DevToolsActivePort into its profile and asks "Allow remote debugging?" for each new
+// connection. That's why one long-lived process (browserd) holds the socket instead of connecting per command.
+
+const PROFILES: Record<string, string> = {
+  "Google Chrome": "Library/Application Support/Google/Chrome",
+  "Brave Browser": "Library/Application Support/BraveSoftware/Brave-Browser",
+};
+
+export const SETUP_HELP =
+  'Open chrome://inspect/#remote-debugging in Chrome, tick "Allow remote debugging for this browser instance", ' +
+  'then click Allow when Chrome asks "Allow remote debugging?".';
+
+/** The browser-level DevTools WebSocket URL a running browser advertises, if remote debugging is on. */
+export function wsUrl(browser: string): string | undefined {
+  const dir = PROFILES[browser];
+  if (!dir) return undefined;
+  try {
+    const [port, path] = readFileSync(join(homedir(), dir, "DevToolsActivePort"), "utf8").split("\n").map((s) => s.trim());
+    return port && path ? `ws://127.0.0.1:${port}${path}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type Pending = { resolve: (v: any) => void; reject: (e: Error) => void };
+
+export class CDP {
+  private ws!: WebSocket;
+  private next = 1;
+  private pending = new Map<number, Pending>();
+  private listeners = new Set<(method: string, params: any, sessionId?: string) => void>();
+  closed = false;
+
+  /** Connects; resolves once Chrome accepted (the user clicked Allow, or the browser was already trusted). */
+  static async connect(url: string, timeoutMs = 60_000): Promise<CDP> {
+    const c = new CDP();
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(url);
+      const timer = setTimeout(() => { ws.close(); reject(new Error("Chrome didn't accept the connection (Allow remote debugging?).")); }, timeoutMs);
+      ws.onopen = () => { clearTimeout(timer); resolve(); };
+      ws.onerror = () => { clearTimeout(timer); reject(new Error(`Couldn't connect to the browser. ${SETUP_HELP}`)); };
+      c.ws = ws;
+    });
+    c.ws.onmessage = (ev) => c.receive(String(ev.data));
+    c.ws.onclose = () => {
+      c.closed = true;
+      for (const p of c.pending.values()) p.reject(new Error("Browser connection closed"));
+      c.pending.clear();
+    };
+    // Chrome may not answer the first command until the user clicks Allow; this proves the session is usable.
+    await c.send("Target.getTargets", {}, undefined, timeoutMs);
+    return c;
+  }
+
+  private receive(raw: string) {
+    const msg = JSON.parse(raw);
+    if (msg.id !== undefined) {
+      const p = this.pending.get(msg.id);
+      if (!p) return;
+      this.pending.delete(msg.id);
+      if (msg.error) p.reject(new Error(msg.error.message ?? "CDP error"));
+      else p.resolve(msg.result);
+    } else if (msg.method) {
+      for (const l of this.listeners) l(msg.method, msg.params, msg.sessionId);
+    }
+  }
+
+  send<T = any>(method: string, params: Record<string, unknown> = {}, sessionId?: string, timeoutMs = 15_000): Promise<T> {
+    if (this.closed) return Promise.reject(new Error("Browser connection closed"));
+    const id = this.next++;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${method} timed out`)); }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (v) => { clearTimeout(timer); resolve(v); },
+        reject: (e) => { clearTimeout(timer); reject(e); },
+      });
+      this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    });
+  }
+
+  on(listener: (method: string, params: any, sessionId?: string) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  close() {
+    this.closed = true;
+    try { this.ws.close(); } catch {}
+  }
+}

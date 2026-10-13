@@ -81,8 +81,26 @@ func testQuickCommands() {
               "open the file and then tell me why the tests in this folder fail on CI every time", "",
               "the button", "hello", "please", "is it open"]
     for t in no { check(!QuickCommandFilter.matches(t), "rejects \"\(t)\"") }
-    check(QuickCommandFilter.matches("open a b c d e f g h i j k"), "12 words is still short")
-    check(!QuickCommandFilter.matches("open a b c d e f g h i j k l"), "13 words is too long")
+    check(QuickCommandFilter.matches("open a b c d e f g h i j k l m n o p q r s"), "20 words is still short")
+    check(!QuickCommandFilter.matches("open a b c d e f g h i j k l m n o p q r s t"), "21 words is too long")
+    check(QuickCommandFilter.matches("find a stay in Lisbon for 3 nights with a pool and free cancellation, then open it"), "a browser task")
+    check(!QuickCommandFilter.matches("open the settings and explain the timeout"), "question words go to the assistant")
+}
+
+// MARK: - BrowserTaskText
+
+func testBrowserTaskText() {
+    eq(BrowserTaskText.line(["kind": "fill", "label": "Destination", "text": "Lisbon"]), "Typed “Lisbon” into Destination", "typing")
+    eq(BrowserTaskText.line(["kind": "click", "label": "Search"]), "Clicked Search", "click")
+    eq(BrowserTaskText.line(["kind": "select", "label": "Nights → 3 nights"]), "Chose 3 nights in Nights", "dropdown")
+    eq(BrowserTaskText.line(["kind": "scroll", "label": "Scroll down"]), "Scroll down", "scroll")
+    check(BrowserTaskText.line(["kind": "done", "label": "Done"]) == nil, "done has no step line")
+    eq(BrowserTaskText.summary(status: "done", message: "Done.", steps: 7, ms: 3955), "Done in 4.0 s (7 steps).", "done summary")
+    eq(BrowserTaskText.summary(status: "done", message: "", steps: 1, ms: 900), "Done in 0.9 s (1 step).", "one step")
+    eq(BrowserTaskText.summary(status: "blocked", message: "I don't know what to type into \"Email\".", steps: 2, ms: 1),
+       "I don't know what to type into \"Email\".", "blocked shows the reason")
+    eq(BrowserTaskText.body(header: "Done.", lines: ["Clicked A", "Clicked B"]), "Done.\n\n1. Clicked A\n2. Clicked B", "numbered steps")
+    eq(BrowserTaskText.body(header: "Working…", lines: []), "Working…", "no steps yet")
 }
 
 // MARK: - SlashCommand
@@ -228,6 +246,7 @@ testLineSplitter()
 testMarkup()
 testDiagramText()
 testMenuLabels()
+testBrowserTaskText()
 
 print("\(checks - failures)/\(checks) checks passed")
 if failures > 0 {

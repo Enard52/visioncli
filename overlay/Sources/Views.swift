@@ -57,6 +57,7 @@ protocol BubbleActions: AnyObject {
     func showHistory()
     func dismiss()
     func togglePin()
+    func openFirstReference()
     func approve(_ allow: Bool, always: Bool)
     func openLink(_ url: URL)
 }
@@ -237,7 +238,10 @@ struct AnswerBubble: View {
             if !s.toast.isEmpty {
                 Text(s.toast).font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
             }
-            IconButton(symbol: "pin.slash", help: "Unpin (⌥P)") { actions?.togglePin() }
+            if Markup.firstFileRef(s.answer) != nil {
+                IconButton(symbol: "arrow.up.forward.square", help: "Open file (⌥O)") { actions?.openFirstReference() }
+            }
+            IconButton(symbol: s.pinned ? "pin.slash" : "pin", help: s.pinned ? "Unpin (⌥P)" : "Pin (⌥P)", active: s.pinned) { actions?.togglePin() }
             IconButton(symbol: "xmark", help: "Close (esc)") { actions?.dismiss() }
         }
     }
@@ -246,21 +250,20 @@ struct AnswerBubble: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 header
-                if s.pinned {
-                    ScrollView { answerText.textSelection(.enabled) }
-                        .frame(maxHeight: 460)
-                        .environment(\.openURL, OpenURLAction { url in actions?.openLink(url); return .handled })
+                // Scrolls in place (the panel takes the mouse while an answer shows); no need to pin first.
+                // Full bubble width so the scroll bar sits on the right edge, with room beside the text for it.
+                ScrollView(.vertical, showsIndicators: true) {
+                    answerText.textSelection(.enabled)
+                        .padding(.trailing, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                    .scrollIndicators(.visible)
+                    .frame(maxWidth: .infinity, maxHeight: s.pinned ? 460 : 560)
+                    .padding(.trailing, -10)
+                    .environment(\.openURL, OpenURLAction { url in actions?.openLink(url); return .handled })
+                if s.pinned || s.phase == .done || s.phase == .error {
                     Divider().overlay(Color.white.opacity(0.08))
                     toolbar
-                } else {
-                    answerText
-                        .frame(maxHeight: 560, alignment: .top)
-                        .clipped()
-                    if s.phase == .done || s.phase == .error {
-                        Text(s.toast.isEmpty ? "esc dismiss · ⌥P pin to scroll & click files · ⌥O open file · ⌥space follow-up" : s.toast)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.32))
-                    }
                 }
             }
             .padding(.horizontal, 14)

@@ -12,7 +12,14 @@ if (cmd) {
     if (cmd === "voice") console.log(await (await import("./voice.js")).startVoice(rest[0] ?? process.cwd()));
     else if (cmd === "install") console.log(await (await import("./voice.js")).install());
     else if (cmd === "quick") console.log(JSON.stringify(await (await import("./quick.js")).quick(rest.join(" "))));
-    else if (cmd === "warm") console.log(await (await import("./quick.js")).warm());
+    else if (cmd === "browse") {
+      // visioncli browse <goal>: a multi-step task on the current tab (Jev agent via browserd); one JSON event per line
+      const { browse } = await import("./agent/browserd.js");
+      const last = await browse(rest.join(" "), (e) => process.stdout.write(JSON.stringify(e) + "\n"));
+      process.exit(last?.type === "end" && last.status === "done" ? 0 : 1);
+    }
+    else if (cmd === "browserd") { await (await import("./agent/browserd.js")).serve(); process.exit(0); }
+    else if (cmd === "warm")console.log(await (await import("./quick.js")).warm());
     else if (cmd === "route") {
       // visioncli route '<json RouteInput>': which model should answer, and (optionally) project or general (one Jev request)
       console.log(JSON.stringify(await (await import("./route.js")).route(JSON.parse(rest.join(" ")))));
@@ -40,7 +47,7 @@ if (cmd) {
       console.log(typeof out === "string" ? out : JSON.stringify(out, null, 2));
     }
     else {
-      console.error("Usage: visioncli [voice [dir] | install | quick <command> | route <question> | warm | browser <sub>]");
+      console.error("Usage: visioncli [voice [dir] | install | quick <command> | browse <goal> | route <question> | warm | browser <sub>]");
       process.exit(2);
     }
     process.exit(0);

@@ -5,7 +5,8 @@ import Foundation
 /// Which model answers a bubble-mode question: the small fast one or the chosen (strong) one. See smart routing.
 enum Lane: String { case fast, strong }
 
-/// Quick (Jev) commands are short browser actions: "open github", "click sign in", "scroll down". Checking that
+/// Quick (Jev) commands are browser actions: "open github", "click sign in", "scroll down", or a multi-step task on the
+/// open page ("find a stay in Lisbon with a pool and open it", run by the Jev agent). Checking that
 /// locally skips a ~1s classifier round trip for everything else, which goes straight to the assistant.
 enum QuickCommandFilter {
     /// Polite or filler openings dropped before looking at the verb.
@@ -17,6 +18,8 @@ enum QuickCommandFilter {
                                         "take", "visit", "launch", "navigate", "select", "choose", "fill", "enter", "submit",
                                         "zoom", "new", "look", "watch", "download", "sign", "log"]
 
+    static let questionWords: Set<Substring> = ["why", "how", "what", "explain", "tell", "where", "when", "which"]
+
     static func matches(_ text: String) -> Bool {
         var t = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         if text.trimmingCharacters(in: .whitespaces).hasSuffix("?") { return false }
@@ -24,7 +27,9 @@ enum QuickCommandFilter {
             t = String(t.dropFirst(prefix.count))
         }
         let words = t.split(separator: " ")
-        guard let first = words.first, words.count <= 12 else { return false }
+        // Up to 20 words leaves room for a browser task ("find a stay in Lisbon with a pool and open it");
+        // question words mean it's for the assistant, however it starts.
+        guard let first = words.first, words.count <= 20, !words.contains(where: { questionWords.contains($0) }) else { return false }
         return verbs.contains(first)
     }
 }
