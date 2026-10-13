@@ -51,7 +51,9 @@ export function windowsExtraPath(env: NodeJS.ProcessEnv = process.env, h = homed
   const programFiles = env.ProgramFiles || "C:\\Program Files";
   const out = [j(h, ".local", "bin"), j(appData, "npm"), j(programFiles, "nodejs"), j(local, "Programs", "nodejs"),
     j(local, "Volta", "bin"), j(h, "scoop", "shims"), j(h, ".bun", "bin"), j(h, ".cargo", "bin"), j(local, "Microsoft", "WindowsApps"),
-    j(programFiles, "WezTerm")];
+    j(programFiles, "WezTerm"),
+    // Antigravity's installer (antigravity.google/cli/install.cmd) puts agy.exe here
+    j(local, "agy", "bin")];
   if (env.NVM_SYMLINK) out.push(env.NVM_SYMLINK);
   return out;
 }
