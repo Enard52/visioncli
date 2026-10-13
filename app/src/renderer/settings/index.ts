@@ -74,7 +74,7 @@ const PAGES: Record<SettingsSection, (s: SettingsSnapshot) => Child> = {
     card(null, null, [
       switchRow("Start at login", "Opens VisionCLI when you log in.", s.startAtLogin, (on) => act("setStartAtLogin", on)),
       switchRow("Screenshot every question",
-        "Sends a screenshot of the window with every voice question (uses more tokens). Off: only when you hold Alt+Super or drag a box; the assistant can still take a look itself.",
+        `Sends a screenshot of the window with every voice question (uses more tokens). Off: only when you hold Alt+${navigator.userAgent.includes("Windows") ? "Win" : "Super"} or drag a box; the assistant can still take a look itself.`,
         s.screenshotEvery, (on) => act("setScreenshotEvery", on)),
     ]),
     card("Updates", null, [

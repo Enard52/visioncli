@@ -98,6 +98,10 @@ function choice(selected: boolean, title: string, detail: string, action: () => 
     h("div", null, h("div.choice-title", null, title), h("div.choice-detail", null, detail)));
 }
 
+// Windows calls Super the Windows key, and any app may read the keyboard there (no input group).
+const WINDOWS = navigator.userAgent.includes("Windows");
+const SUPER = WINDOWS ? "Win" : "Super";
+
 function page(): Child {
   switch (step) {
     case "welcome":
@@ -105,7 +109,7 @@ function page(): Child {
         header("Welcome to VisionCLI", "Ask Claude about anything on your screen, out loud. This takes about a minute."),
         h("div.keys-list", null,
           keyRow("Alt", "Hold Alt, ask, let go: the answer appears in the corner."),
-          keyRow("Alt Super", "Hold Alt and Super to include a screenshot of the window."),
+          keyRow(`Alt ${SUPER}`, `Hold Alt and ${SUPER} to include a screenshot of the window.`),
           keyRow("Alt Shift Space", "Drag a box around what you mean.")),
         h("div.mascot", null, h("img", { src: "../../assets/mascot/peek.png", alt: "", onerror: (e: Event) => (e.target as HTMLElement).remove() })),
       ];
@@ -114,7 +118,7 @@ function page(): Child {
         h("span", null, "Microphone"),
         selectDevice()))];
     case "keyboard":
-      return [header("Keyboard Access", "Lets VisionCLI notice when you hold Alt, on X11 and Wayland. Linux lets only members of the input group read the keyboard."), permission("keyboard")];
+      return [header("Keyboard Access", WINDOWS ? "Lets VisionCLI notice when you hold Alt, in every app." : "Lets VisionCLI notice when you hold Alt, on X11 and Wayland. Linux lets only members of the input group read the keyboard."), permission("keyboard")];
     case "screen":
       return [header("Screen Capture", "Lets VisionCLI see the window you're asking about. It only looks when you ask, or when Autopilot is on."), permission("screen")];
     case "control":
