@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -37,9 +38,21 @@ namespace VcliWin
         {
             if (w <= 0 || h <= 0) throw new ArgumentException("empty capture rect");
             var bmp = new Bitmap(w, h, PixelFormat.Format32bppRgb);
-            using (var g = Graphics.FromImage(bmp))
-                // CaptureBlt includes layered (translucent) windows.
-                g.CopyFromScreen(x, y, 0, 0, new Size(w, h), CopyPixelOperation.SourceCopy | CopyPixelOperation.CaptureBlt);
+            // BitBlt from the screen DC with CAPTUREBLT, which includes layered (translucent) windows. (Graphics.CopyFromScreen
+            // rejects SourceCopy | CaptureBlt: it validates the operation as a single enum value.)
+            IntPtr screen = GetDC(IntPtr.Zero);
+            try
+            {
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    IntPtr hdc = g.GetHdc();
+                    int err = 0;
+                    try { if (!BitBlt(hdc, 0, 0, w, h, screen, x, y, SRCCOPY | CAPTUREBLT)) err = Marshal.GetLastWin32Error(); }
+                    finally { g.ReleaseHdc(hdc); }
+                    if (err != 0) { bmp.Dispose(); throw new System.ComponentModel.Win32Exception(err); }
+                }
+            }
+            finally { ReleaseDC(IntPtr.Zero, screen); }
             return bmp;
         }
 
