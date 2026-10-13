@@ -10,11 +10,13 @@ const run = promisify(execFile);
 // Tab/navigation commands work out of the box; reading the page, clicking and typing use
 // "execute javascript", which needs View → Developer → "Allow JavaScript from Apple Events" in the browser.
 
-export const BROWSERS = ["Brave Browser", "Google Chrome", "Chromium"] as const;
+export const BROWSERS = ["Brave Browser", "Google Chrome", "Chromium", "Microsoft Edge"] as const;
 export type BrowserName = (typeof BROWSERS)[number];
 
 /** macOS drives the browser with AppleScript; elsewhere every call goes over DevTools through browserd. */
 export const APPLESCRIPT = process.platform === "darwin";
+/** The browsers this platform drives: Edge only over DevTools (Windows, Linux); the macOS AppleScript path never had it. */
+export const SUPPORTED: readonly BrowserName[] = APPLESCRIPT ? BROWSERS.filter((b) => b !== "Microsoft Edge") : BROWSERS;
 const daemon = async <T>(b: BrowserName, rpc: string, ...args: unknown[]): Promise<T> =>
   (await import("./agent/browserd.js")).call<T>(b, rpc, ...args);
 
@@ -24,8 +26,24 @@ export function browserFromClass(wmClass: string): BrowserName | undefined {
   if (c.includes("brave")) return "Brave Browser";
   if (c.includes("google-chrome") || c === "com.google.chrome") return "Google Chrome";
   if (c.includes("chromium")) return "Chromium";
+  if (c.includes("microsoft-edge") || c.includes("msedge")) return "Microsoft Edge";
   return undefined;
 }
+
+/** Windows exe or product name ("msedge.exe", "Google Chrome") → browser name. */
+export function browserFromWin(name: string): BrowserName | undefined {
+  const n = name.toLowerCase().replace(/\.exe$/, "");
+  if (n.includes("brave")) return "Brave Browser";
+  if (n === "msedge" || n.includes("microsoft edge")) return "Microsoft Edge";
+  if (n.includes("chromium")) return "Chromium";
+  if (n === "chrome" || n.includes("google chrome")) return "Google Chrome";
+  return undefined;
+}
+
+/** Image names per browser on Windows, for tasklist. */
+export const WIN_EXES: Record<BrowserName, string> = {
+  "Brave Browser": "brave.exe", "Google Chrome": "chrome.exe", Chromium: "chromium.exe", "Microsoft Edge": "msedge.exe",
+};
 
 export interface Tab { id: string; window: number; index: number; title: string; url: string; active: boolean }
 export interface Element { id: string; kind: string; text: string; href?: string; state?: string; expanded?: boolean; value?: string; options?: string[] }
@@ -63,6 +81,16 @@ export function serial<T>(fn: () => Promise<T>): Promise<T> {
 /** Display name of the front-most app ("" if unknown). VISIONCLI_FRONT_APP (set by the app) skips the lookup. */
 export async function frontApp(): Promise<string> {
   if (process.env.VISIONCLI_FRONT_APP !== undefined) return process.env.VISIONCLI_FRONT_APP;
+  if (process.platform === "win32") {
+    // Windows has no CLI for the foreground window; the running app (its helper) knows it.
+    try {
+      const { send } = await import("./control.js");
+      const name = (await send({ action: "status" })).frontApp ?? "";
+      return browserFromWin(name) ?? name;
+    } catch {
+      return "";
+    }
+  }
   if (!APPLESCRIPT) {
     const { activeWindowClass } = await import("./linux.js");
     const cls = await activeWindowClass();
@@ -77,19 +105,25 @@ export async function frontApp(): Promise<string> {
 }
 
 async function firstRunning(): Promise<BrowserName | undefined> {
+  if (process.platform === "win32") {
+    const { wsUrl } = await import("./cdp.js");
+    const { runningImages } = await import("./win32.js");
+    const running = await runningImages();
+    return SUPPORTED.find((b) => running.has(WIN_EXES[b]) && wsUrl(b)) ?? SUPPORTED.find((b) => wsUrl(b));
+  }
   if (!APPLESCRIPT) {
     // Process names differ per distro and package; a browser with remote debugging on is the one we can use.
     const { wsUrl } = await import("./cdp.js");
-    const procs: Record<BrowserName, string> = { "Brave Browser": "brave", "Google Chrome": "chrome", Chromium: "chromium" };
-    for (const b of BROWSERS) {
+    const procs: Record<BrowserName, string> = { "Brave Browser": "brave", "Google Chrome": "chrome", Chromium: "chromium", "Microsoft Edge": "msedge" };
+    for (const b of SUPPORTED) {
       const running = await run("pgrep", ["-f", procs[b]]).then(() => true, () => false);
       if (running && wsUrl(b)) return b;
     }
-    return BROWSERS.find((b) => wsUrl(b));
+    return SUPPORTED.find((b) => wsUrl(b));
   }
   try {
-    const { stdout } = await run("/usr/bin/pgrep", ["-xl", BROWSERS.join("|")]);
-    return BROWSERS.find((b) => stdout.split("\n").some((l) => l.replace(/^\d+\s+/, "") === b));
+    const { stdout } = await run("/usr/bin/pgrep", ["-xl", SUPPORTED.join("|")]);
+    return SUPPORTED.find((b) => stdout.split("\n").some((l) => l.replace(/^\d+\s+/, "") === b));
   } catch {
     return undefined; // pgrep exits 1 when nothing matches
   }
@@ -98,10 +132,10 @@ async function firstRunning(): Promise<BrowserName | undefined> {
 /** The browser to act on (the front-most supported browser, else the first one running) and whether it's in front. */
 export async function pickWithFront(): Promise<{ browser: BrowserName; front: boolean }> {
   const front = await frontApp();
-  if ((BROWSERS as readonly string[]).includes(front)) return { browser: front as BrowserName, front: true };
+  if ((SUPPORTED as readonly string[]).includes(front)) return { browser: front as BrowserName, front: true };
   const running = await firstRunning();
   if (running) return { browser: running, front: false };
-  throw new Error(APPLESCRIPT ? "Neither Brave nor Chrome is running." : "No Chrome, Brave or Chromium with remote debugging is running.");
+  throw new Error(APPLESCRIPT ? "Neither Brave nor Chrome is running." : "No Chrome, Brave, Edge or Chromium with remote debugging is running.");
 }
 
 /** The browser to act on: the front-most supported browser, else the first one running. */
@@ -110,7 +144,7 @@ export async function pick(): Promise<BrowserName> {
 }
 
 export async function frontmostIsBrowser(): Promise<boolean> {
-  return (BROWSERS as readonly string[]).includes(await frontApp());
+  return (SUPPORTED as readonly string[]).includes(await frontApp());
 }
 
 export async function tabs(b?: BrowserName): Promise<Tab[]> {

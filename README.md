@@ -76,7 +76,7 @@ Models are saved in `~/Library/Application Support/visioncli/models/`. Whisper a
 ## Linux
 
 1. Download **`VisionCLI-<version>-linux-x86_64.AppImage`** (or `-arm64`), or the **`.deb`** for Debian/Ubuntu, from the [latest release](https://github.com/thethirdsourcers/visioncli/releases/latest).
-2. Install the desktop tools VisionCLI uses (the script detects apt/dnf/pacman/zypper and your desktop, and asks before installing): `sh linux/scripts/install-deps.sh` from the repo, or see [docs/LINUX.md](docs/LINUX.md).
+2. Install the desktop tools VisionCLI uses (the script detects apt/dnf/pacman/zypper and your desktop, and asks before installing): `sh app/scripts/install-deps.sh` from the repo, or see [docs/LINUX.md](docs/LINUX.md).
 3. Start VisionCLI. The setup wizard checks each piece and offers fixes:
    - **Hold Alt to talk** reads the keyboard directly, so join the `input` group once (`sudo usermod -aG input $USER`, then log out and in). On X11 it also works without it.
    - **GNOME on Wayland:** VisionCLI installs a small GNOME Shell extension so it can see windows and the pointer (log out and in once). KDE, Sway and Hyprland need nothing extra.

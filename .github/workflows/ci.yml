@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -44,7 +45,7 @@ jobs:
           xdotool mousemove 800 200
           VISIONCLI_LINUX_SMOKE=1 npm test -- linux
 
-  # The Linux app (linux/): build, its tests, and a packaging dry run (electron-builder config and hooks).
+  # The desktop app (app/, Linux and Windows): build, its tests, and a packaging dry run (electron-builder config and hooks).
   linux-app:
     runs-on: ubuntu-latest
     steps:
@@ -55,8 +56,84 @@ jobs:
           cache: npm
           cache-dependency-path: |
             package-lock.json
-            linux/package-lock.json
+            app/package-lock.json
       - run: npm ci # build.mjs bundles the MCP server from ../src
-      - run: cd linux && npm ci && npm test
+      - run: cd app && npm ci && npm test
       - name: Package (unpacked dir, no installers)
-        run: cd linux && npx electron-builder --linux dir --publish never && ls dist/linux-unpacked dist/linux-unpacked/resources
+        run: cd app && npx electron-builder --linux dir --publish never && ls dist/linux-unpacked dist/linux-unpacked/resources
+
+  # Windows: the MCP server's tests, the app's tests, the C# helper, an unpacked app build and a 20 s smoke launch
+  # (desktop screenshot uploaded as an artifact, app log printed).
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      # app/package.json's test script uses $(find …): run npm scripts in Git's bash, not cmd.exe (nor WSL's bash).
+      npm_config_script_shell: C:\Program Files\Git\bin\bash.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            app/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: cd app && npm ci && npm test
+      - name: Build the helper (vcli-win.exe, .NET Framework 4.8)
+        run: |
+          if [ -f app/native/windows/build.sh ]; then
+            sh app/native/windows/build.sh
+          else
+            proj=$(ls app/native/windows/*.csproj 2>/dev/null | head -1)
+            if [ -z "$proj" ]; then echo "::error::app/native/windows has no build.sh or .csproj"; exit 1; fi
+            dotnet build "$proj" -c Release
+          fi
+          if [ ! -f app/resources/bin/vcli-win.exe ]; then
+            exe=$(find app/native/windows -path '*/bin/*' -name vcli-win.exe | head -1)
+            if [ -z "$exe" ]; then echo "::error::vcli-win.exe wasn't built"; exit 1; fi
+            cp "$(dirname "$exe")"/vcli-win.exe* app/resources/bin/
+          fi
+          ls -l app/resources/bin
+      - name: Stage the VC++ runtime (app-local copy for whisper.cpp)
+        run: mkdir -p app/resources/win32/vcruntime/x64 && cp /c/Windows/System32/{msvcp140,vcruntime140,vcruntime140_1}.dll app/resources/win32/vcruntime/x64/
+      - name: Helper self-test
+        run: |
+          if grep -rqs -- '--selftest' app/native/windows --include='*.cs'; then
+            ./app/resources/bin/vcli-win.exe --selftest
+          else
+            echo "::notice title=Helper self-test skipped::vcli-win.exe has no --selftest yet (app/native/windows doesn't implement it)."
+          fi
+      - name: Package (unpacked dir, no installer)
+        run: cd app && npx electron-builder --win dir --x64 --publish never && ls dist/win-unpacked dist/win-unpacked/resources dist/win-unpacked/resources/bin
+      - name: Smoke launch (20 s with --demo-answer) and desktop screenshot
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath app\dist\win-unpacked\VisionCLI.exe -ArgumentList '--demo-answer' -PassThru
+          Start-Sleep -Seconds 20
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+          $bmp.Save("$PWD\windows-desktop.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          $alive = -not $p.HasExited
+          Get-Process VisionCLI -ErrorAction SilentlyContinue | Stop-Process -Force
+          $logs = Join-Path $env:LOCALAPPDATA 'visioncli\logs'
+          if (Test-Path $logs) {
+            Get-ChildItem $logs -Filter *.log | ForEach-Object { "==> $($_.FullName)"; Get-Content $_.FullName -Tail 300 }
+          } else {
+            "No log folder at $logs"
+          }
+          if (-not $alive) { Write-Error "VisionCLI exited during the smoke test (exit code $($p.ExitCode))"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-desktop
+          path: windows-desktop.png
+          if-no-files-found: warn

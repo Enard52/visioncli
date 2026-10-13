@@ -7,6 +7,11 @@ release/
 .claude/settings.local.json
 overlay/helpers/parakeet/vendor/
 overlay/helpers/parakeet/.build/
-linux/build/
-linux/dist/
+app/build/
+app/dist/
 graphify-out/
+# Windows helper: built by app/native/windows/build.sh (CI)
+app/native/windows/bin/
+app/native/windows/obj/
+app/resources/bin/vcli-win.exe
+app/resources/win32/vcruntime/

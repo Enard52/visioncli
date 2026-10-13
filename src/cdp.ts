@@ -7,30 +7,45 @@ import { join } from "node:path";
 // the browser then writes DevToolsActivePort into its profile and asks "Allow remote debugging?" for each new
 // connection. That's why one long-lived process (browserd) holds the socket instead of connecting per command.
 
-// Profile folders that hold DevToolsActivePort, per browser (Linux: native, Flatpak and Snap installs).
-const PROFILES: Record<string, string[]> =
-  process.platform === "darwin"
-    ? {
-        "Google Chrome": ["Library/Application Support/Google/Chrome"],
-        "Brave Browser": ["Library/Application Support/BraveSoftware/Brave-Browser"],
-        Chromium: ["Library/Application Support/Chromium"],
-      }
-    : {
-        "Google Chrome": [".config/google-chrome", ".var/app/com.google.Chrome/config/google-chrome"],
-        "Brave Browser": [".config/BraveSoftware/Brave-Browser", ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
-          "snap/brave/current/.config/BraveSoftware/Brave-Browser"],
-        Chromium: [".config/chromium", ".var/app/org.chromium.Chromium/config/chromium", "snap/chromium/common/chromium"],
-      };
+// Profile folders that hold DevToolsActivePort, per browser (Linux: native, Flatpak and Snap installs; Windows: the
+// "User Data" folders under %LOCALAPPDATA%). Microsoft Edge is Chromium with the same toggle at edge://inspect; it's
+// offered on Windows and Linux (macOS drives browsers with AppleScript instead).
+export function profileDirs(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, home = homedir()): Record<string, string[]> {
+  const h = (...p: string[]) => join(home, ...p);
+  if (platform === "darwin") {
+    return {
+      "Google Chrome": [h("Library/Application Support/Google/Chrome")],
+      "Brave Browser": [h("Library/Application Support/BraveSoftware/Brave-Browser")],
+      Chromium: [h("Library/Application Support/Chromium")],
+    };
+  }
+  if (platform === "win32") {
+    const local = env.LOCALAPPDATA || h("AppData", "Local");
+    return {
+      "Google Chrome": [join(local, "Google", "Chrome", "User Data")],
+      "Brave Browser": [join(local, "BraveSoftware", "Brave-Browser", "User Data")],
+      Chromium: [join(local, "Chromium", "User Data")],
+      "Microsoft Edge": [join(local, "Microsoft", "Edge", "User Data")],
+    };
+  }
+  return {
+    "Google Chrome": [h(".config/google-chrome"), h(".var/app/com.google.Chrome/config/google-chrome")],
+    "Brave Browser": [h(".config/BraveSoftware/Brave-Browser"), h(".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"),
+      h("snap/brave/current/.config/BraveSoftware/Brave-Browser")],
+    Chromium: [h(".config/chromium"), h(".var/app/org.chromium.Chromium/config/chromium"), h("snap/chromium/common/chromium")],
+    "Microsoft Edge": [h(".config/microsoft-edge"), h(".var/app/com.microsoft.Edge/config/microsoft-edge")],
+  };
+}
 
 export const SETUP_HELP =
-  'Open chrome://inspect/#remote-debugging in Chrome, tick "Allow remote debugging for this browser instance", ' +
+  'Open chrome://inspect/#remote-debugging in Chrome (edge://inspect/#remote-debugging in Edge), tick "Allow remote debugging for this browser instance", ' +
   'then click Allow when Chrome asks "Allow remote debugging?".';
 
 /** The browser-level DevTools WebSocket URL a running browser advertises, if remote debugging is on. */
 export function wsUrl(browser: string): string | undefined {
-  for (const dir of PROFILES[browser] ?? []) {
+  for (const dir of profileDirs()[browser] ?? []) {
     try {
-      const [port, path] = readFileSync(join(homedir(), dir, "DevToolsActivePort"), "utf8").split("\n").map((s) => s.trim());
+      const [port, path] = readFileSync(join(dir, "DevToolsActivePort"), "utf8").split("\n").map((s) => s.trim());
       if (port && path) return `ws://127.0.0.1:${port}${path}`;
     } catch {
       // not this install

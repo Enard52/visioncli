@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { type AppWindow, type ControlRequests, displayBounds, displaysAndPointer, send } from "./control.js";
 import * as linux from "./linux.js";
+import * as win from "./win32.js";
 
 const run = promisify(execFile);
 
@@ -31,6 +32,9 @@ const TERMINAL_APPS = new Set(
     // Linux (WM_CLASS class names)
     "Gnome-terminal", "Gnome-terminal-server", "org.gnome.Console", "kgx", "Konsole", "XTerm", "URxvt", "Tilix",
     "Terminator", "foot", "Xfce4-terminal", "Mate-terminal", "Lxterminal", "Ptyxis",
+    // Windows (product name, else the exe name without .exe)
+    "Windows Terminal", "WindowsTerminal", "OpenConsole", "conhost", "cmd", "powershell", "pwsh", "PowerShell",
+    "Windows PowerShell", "mintty",
     ...(process.env.VISIONCLI_IGNORE_APPS ?? "").split(","),
   ]
     .map((s) => s.trim().toLowerCase())
@@ -47,9 +51,20 @@ export const PERMISSION_HELP =
 
 const isMac = process.platform === "darwin";
 const isLinux = process.platform === "linux";
+const isWin = process.platform === "win32";
 
 function requireMac(feature: string) {
-  if (!isMac && !isLinux) throw new Error(`${feature} is only supported on macOS and Linux right now.`);
+  if (!isMac && !isLinux && !isWin) throw new Error(`${feature} is only supported on macOS, Linux and Windows right now.`);
+}
+
+/** Windows without the app: PowerShell writes the JPEG at its final size, so there's nothing left to encode. */
+async function winJpeg(fn: (out: string) => Promise<{ width: number; height: number } | null>): Promise<Capture | null> {
+  return withTempDir(async (dir) => {
+    const out = join(dir, "out.jpg");
+    const size = await fn(out);
+    if (!size || !(await exists(out))) return null;
+    return { data: (await readFile(out)).toString("base64"), mimeType: "image/jpeg", ...size };
+  });
 }
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -169,6 +184,12 @@ export async function snapshot(): Promise<Snapshot> {
     const [windows, pointer] = await Promise.all([linux.listWindows(), linux.pointer()]);
     return { windows: windows.filter((w) => w.bounds.width >= 200 && w.bounds.height >= 150), pointer: pointer ?? undefined };
   }
+  if (isWin) {
+    // The running app (its helper) first; without it, one PowerShell run lists windows and the pointer.
+    const fast = await displaysAndPointer({ windows: true });
+    const listed = Array.isArray(fast?.windows) ? { windows: fast.windows.map(fromApp), pointer: fast.pointer } : await win.listWindows();
+    return { windows: listed.windows.filter((w) => w.bounds.width >= 200 && w.bounds.height >= 150), pointer: listed.pointer, displays: fast?.displays };
+  }
   const fast = await displaysAndPointer({ windows: true });
   const windows = Array.isArray(fast?.windows) ? fast.windows.map(fromApp) : await listWindowsJXA();
   // Drop tiny utility windows (menu-bar helpers, tooltips, etc).
@@ -199,6 +220,11 @@ export async function pointerLocation(snap?: Snapshot): Promise<{ x: number; y: 
   if (isLinux) {
     const p = (await displaysAndPointer())?.pointer ?? (await linux.pointer());
     if (!p) throw new Error("The pointer position needs an X11 session with xdotool installed.");
+    if (snap) snap.pointer = p;
+    return p;
+  }
+  if (isWin) {
+    const p = (await displaysAndPointer())?.pointer ?? (await win.pointer());
     if (snap) snap.pointer = p;
     return p;
   }
@@ -278,6 +304,12 @@ export async function captureWindow(w: WindowInfo): Promise<Capture> {
       return encode(dir, src);
     });
   }
+  if (isWin) {
+    const fast = await captureViaApp({ window_id: w.id });
+    if (fast) return fast;
+    // Without the app: the window's area of the screen (whatever covers it shows too; PrintWindow needs the helper).
+    return (await winJpeg((out) => win.capture(out, MAX_DIM, w.bounds)))!;
+  }
   const fast = await captureViaApp({ window_id: w.id });
   if (fast) return fast;
   return withTempDir(async (dir) => {
@@ -290,17 +322,16 @@ export async function captureWindow(w: WindowInfo): Promise<Capture> {
 
 /** `bounds`: display's screen rect when the caller already has it (saves a request to the app). */
 export async function captureScreen(display?: number, bounds?: WindowInfo["bounds"] | null): Promise<Capture> {
-  if (isMac || isLinux) {
+  if (isMac || isLinux || isWin) {
     const b = bounds ?? (await displayBounds(display ?? 1));
     const fast = b && (await captureViaApp({ x: b.x, y: b.y, width: b.width, height: b.height }));
     if (fast) return fast;
+    if (isWin) return (await winJpeg((out) => win.capture(out, MAX_DIM, b, display ?? 1)))!;
   }
   return withTempDir(async (dir) => {
     const src = join(dir, "screen.png");
     if (isMac) {
       await screencapture(["-x", "-t", "png", ...(display ? ["-D", String(display)] : [])], src);
-    } else if (process.platform === "win32") {
-      await captureScreenWindows(src);
     } else {
       await linux.captureScreen(src);
     }
@@ -311,6 +342,7 @@ export async function captureScreen(display?: number, bounds?: WindowInfo["bound
 /** Let the user drag a rectangle with the native crosshair. Returns null if they press Esc. */
 export async function captureRegion(): Promise<Capture | null> {
   requireMac("Region selection");
+  if (isWin) return winJpeg((out) => win.captureRegion(out, MAX_DIM));
   return withTempDir(async (dir) => {
     const src = join(dir, "region.png");
     if (isLinux) return (await linux.captureRegion(src)) ? encode(dir, src) : null;
@@ -323,6 +355,7 @@ export async function captureRegion(): Promise<Capture | null> {
 /** Image currently on the clipboard (e.g. after Cmd+Ctrl+Shift+4). Returns null if there isn't one. */
 export async function captureClipboard(): Promise<Capture | null> {
   requireMac("Clipboard images");
+  if (isWin) return winJpeg((out) => win.captureClipboard(out, MAX_DIM));
   return withTempDir(async (dir) => {
     const src = join(dir, "clip.png");
     if (isLinux) return (await linux.captureClipboard(src)) ? encode(dir, src) : null;
@@ -337,17 +370,6 @@ export async function captureClipboard(): Promise<Capture | null> {
     if (!(await exists(src))) return null;
     return encode(dir, src);
   });
-}
-
-async function captureScreenWindows(out: string) {
-  const ps = `
-Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-$b = [System.Windows.Forms.SystemInformation]::VirtualScreen
-$bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-$g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
-$bmp.Save('${out.replace(/'/g, "''")}', [System.Drawing.Imaging.ImageFormat]::Png)`;
-  await run("powershell", ["-NoProfile", "-Command", ps]);
 }
 
 /** Screenshot of a booted iOS Simulator (via simctl) or a connected Android device/emulator (via adb), without window chrome. */
