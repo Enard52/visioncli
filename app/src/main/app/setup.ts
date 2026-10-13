@@ -1,3 +1,4 @@
+import { findClis, registryPath } from "./config";
 import { dialog } from "electron";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -45,6 +46,7 @@ declare module "./core" {
     checkTools(): Promise<void>;
     connectToolsFor(a: AssistantId): Promise<void>;
     isInstalled(a: AssistantId): boolean;
+    refreshClis(): void;
     grantKeyboardAccess(): Promise<void>;
     enableAtspi(): Promise<void>;
     setupInput(): Promise<void>;
@@ -202,8 +204,30 @@ App.prototype.connectToolsFor = async function (this: App, a: AssistantId) {
 };
 
 App.prototype.isInstalled = function (this: App, a: AssistantId) {
+  this.refreshClis();
   if (a === "claude") return existsSync(this.cfg.claude);
   return a === "antigravity" ? !!this.cfg.agy : !!this.cfg.gemini;
+};
+
+/** Finds assistant CLIs installed while VisionCLI runs (at most every 3 s; Setup and Settings poll this). On Windows
+ *  the saved Path is read again, since installers change it there, not in running apps. */
+let lastCliScan = 0;
+App.prototype.refreshClis = function (this: App) {
+  const missing = !existsSync(this.cfg.claude) || !this.cfg.agy || !this.cfg.gemini;
+  if (!missing || Date.now() - lastCliScan < 3000) return;
+  lastCliScan = Date.now();
+  const path = isWindows() ? [this.cfg.path, registryPath()].filter(Boolean).join(";") : this.cfg.path;
+  const found = findClis(path);
+  let changed = false;
+  if (found.claude && !existsSync(this.cfg.claude)) { this.cfg.claude = found.claude; changed = true; }
+  if (found.agy && !this.cfg.agy) { this.cfg.agy = found.agy; changed = true; }
+  if (found.gemini && !this.cfg.gemini) { this.cfg.gemini = found.gemini; changed = true; }
+  if (!changed) return;
+  this.cfg.path = path;
+  // The sessions keep their own copy of the paths: point them at the new CLIs too.
+  Object.assign(this.sessions.cfg, { claude: this.cfg.claude, agy: this.cfg.agy, gemini: this.cfg.gemini, path });
+  log(`found assistant CLIs: claude=${this.cfg.claude} agy=${this.cfg.agy ?? "-"} gemini=${this.cfg.gemini ?? "-"}`);
+  if (found.agy) void this.sessions.setupAgy?.();
 };
 
 /** Hold-to-talk on Wayland (and X11 without xinput) reads /dev/input: the user joins the `input` group once. */

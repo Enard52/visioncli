@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, isAbsolute, join, win32 } from "node:path";
@@ -136,6 +136,27 @@ export interface LoadOptions {
   buildDir: string;
   execPath: string;
   file?: string;
+}
+
+/** Windows: the user's and the machine's Path as saved in the registry, with %VARS% expanded. A running app keeps the
+ *  Path it started with, so a CLI installed afterwards (agy, claude) is only found through this. */
+export function registryPath(env: NodeJS.ProcessEnv = process.env, query: (key: string) => string = regQuery): string {
+  const expand = (s: string) => s.replace(/%([^%]+)%/g, (m, k: string) => {
+    const hit = Object.keys(env).find((e) => e.toUpperCase() === k.toUpperCase());
+    return hit ? env[hit] ?? m : m;
+  });
+  const read = (key: string) => /^\s+Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/mi.exec(query(key))?.[1]?.trim() ?? "";
+  return [read("HKCU\\Environment"), read("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment")]
+    .filter(Boolean).map(expand).join(";");
+}
+
+function regQuery(key: string): string {
+  try { return execFileSync("reg.exe", ["query", key, "/v", "Path"], { encoding: "utf8", windowsHide: true, timeout: 3000 }); } catch { return ""; }
+}
+
+/** The assistant CLIs on `path` (null when missing). */
+export function findClis(path: string): { claude: string | null; agy: string | null; gemini: string | null } {
+  return { claude: findClaude(path), agy: find("agy", path), gemini: find("gemini", path) };
 }
 
 /** Launch arguments win and are remembered; otherwise overlay.json; anything missing is found on this computer. */

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { compareVersions, electronNodeWrapper, findNode, loadConfig, parseArgs, serverArgs } from "../../src/main/app/config";
+import { compareVersions, electronNodeWrapper, findNode, loadConfig, parseArgs, registryPath, serverArgs } from "../../src/main/app/config";
 import { drawMarks, makeShot, rawWindowUnderPointer, regionLabel, screenPoint, windowLabel, windowUnderPointer } from "../../src/main/app/shots";
 import { carryOver, cleanTranscript, hudTitle, meaningful, parseOpenLink, terminalQuestion, voiceQuestion } from "../../src/main/app/text";
 import { OverlayKeys } from "../../src/main/app/keys";
@@ -186,4 +186,14 @@ test("idle voice models unload: Kokoro after 10 minutes (not mid-sentence), spee
   assert.deepEqual(idleUnload(11 * 60_000, false), { speech: false, voice: true });
   assert.deepEqual(idleUnload(11 * 60_000, true), { speech: false, voice: false });
   assert.deepEqual(idleUnload(31 * 60_000, false), { speech: true, voice: true });
+});
+
+test("Windows: the saved Path from the registry, %VARS% expanded (finds CLIs installed after launch)", () => {
+  const out: Record<string, string> = {
+    "HKCU\\Environment": "\r\nHKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    %USERPROFILE%\\.local\\bin;C:\\Tools\r\n\r\n",
+    "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment": "\r\n    Path    REG_SZ    C:\\Windows\\system32;%SystemRoot%\r\n",
+  };
+  const path = registryPath({ userprofile: "C:\\Users\\me", SystemRoot: "C:\\Windows" }, (k) => out[k] ?? "");
+  assert.equal(path, "C:\\Users\\me\\.local\\bin;C:\\Tools;C:\\Windows\\system32;C:\\Windows");
+  assert.equal(registryPath({}, () => ""), "");
 });
