@@ -3,6 +3,7 @@
 ## 0.10.3
 
 - **Windows, Gemini in the terminal:** a voice question with a screenshot kept showing "Sending to Gemini…" after Gemini had answered. VisionCLI finds the conversation by the question's text, and Antigravity's transcript stores the screenshot's Windows path with escaped backslashes, so it never matched. It now matches both forms.
+- **Windows on Arm, Kokoro voices:** every voice sample played the Windows voice, because Kokoro's Python libraries (onnxruntime, soundfile) have no Windows-on-Arm builds and Kokoro couldn't start. It now runs on x64 Python there, through Windows' built-in emulation. The system voice is labelled "Windows voice" on Windows.
 
 ## 0.10.2
 
