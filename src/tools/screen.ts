@@ -47,7 +47,8 @@ export function register(server: McpServer) {
         // One snapshot (windows + pointer + displays, from the app when it's running) serves the whole call.
         // Linux: X11 lists windows; on Wayland that's not allowed, so "window" falls back to the whole screen.
         const isLinux = process.platform === "linux";
-        const snap = target !== "window" ? undefined : isMac || canListWindows() || isLinux ? await snapshot().catch((e) => { if (isMac) throw e; return undefined; }) : undefined;
+        const isWin = process.platform === "win32"; // the app's helper, else PowerShell, lists windows
+        const snap = target !== "window" ? undefined : isMac || canListWindows() || isLinux || isWin ? await snapshot().catch((e) => { if (isMac) throw e; return undefined; }) : undefined;
         let w: WindowInfo | undefined;
         if (snap) {
           try {
@@ -58,7 +59,7 @@ export function register(server: McpServer) {
           }
         }
         if (!w) {
-          const d = snap ?? (isMac || isLinux ? await computer.displaysAndPointer() : null);
+          const d = snap ?? (isMac || isLinux || isWin ? await computer.displaysAndPointer() : null);
           const which = display ?? (d?.displays ? computer.displayAt(d.displays, d.pointer) : undefined) ?? 1;
           const b = d?.displays?.[which - 1] ?? null;
           const img = await captureScreen(which, b);

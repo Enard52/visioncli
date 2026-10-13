@@ -76,14 +76,14 @@ Each macOS piece maps to Linux as follows.
 | Updater (codesign + swap) | AppImage zsync / GitHub release check with a signature check (minisign) |
 | Model installer (brew) | Prebuilt whisper-server binary download (no Homebrew), same model downloads |
 
-The code is in `linux/src/main/` (one folder per row above) and `linux/src/renderer/`, with `linux/src/main/app/` as the port of `AppDelegate` + `App+*.swift`. Tests: `cd linux && npm test`.
+The code is in `app/src/main/` (one folder per row above) and `app/src/renderer/`, with `app/src/main/app/` as the port of `AppDelegate` + `App+*.swift`. Tests: `cd linux && npm test`.
 
 Known differences:
 - **Wispr Flow:** there is no Linux Wispr Flow app.
 - **Sway:** Sway's IPC never reports the pointer, so "window under the mouse" uses the focused window there.
-- **Updater:** it needs a signing key (`UPDATE_PUBLIC_KEY` in `linux/src/main/features/updater.ts`). Until it's set, updates are announced and the release page opens instead of installing in place.
+- **Updater:** it needs a signing key (`UPDATE_PUBLIC_KEY` in `app/src/main/features/updater.ts`). Until it's set, updates are announced and the release page opens instead of installing in place.
 - **Not yet tested on real hardware:** GNOME and KDE on Wayland were tested against stand-ins of their D-Bus services. X11 and Sway were tested for real.
 
 ## Phase 3: packaging — done in 0.9.0
 
-AppImage and `.deb` (x86_64, arm64) are built by GitHub Actions on `v*` tags, next to the macOS `.dmg`. Config: `linux/electron-builder.yml`; dependency installer: `linux/scripts/install-deps.sh`.
+AppImage and `.deb` (x86_64, arm64) are built by GitHub Actions on `v*` tags, next to the macOS `.dmg`. Config: `app/electron-builder.yml`; dependency installer: `app/scripts/install-deps.sh`.

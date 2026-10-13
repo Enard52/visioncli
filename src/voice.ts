@@ -46,6 +46,7 @@ function writeAgent(exe: string) {
 
 async function which(cmd: string) {
   if (process.platform === "linux") return findOnPath(cmd); // not every distro ships /usr/bin/which
+  if (process.platform === "win32") return findOnPathWin(cmd);
   try {
     return (await run("/usr/bin/which", [cmd])).stdout.trim() || null;
   } catch {
@@ -56,7 +57,8 @@ async function which(cmd: string) {
 /** Build (if needed) and launch the voice overlay for a project. Replaces any running instance. */
 export async function startVoice(cwd: string): Promise<string> {
   if (process.platform === "linux") return startVoiceLinux(cwd);
-  if (process.platform !== "darwin") throw new Error("Voice mode is only supported on macOS.");
+  if (process.platform === "win32") return startVoiceWin(cwd);
+  if (process.platform !== "darwin") throw new Error("Voice mode is only supported on macOS, Linux and Windows.");
 
   if (!existsSync(join(appPath(), "Contents", "MacOS", "VisionCLI"))) {
     await run(join(root, "scripts", "build-overlay.sh"), { cwd: root });
@@ -124,12 +126,13 @@ export async function install(): Promise<string> {
   if (!claude) throw new Error("Couldn't find the `claude` CLI on PATH.");
   const script = join(root, "dist", "index.js");
   // Installed via `npx visioncli install`: the npx cache path is temporary, so register through npx instead.
-  const server = script.includes("/_npx/") ? ["npx", "-y", "visioncli@latest"] : [process.execPath, script];
+  const server = /[\\/]_npx[\\/]/.test(script) ? ["npx", "-y", "visioncli@latest"] : [process.execPath, script];
   // Linux app (`visioncli-mcp install`): this is the app's Electron running as Node, from an AppImage mount that
   // changes every run, so register the stable wrapper instead.
   if (process.platform === "linux" && process.versions.electron) server.splice(0, server.length, MCP_WRAPPER);
-  await run(claude, ["mcp", "remove", "visioncli", "-s", "user"]).catch(() => {});
-  await run(claude, ["mcp", "add", "visioncli", "--scope", "user", "--", ...server]);
+  if (process.platform === "win32") server.splice(0, server.length, ...winServerCommand(server, !!process.versions.electron));
+  await runTool(claude, ["mcp", "remove", "visioncli", "-s", "user"]).catch(() => {});
+  await runTool(claude, ["mcp", "add", "visioncli", "--scope", "user", "--", ...server]);
   const lines = [`Registered the visioncli MCP server with Claude Code for all projects (${server.join(" ")}).`];
   // Antigravity CLI (agy, Gemini on a Google account), if installed: global MCP config + allow rules for headless runs.
   if (await which("agy") || existsSync(join(homedir(), ".local", "bin", "agy"))) {
@@ -166,7 +169,12 @@ export async function install(): Promise<string> {
     lines.push(linuxApp()
       ? "Start the voice overlay with: visioncli voice  (or ask Claude to \"start voice mode\")."
       : `For voice mode, install the VisionCLI app (AppImage or .deb) from ${RELEASES}.`);
-    lines.push("Desktop tools for your session (X11, GNOME, KDE, Sway, Hyprland): sh linux/scripts/install-deps.sh (shipped in the app as resources/bin/install-deps.sh).");
+    lines.push("Desktop tools for your session (X11, GNOME, KDE, Sway, Hyprland): sh app/scripts/install-deps.sh (shipped in the app as resources/bin/install-deps.sh).");
+  }
+  if (process.platform === "win32") {
+    lines.push(windowsApp()
+      ? "Start the voice overlay with: visioncli voice  (or ask Claude to \"start voice mode\")."
+      : `For voice mode, install the VisionCLI app (the Windows installer) from ${RELEASES}.`);
   }
   lines.push("Restart Claude Code to load it.");
   return lines.join("\n");
@@ -174,11 +182,11 @@ export async function install(): Promise<string> {
 
 // ---- Linux ------------------------------------------------------------------------------------------------------
 // The app is an AppImage (linked at ~/.local/bin/VisionCLI.AppImage by its first run), the .deb in /opt/VisionCLI,
-// or a dev build of linux/ run by its own electron. Crash restart comes from a systemd user unit when the app
+// or a dev build of app/ run by its own electron. Crash restart comes from a systemd user unit when the app
 // installed one (setup-user.sh), the counterpart of the launchd agent above.
 
 const RELEASES = "https://github.com/thethirdsourcers/visioncli/releases";
-const LINUX_DEV = join(root, "linux");
+const LINUX_DEV = join(root, "app");
 const MCP_WRAPPER = join(homedir(), ".local", "bin", "visioncli-mcp");
 const UNIT = "visioncli.service";
 const xdgConfig = () => process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -292,6 +300,141 @@ async function startVoiceLinux(cwd: string): Promise<string> {
   return (
     `Voice mode is on (default project ${resolve(cwd)}; it follows the project of the window under your pointer). Hold Alt, ask your question, then let go (Alt+Super to include a screenshot). ` +
     `The answer appears above your mouse pointer (Esc dismisses it). The VisionCLI icon in the tray has Quit. ` +
-    `On Wayland, push-to-talk and computer control need you in the "input" group once: sh linux/scripts/install-deps.sh sets that up.`
+    `On Wayland, push-to-talk and computer control need you in the "input" group once: sh app/scripts/install-deps.sh sets that up.`
+  );
+}
+
+// ---- Windows ----------------------------------------------------------------------------------------------------
+// The app is the NSIS per-user install (%LOCALAPPDATA%\Programs\VisionCLI\VisionCLI.exe, no admin) or a dev build of
+// app/ run by its own electron.exe. The app writes %LOCALAPPDATA%\visioncli\bin\visioncli-mcp.cmd on start: the
+// stable path Claude Code runs the server through (the app's exe in Node mode, like Linux's visioncli-mcp).
+
+export function windowsPaths(env: NodeJS.ProcessEnv = process.env, home = homedir()) {
+  const local = env.LOCALAPPDATA || join(home, "AppData", "Local");
+  return {
+    installed: join(local, "Programs", "VisionCLI", "VisionCLI.exe"),
+    mcpWrapper: join(local, "visioncli", "bin", "visioncli-mcp.cmd"),
+  };
+}
+
+/** What `claude mcp add` runs on Windows: a .cmd (and npx is one) can only start through cmd /c. */
+export function winServerCommand(server: string[], inApp: boolean, wrapper = windowsPaths().mcpWrapper): string[] {
+  if (inApp) return ["cmd", "/c", wrapper];
+  return server[0] === "npx" ? ["cmd", "/c", ...server] : server;
+}
+
+/** `cmd` on PATH with Windows' executable extensions (claude.exe from the native installer, claude.cmd from npm). */
+export function findOnPathWin(cmd: string, env: NodeJS.ProcessEnv = process.env, exists: (f: string) => boolean = existsSync): string | null {
+  const exts = (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  for (const dir of (env.PATH ?? env.Path ?? "").split(";")) {
+    if (!dir) continue;
+    for (const ext of ["", ...exts]) {
+      const f = join(dir.replace(/^"|"$/g, ""), cmd + ext.toLowerCase());
+      if ((ext || /\.\w+$/.test(cmd)) && exists(f)) return f;
+    }
+  }
+  return null;
+}
+
+/** A command line for cmd.exe: quote what has spaces or cmd's special characters. */
+export function cmdLine(args: string[]): string {
+  return args.map((a) => (a === "" || /[\s&|<>^()"]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a)).join(" ");
+}
+
+/** execFile, except that .cmd/.bat (npm's claude.cmd) need cmd.exe on Windows (Node refuses to spawn them directly). */
+function runTool(file: string, args: string[]) {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(file)) {
+    return run("cmd.exe", ["/d", "/s", "/c", `"${cmdLine([file, ...args])}"`], { windowsVerbatimArguments: true, windowsHide: true });
+  }
+  return run(file, args, { windowsHide: true });
+}
+
+/** The Windows app to launch: VISIONCLI_APP, the installed one, else the dev build. Null when there's none. */
+export function windowsApp(env: NodeJS.ProcessEnv = process.env, exists: (f: string) => boolean = existsSync): { exe: string; args: string[] } | null {
+  for (const c of [env.VISIONCLI_APP, windowsPaths(env).installed]) {
+    if (c && exists(c)) return { exe: c, args: [] };
+  }
+  const electron = join(LINUX_DEV, "node_modules", "electron", "dist", "electron.exe");
+  if (exists(join(LINUX_DEV, "build", "main.js")) && exists(electron)) return { exe: electron, args: [LINUX_DEV] };
+  return null;
+}
+
+export interface WinProc { pid: number; name: string; cmd?: string | null }
+
+/** Main processes of running VisionCLI apps: not Chromium helpers (--type=), not MCP servers or browserd (Node mode). */
+export function windowsAppPids(procs: WinProc[], skip: Set<number>, devDir = LINUX_DEV): number[] {
+  const dev = devDir.toLowerCase();
+  return procs
+    .filter((p) => {
+      const cmd = (p.cmd ?? "").toLowerCase();
+      if (skip.has(p.pid) || cmd.includes("--type=")) return false;
+      if (/visioncli-mcp|[\\/]server[\\/]index\.m?js/.test(cmd)) return false;
+      return p.name.toLowerCase() === "visioncli.exe" || (p.name.toLowerCase() === "electron.exe" && cmd.includes(dev));
+    })
+    .map((p) => p.pid);
+}
+
+async function stopWindowsApp() {
+  const { powershell } = await import("./win32.js");
+  let procs: WinProc[] = [];
+  try {
+    const out = await powershell(`ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -Filter "Name='VisionCLI.exe' OR Name='electron.exe'" |
+  ForEach-Object { @{ pid = [int]$_.ProcessId; name = $_.Name; cmd = $_.CommandLine } })`, 15_000, false);
+    procs = out ? [JSON.parse(out)].flat() : [];
+  } catch {}
+  const pids = windowsAppPids(procs, new Set([process.pid, process.ppid]));
+  // /t: the app's renderers and its helper go with it. Windows has no SIGTERM for a windowless app; the app saves
+  // its settings as they change, so a forced stop loses nothing.
+  for (const pid of pids) await run("taskkill", ["/pid", String(pid), "/t", "/f"], { windowsHide: true }).catch(() => {});
+  if (pids.length) await new Promise((r) => setTimeout(r, 500));
+}
+
+async function startVoiceWin(cwd: string): Promise<string> {
+  let app = windowsApp();
+  if (!app && existsSync(join(LINUX_DEV, "build.mjs")) && existsSync(join(LINUX_DEV, "node_modules"))) {
+    await run(process.execPath, ["build.mjs"], { cwd: LINUX_DEV, windowsHide: true });
+    app = windowsApp();
+  }
+  if (!app) throw new Error(`VisionCLI for Windows isn't installed. Get the installer from ${RELEASES}.`);
+
+  const claude = process.env.VISIONCLI_CLAUDE ?? (await which("claude"));
+  if (!claude) throw new Error("Couldn't find the `claude` CLI on PATH. Set VISIONCLI_CLAUDE to its full path.");
+
+  // Same settings as on Linux: inside the app this process is its exe in Node mode, so the app runs the server
+  // through the stable wrapper (no "server" key).
+  const config: Record<string, string> = {
+    cwd: resolve(cwd),
+    claude,
+    path: process.env.PATH ?? process.env.Path ?? "",
+    node: process.versions.electron ? windowsPaths().mcpWrapper : process.execPath,
+  };
+  if (!process.versions.electron) config.server = process.argv[1] ? resolve(process.argv[1]) : join(root, "dist", "index.js");
+  if (process.env.VISIONCLI_MODEL) config.model = process.env.VISIONCLI_MODEL;
+  if (process.env.VISIONCLI_LOCALE) config.locale = process.env.VISIONCLI_LOCALE;
+  mkdirSync(SUPPORT, { recursive: true });
+  writeFileSync(join(SUPPORT, "overlay.json"), JSON.stringify(config));
+
+  // The TypeSafe key for Jev quick commands, as on macOS/Linux (%APPDATA% is already private to the user).
+  const key = process.env.TYPESAFE_API_KEY;
+  if (key) {
+    const file = join(SUPPORT, "integrations.json");
+    let cfg: Record<string, any> = {};
+    try { cfg = JSON.parse(readFileSync(file, "utf8")); } catch {}
+    if (!cfg.typesafe?.apiKey) {
+      cfg.typesafe = { ...(cfg.typesafe ?? {}), apiKey: key };
+      writeFileSync(file, JSON.stringify(cfg, null, 2) + "\n");
+    }
+  }
+
+  // Replace any running instance so it rereads overlay.json. No crash-restart service on Windows (that would need
+  // a scheduled task or admin rights); the app is started detached from this process.
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE; // set when this is visioncli-mcp; the app must start as an app
+  await stopWindowsApp();
+  spawn(app.exe, app.args, { detached: true, stdio: "ignore", env, cwd: homedir(), windowsHide: false }).unref();
+
+  return (
+    `Voice mode is on (default project ${resolve(cwd)}; it follows the project of the window under your pointer). Hold Alt, ask your question, then let go. ` +
+    `The answer appears above your mouse pointer (Esc dismisses it). The VisionCLI icon in the notification area has Quit.`
   );
 }

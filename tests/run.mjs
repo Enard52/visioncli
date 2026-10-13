@@ -39,7 +39,10 @@ await esbuild.build({
 const home = mkdtempSync(join(tmpdir(), "vcli-test-home-"));
 mkdirSync(join(home, "Library", "Application Support", "visioncli"), { recursive: true });
 mkdirSync(join(home, ".config", "visioncli"), { recursive: true }); // CONFIG_DIR on Linux
-const env = { ...process.env, HOME: home, VISIONCLI_REPO: root };
+mkdirSync(join(home, "AppData", "Roaming", "visioncli"), { recursive: true }); // CONFIG_DIR on Windows (%APPDATA%)
+// Windows finds the home folder and app data through these, not HOME.
+const win = { USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local") };
+const env = { ...process.env, HOME: home, VISIONCLI_REPO: root, ...(process.platform === "win32" ? win : {}) };
 for (const k of ["TYPESAFE_API_KEY", "DATABASE_URL", "VISIONCLI_DATABASE_URL", "VISIONCLI_QUICK_DRY", "VISIONCLI_FRONT_APP"]) delete env[k];
 
 const r = spawnSync(process.execPath, ["--enable-source-maps", "--test", "--test-reporter=spec", ...walk(out, ".test.mjs")], { stdio: "inherit", env, cwd: root });

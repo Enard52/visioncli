@@ -112,7 +112,7 @@ async function fake(token: string, reply: Fake["reply"] = () => ({ ok: true })):
 const stop = (f: Fake) => new Promise<void>((r) => { f.server.closeAllConnections(); f.server.close(() => setTimeout(r, 50)); });
 const point = (port: number, token: string) => writeFileSync(join(SUPPORT, "control.json"), JSON.stringify({ port, token }));
 
-describe("send (control.json cache)", { skip: process.platform !== "darwin" && process.platform !== "linux" && "computer control is macOS/Linux-only" }, () => {
+describe("send (control.json cache)", { skip: !["darwin", "linux", "win32"].includes(process.platform) && "computer control is macOS/Linux/Windows-only" }, () => {
   const servers: Fake[] = [];
   after(async () => { await Promise.all(servers.map(stop)); });
 

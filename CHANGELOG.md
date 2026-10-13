@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+- **VisionCLI for Windows (preview):** the same app on Windows 10 and 11 (x64 and Arm), installed per user with no admin rights: hold **Alt** to ask (**Alt + Win** with a screenshot), Visi, the answer bubble with Mermaid and on-screen markers, terminal mode (Windows Terminal, WezTerm, Claude in WSL) and bubble mode with Claude Code and Gemini, computer control through UI Automation with approvals, Autopilot, crash watching (Windows Error Reporting), history, usage, Settings, the setup wizard, start at login, Whisper/Parakeet/Kokoro voices and browser control for Chrome, Brave and Edge. A small built-in helper (`vcli-win.exe`, .NET Framework 4.8, part of every Windows) does what Windows only allows native code to do. Download `VisionCLI-<version>-windows-x64.exe` (or `-arm64`) from the release. The installer isn't code-signed yet, so Windows SmartScreen asks once: *More info → Run anyway*.
+- **One app for Linux and Windows:** the desktop app's folder is now `app/` (was `linux/`), with each system's parts behind the same interfaces; CI runs every test on macOS, Linux and Windows, plus the helper's self-test and a launch with a screenshot on Windows.
+- **Browser control** also works with Microsoft Edge (Windows and Linux), and the browser helper no longer starts a second copy of the app when the MCP server runs inside it.
+
 ## 0.9.1
 
 - **Gemini usage:** with Gemini (Antigravity) as the assistant, the menu shows *Gemini Usage* (Antigravity's 5-hour and weekly limits, plus the Claude/GPT models you use through it) instead of Claude's, with the same menu-bar rings. Reading it costs nothing. Mac and Linux.

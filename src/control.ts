@@ -148,7 +148,7 @@ function post(conn: { port: number; token: string }, body: string, timeout: numb
 
 /** One request to the app; its `{ error }` replies become thrown errors. */
 export async function send<A extends ControlAction>(req: ControlRequest<A>): Promise<ControlResponses[A]> {
-  if (process.platform !== "darwin" && process.platform !== "linux") throw new Error("Computer control is only supported on macOS and Linux.");
+  if (!["darwin", "linux", "win32"].includes(process.platform)) throw new Error("Computer control is only supported on macOS, Linux and Windows.");
   const body = JSON.stringify(req);
   const timeout = timeoutFor(req.action);
   let res: string;

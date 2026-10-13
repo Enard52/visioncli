@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Socket } from "node:net";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import * as browser from "../browser.js";
 import { CdpTabs } from "../browser-cdp.js";
@@ -15,7 +16,15 @@ import { type AgentEvent, type Driver, type Jev, runTask, StalePage } from "./ag
 // Closing the client socket (Esc in the app kills it) stops the task. browserd exits after 30 idle minutes.
 // Without AppleScript (Linux), browser.ts sends every tab/page call here too ({rpc, args} → one reply line).
 
-export const SOCKET = join(CONFIG_DIR, "browserd.sock");
+/** Unix socket in the config dir; Windows has no Unix socket paths for this, so a per-user named pipe there. */
+export function socketPath(platform: NodeJS.Platform = process.platform, configDir = CONFIG_DIR, user = safeUser()): string {
+  return platform === "win32" ? `\\\\.\\pipe\\visioncli-browserd-${user.replace(/[^\w.-]/g, "_")}` : join(configDir, "browserd.sock");
+}
+function safeUser() {
+  try { return userInfo().username; } catch { return process.env.USERNAME ?? "user"; }
+}
+export const SOCKET = socketPath();
+const PIPE = process.platform === "win32"; // named pipes vanish with their server: nothing to probe or unlink
 const IDLE_MS = 30 * 60_000;
 
 export type BrowseEvent = AgentEvent | { type: "status"; message: string };
@@ -88,7 +97,7 @@ export async function activeTarget(cdp: CDP, b: browser.BrowserName, tabs?: CdpT
 
 export async function serve() {
   mkdirSync(CONFIG_DIR, { recursive: true });
-  if (existsSync(SOCKET)) {
+  if (!PIPE && existsSync(SOCKET)) {
     // Another browserd answering? Then this one isn't needed.
     const alive = await new Promise<boolean>((r) => {
       const s = createConnection(SOCKET, () => { s.destroy(); r(true); });
@@ -192,8 +201,13 @@ export async function serve() {
     });
     sock.on("error", () => {});
   });
-  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(SOCKET, resolve); });
-  const cleanup = () => { try { unlinkSync(SOCKET); } catch {} process.exit(0); };
+  try {
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(SOCKET, resolve); });
+  } catch (err) {
+    if (PIPE && (err as NodeJS.ErrnoException).code === "EADDRINUSE") return; // another browserd holds the pipe
+    throw err;
+  }
+  const cleanup = () => { if (!PIPE) try { unlinkSync(SOCKET); } catch {} process.exit(0); };
   process.on("SIGTERM", cleanup);
   process.on("SIGINT", cleanup);
   await new Promise(() => {}); // serve until idle
@@ -211,7 +225,10 @@ async function connectDaemon(): Promise<Socket> {
   try {
     return await dial();
   } catch {
-    const child = spawn(process.execPath, [process.argv[1], "browserd"], { detached: true, stdio: "ignore" });
+    // Inside the desktop app the server is its Electron in Node mode, which needs ELECTRON_RUN_AS_NODE to stay
+    // Node (the wrapper removed it from the environment); windowsHide: no console window for a detached node.exe.
+    const env = process.versions.electron ? { ...process.env, ELECTRON_RUN_AS_NODE: "1" } : process.env;
+    const child = spawn(process.execPath, [process.argv[1], "browserd"], { detached: true, stdio: "ignore", env, windowsHide: true });
     child.unref();
     for (let i = 0; i < 50; i++) {
       await new Promise((r) => setTimeout(r, 100));
