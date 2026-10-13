@@ -66,6 +66,7 @@ jobs:
   # (desktop screenshot uploaded as an artifact, app log printed).
   windows:
     runs-on: windows-latest
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -84,7 +85,9 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm test
-      - run: cd app && npm ci && npm test
+      - name: App tests (per-test timeout, live output, so a hang shows which test)
+        timeout-minutes: 15
+        run: cd app && npm ci && node build.mjs --tests && node --test --test-timeout=60000 --test-reporter=spec $(find build/tests -name '*.test.js')
       - name: Build the helper (vcli-win.exe, .NET Framework 4.8)
         run: |
           if [ -f app/native/windows/build.sh ]; then
