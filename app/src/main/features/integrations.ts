@@ -95,7 +95,7 @@ export async function openIntegrations(openFile: (path: string) => Promise<void>
   if (!existsSync(file)) {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, '{\n  "typesafe": { "apiKey": "" },\n  "gemini": { "apiKey": "" }\n}\n', { mode: 0o600 });
-    try { chmodSync(file, 0o600); } catch {}
+    try { chmodSync(file, 0o600); } catch {} // Windows: no modes; %APPDATA%'s inherited ACL keeps it to this user
   }
   await openFile(file);
 }

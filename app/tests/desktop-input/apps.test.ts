@@ -36,7 +36,7 @@ test("Exec: quoting, escapes and field codes", () => {
   assert.deepEqual(parseExec(`app ""`), ["app", ""]);
 });
 
-test("XDG dirs, Flatpak and Snap exports, user first", () => {
+test("XDG dirs, Flatpak and Snap exports, user first", { skip: process.platform === "win32" && "XDG application folders are Linux-only (POSIX paths)" }, () => {
   const dirs = applicationDirs({ XDG_DATA_DIRS: "/a:/b" }, "/home/u");
   assert.equal(dirs[0], "/home/u/.local/share/applications");
   assert.ok(dirs.includes("/a/applications") && dirs.includes("/b/applications"));
@@ -93,7 +93,8 @@ test("editor choice: in-project, then project markers, then running, then instal
   assert.equal(chooseEditor([], "/proj", [], none), null);
 });
 
-test("resolves bare file names inside the project, skipping node_modules", async () => {
+// Linux backend (find(1)); Windows resolves files in winapps.ts (resolveWinFile, tested under win-backends)
+test("resolves bare file names inside the project, skipping node_modules", { skip: process.platform === "win32" && "Linux backend: uses find(1)" }, async () => {
   const p = mkdtempSync(join(tmpdir(), "proj-"));
   mkdirSync(join(p, "node_modules/x"), { recursive: true });
   mkdirSync(join(p, "src/deep"), { recursive: true });

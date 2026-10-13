@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { compareVersions, electronNodeWrapper, findNode, loadConfig, parseArgs, serverArgs } from "../../src/main/app/config";
 import { drawMarks, makeShot, rawWindowUnderPointer, regionLabel, screenPoint, windowLabel, windowUnderPointer } from "../../src/main/app/shots";
 import { carryOver, cleanTranscript, hudTitle, meaningful, parseOpenLink, terminalQuestion, voiceQuestion } from "../../src/main/app/text";
@@ -28,9 +28,11 @@ test("parseArgs: launch flags only with --cwd", () => {
 
 test("findNode picks the newest Node 18+", () => {
   const d = mkdtempSync(join(tmpdir(), "vn-"));
-  const dirs = ["a", "b", "c"].map((n) => { const p = join(d, n); mkdirSync(p); writeFileSync(join(p, "node"), ""); chmodSync(join(p, "node"), 0o755); return p; });
-  const versions: Record<string, string> = { [join(dirs[0], "node")]: "v16.20.0", [join(dirs[1], "node")]: "v22.1.0", [join(dirs[2], "node")]: "v20.9.0" };
-  assert.equal(findNode(dirs.join(":"), (b) => versions[b]), join(dirs[1], "node"));
+  // this platform's PATH form: `;` and node.exe on Windows (a drive letter's `:` would split a `:` PATH)
+  const exe = process.platform === "win32" ? "node.exe" : "node";
+  const dirs = ["a", "b", "c"].map((n) => { const p = join(d, n); mkdirSync(p); writeFileSync(join(p, exe), ""); chmodSync(join(p, exe), 0o755); return p; });
+  const versions: Record<string, string> = { [join(dirs[0], exe)]: "v16.20.0", [join(dirs[1], exe)]: "v22.1.0", [join(dirs[2], exe)]: "v20.9.0" };
+  assert.equal(findNode(dirs.join(delimiter), (b) => versions[b]), join(dirs[1], exe));
   assert.equal(findNode(dirs[0], (b) => versions[b]), null);
   assert.ok(compareVersions([22, 1], [22, 0, 9]) > 0);
 });
@@ -45,7 +47,7 @@ test("loadConfig: args are saved, a wrapper node keeps the server empty", () => 
   assert.equal(c.cwd, "/proj");
   assert.equal(c.node, wrapper);
   assert.equal(c.server, null);
-  assert.ok(c.path.includes(".local/bin"));
+  assert.match(c.path, process.platform === "win32" ? /\.local\\bin/i : /\.local\/bin/);
   assert.deepEqual(serverArgs(c, ["quick", "x"]), ["quick", "x"]);
   assert.deepEqual(serverArgs({ server: "/s.mjs" }, ["warm"]), ["/s.mjs", "warm"]);
 
@@ -56,9 +58,11 @@ test("loadConfig: args are saved, a wrapper node keeps the server empty", () => 
 
 test("electronNodeWrapper runs Electron as Node", () => {
   const d = mkdtempSync(join(tmpdir(), "vw-"));
-  const f = electronNodeWrapper("/opt/it's/electron", d);
+  const f = electronNodeWrapper("/opt/it's/electron", d, "linux");
   const body = readFileSync(f, "utf8");
   assert.match(body, /ELECTRON_RUN_AS_NODE=1 exec '\/opt\/it'\\''s\/electron' "\$@"/);
+  const cmd = readFileSync(electronNodeWrapper("C:\\Apps\\100%\\VisionCLI.exe", d, "win32"), "utf8");
+  assert.equal(cmd, '@set ELECTRON_RUN_AS_NODE=1\r\n@"C:\\Apps\\100%%\\VisionCLI.exe" %*\r\n', "Windows: a .cmd, % doubled");
 });
 
 test("shots: pointer in image pixels, image → screen, marks", () => {

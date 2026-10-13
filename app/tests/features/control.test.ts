@@ -10,6 +10,9 @@ import { createControlServer, type ApprovalCard, type ControlServer } from "../.
 import type { PermissionAnswer } from "../../src/main/contracts";
 import { fakes, win } from "./fakes";
 
+// Windows has no POSIX file modes (the profile folder's ACL keeps these files private), so the 0600 checks are POSIX-only.
+const POSIX_MODES = process.platform !== "win32";
+
 describe("control protocol parity", () => {
   test("the Linux action list is exactly src/control.ts CONTROL_ACTIONS", () => {
     assert.deepEqual([...CONTROL_ACTION_NAMES].sort(), [...CONTROL_ACTIONS].sort());
@@ -74,7 +77,7 @@ describe("control server over HTTP", () => {
     assert.equal(info.port, server.port);
     assert.equal(info.pid, process.pid);
     assert.ok(info.token.length >= 64);
-    assert.equal(statSync(infoFile).mode & 0o777, 0o600);
+    if (POSIX_MODES) assert.equal(statSync(infoFile).mode & 0o777, 0o600);
   });
 
   test("bad token → 403, bad json → 400", async () => {

@@ -57,7 +57,7 @@ describe("CrashWatcher", () => {
       if (cmd === "coredumpctl") return { code: 0, out: COREDUMPCTL, err: "" };
       return { code: 127, out: "", err: "" };
     };
-    const w = new CrashWatcher({ crashDir: join(dir, "crash"), reportsDir: join(dir, "reports"), uid: 1000, runner, interval: 60_000 });
+    const w = new CrashWatcher({ crashDir: join(dir, "crash"), reportsDir: join(dir, "reports"), uid: 1000, runner, interval: 60_000, platform: "linux" });
     const seen: string[] = [];
     w.onCrash = (c) => seen.push(c.app);
     await w.start();
@@ -80,7 +80,7 @@ describe("CrashWatcher", () => {
     writeFileSync(join(dir, "crash", "_usr_bin_old.1000.crash"), "old");
     const runner = async (cmd: string): Promise<RunResult> =>
       cmd === "journalctl" ? { code: 0, out: JOURNAL, err: "" } : cmd === "coredumpctl" ? { code: 127, out: "", err: "not found" } : { code: 0, out: "", err: "" };
-    const w = new CrashWatcher({ crashDir: join(dir, "crash"), reportsDir: join(dir, "r"), uid: 1000, runner, interval: 60_000 });
+    const w = new CrashWatcher({ crashDir: join(dir, "crash"), reportsDir: join(dir, "r"), uid: 1000, runner, interval: 60_000, platform: "linux" });
     const seen: string[] = [];
     w.onCrash = (c) => seen.push(`${c.app}:${c.file.endsWith(".crash") ? "apport" : "core"}`);
     await w.start();

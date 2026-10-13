@@ -23,7 +23,8 @@ const activity = new BufferedActivity(new ActivityLog(activityFile));
 function handlers() {
   const got: { tools: [string, string | undefined][]; done?: { text: string }; error?: string; waiting: number } = { tools: [], waiting: 0 };
   let resolve!: () => void;
-  const finished = new Promise<void>((r) => (resolve = r));
+  // bounded: a transcript the session never sees fails the test instead of hanging the file
+  const finished = new Promise<void>((r, j) => { resolve = r; setTimeout(() => j(new Error("no answer within 15 s")), 15_000).unref(); });
   const h: AnswerHandlers = {
     onText() {},
     onTool: (n, d) => got.tools.push([n, d]),

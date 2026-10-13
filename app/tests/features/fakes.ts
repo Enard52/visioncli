@@ -1,4 +1,6 @@
 // Fake desktop/input/accessibility/apps for driving the control server and Autopilot in tests.
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Accessibility, Apps, Desktop, DesktopWindow, InputInjector, Point, Rect, UIElement } from "../../src/main/contracts";
 
 export const win = (id: string, app: string, appId: string, title = "", pid = 4242): DesktopWindow =>
@@ -56,4 +58,20 @@ export function fakes() {
     openFile: async () => {},
   };
   return { calls, state, desktop, input, ax, apps };
+}
+
+/** A fake CLI on disk that runs `js` (Node source; process.argv.slice(2) are its arguments): a sh script on Linux and
+ *  macOS, a .cmd on Windows (so the same cmd.exe quoting a real npm shim gets is exercised). Returns its path. */
+export function fakeCli(dir: string, name: string, js: string): string {
+  const script = join(dir, `${name}.fake.js`);
+  writeFileSync(script, js);
+  if (process.platform === "win32") {
+    const p = join(dir, `${name}.cmd`);
+    writeFileSync(p, `@"${process.execPath}" "${script}" %*\r\n`);
+    return p;
+  }
+  const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  const p = join(dir, name);
+  writeFileSync(p, `#!/bin/sh\nexec ${q(process.execPath)} ${q(script)} "$@"\n`, { mode: 0o755 });
+  return p;
 }

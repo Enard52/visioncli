@@ -9,6 +9,7 @@ import { ProjectResolver, tokens } from "../../src/main/features/projects";
 import { AnnounceQueue, announceSeconds } from "../../src/main/features/announce";
 import { HOME_NOTE, HomeProject } from "../../src/main/features/home";
 import type { Phase } from "../../src/main/contracts";
+import { fakeCli } from "./fakes";
 
 const tmp = (p: string) => mkdtempSync(join(tmpdir(), p));
 
@@ -78,9 +79,10 @@ describe("UsageTracker", () => {
 
   test("refresh runs the tiny haiku request", async () => {
     const dir = tmp("vcli-usage-");
-    const fake = join(dir, "claude");
     const future = Math.floor(Date.now() / 1000) + 600;
-    writeFileSync(fake, `#!/bin/sh\necho "$@" > ${dir}/args\necho '{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":0.1,"resetsAt":${future}}}}}'\n`, { mode: 0o755 });
+    const event = { type: "rate_limit_event", rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.1, resetsAt: future } } } };
+    const fake = fakeCli(dir, "claude", `require("fs").writeFileSync(${JSON.stringify(join(dir, "args"))}, process.argv.slice(2).join(" ") + "\\n");
+console.log(${JSON.stringify(JSON.stringify(event))});`);
     const u = new UsageTracker(store(), "/nonexistent");
     await u.refresh(fake);
     assert.equal(u.percent(u.session), 10);
@@ -111,7 +113,8 @@ describe("ProjectResolver", () => {
     assert.deepEqual(tokens("myshop [~/PhpstormProjects/myshop] – x"), ["~/PhpstormProjects/myshop", "myshop", "x"]);
   });
 
-  test("Linux recents (JetBrains, VS Code family), scanned folders, git root", async () => {
+  // Windows recents (%APPDATA%, file:///c%3A/… URIs) are tested in win-features/data.test.ts
+  test("Linux recents (JetBrains, VS Code family), scanned folders, git root", { skip: process.platform === "win32" && "Linux config folders and POSIX file:// paths" }, async () => {
     const home = tmp("vcli-home-");
     const config = join(home, ".config");
     const mk = (p: string) => mkdirSync(join(home, p), { recursive: true });

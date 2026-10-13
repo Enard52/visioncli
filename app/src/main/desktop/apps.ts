@@ -78,7 +78,7 @@ export function readEntries(dirs = applicationDirs()): DesktopEntry[] {
     for (const n of names) {
       const file = join(dir, n);
       if (n.endsWith(".desktop")) {
-        const id = relative(root, file).split("/").join("-");
+        const id = relative(root, file).split(/[\\/]/).join("-");
         if (seen.has(id)) continue; // an earlier dir overrides (or hides) the same id
         let kv: Record<string, string>;
         try { kv = parseDesktopFile(readFileSync(file, "utf8")); } catch { continue; }

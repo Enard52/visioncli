@@ -9,6 +9,10 @@ import { KOKORO_FILES, ModelInstaller, WHISPER_MODEL } from "../../src/main/feat
 import { Autostart, desktopEntry, systemdQuote, unitFile } from "../../src/main/features/autostart";
 import { AgySetup, connectTools, openIntegrations } from "../../src/main/features/integrations";
 import type { RunResult } from "../../src/main/features/run";
+import { fakeCli } from "./fakes";
+
+// Windows has no POSIX file modes (the profile folder's ACL keeps these files private), so the 0600 checks are POSIX-only.
+const POSIX_MODES = process.platform !== "win32";
 
 const tmp = (p: string) => mkdtempSync(join(tmpdir(), p));
 
@@ -49,9 +53,9 @@ describe("Updater", () => {
     assert.equal(pickAsset(release("0.9.0"), "deb", "x64")!.url, "https://x/deb");
     assert.equal(pickAsset(release("0.9.0"), "appimage", "arm64")!.url, "https://x/arm");
     assert.equal(pickAsset({ tag_name: "v1", assets: [] }, "appimage"), null);
-    assert.equal(installKind({ APPIMAGE: "/a/V.AppImage" }, "/tmp/.mount_x/visioncli"), "appimage");
-    assert.equal(installKind({}, "/opt/VisionCLI/visioncli"), "deb");
-    assert.equal(installKind({}, "/home/me/visioncli/app/node_modules/electron/dist/electron"), "dev");
+    assert.equal(installKind({ APPIMAGE: "/a/V.AppImage" }, "/tmp/.mount_x/visioncli", "linux"), "appimage");
+    assert.equal(installKind({}, "/opt/VisionCLI/visioncli", "linux"), "deb");
+    assert.equal(installKind({}, "/home/me/visioncli/app/node_modules/electron/dist/electron", "linux"), "dev");
   });
 
   test("minisign (prehashed and legacy) and raw ed25519 signatures", () => {
@@ -86,7 +90,7 @@ describe("Updater", () => {
     }) as typeof fetch;
     let quit = 0;
     const u = new Updater({ currentVersion: "0.8.0", openUrl: () => {}, quit: () => quit++, fetch: fakeFetch, publicKey: k.pub,
-      env: { APPIMAGE: appImage, PATH: "/usr/bin:/bin" }, arch: "x64" });
+      env: { APPIMAGE: appImage, PATH: "/usr/bin:/bin" }, arch: "x64", platform: "linux" });
     const seen: string[] = [];
     u.onAvailable = (r) => seen.push(r.version);
     const statuses: (string | null)[] = [];
@@ -115,7 +119,7 @@ describe("Updater", () => {
 
   test("deb installs open the release page", async () => {
     let opened = "";
-    const u = new Updater({ currentVersion: "0.8.0", openUrl: (x) => (opened = x), quit: () => {}, env: {}, execPath: "/opt/VisionCLI/visioncli", arch: "x64",
+    const u = new Updater({ currentVersion: "0.8.0", openUrl: (x) => (opened = x), quit: () => {}, env: {}, execPath: "/opt/VisionCLI/visioncli", arch: "x64", platform: "linux",
       fetch: (async () => new Response(JSON.stringify(release("99.1.0")))) as unknown as typeof fetch });
     const r = await u.check(true);
     assert.equal(r?.kind, "deb");
@@ -177,7 +181,7 @@ describe("Autostart", () => {
       if (args[1] === "is-enabled") return { code: 0, out: "enabled\n", err: "" };
       return { code: 0, out: "", err: "" };
     };
-    const a = new Autostart({ exec: ["/x/VisionCLI.AppImage"], config, logs: config, runner });
+    const a = new Autostart({ exec: ["/x/VisionCLI.AppImage"], config, logs: config, runner, platform: "linux" });
     assert.equal(await a.set(true), "systemd");
     assert.ok(existsSync(join(config, "systemd/user/visioncli.service")));
     assert.ok(calls.includes("--user enable visioncli.service"));
@@ -215,11 +219,8 @@ describe("Integrations", () => {
 
   test("claude mcp add --scope user -- <node> <server>; gemini --trust", async () => {
     const dir = tmp("vcli-int-");
-    const fake = (name: string) => {
-      const p = join(dir, name);
-      writeFileSync(p, `#!/bin/sh\necho "$@" >> ${dir}/${name}.log\n`, { mode: 0o755 });
-      return p;
-    };
+    const fake = (name: string) =>
+      fakeCli(dir, name, `require("fs").appendFileSync(${JSON.stringify(join(dir, name + ".log"))}, process.argv.slice(2).join(" ") + "\\n");`);
     const t = { node: "/usr/bin/node", server: "/opt/v/server/index.mjs", claude: fake("claude"), gemini: fake("gemini"), agy: null, path: "/usr/bin:/bin" };
     assert.equal(await connectTools("claude", t), null);
     assert.equal(readFileSync(join(dir, "claude.log"), "utf8"), "mcp remove visioncli -s user\nmcp add visioncli --scope user -- /usr/bin/node /opt/v/server/index.mjs\n");
@@ -234,7 +235,7 @@ describe("Integrations", () => {
     let opened = "";
     await openIntegrations((p) => { opened = p; }, file);
     assert.equal(opened, file);
-    assert.equal(statSync(file).mode & 0o777, 0o600);
+    if (POSIX_MODES) assert.equal(statSync(file).mode & 0o777, 0o600);
     writeFileSync(file, '{"typesafe":{"apiKey":"SECRET"}}');
     await openIntegrations(() => {}, file);
     assert.equal(readFileSync(file, "utf8"), '{"typesafe":{"apiKey":"SECRET"}}'); // left alone

@@ -124,7 +124,7 @@ function fakeApp(dir: string, name: string) {
   return f;
 }
 
-test("launcher: keeps the sandbox when it works, --no-sandbox only when it can't, strips the desktop marker", () => {
+test("launcher: keeps the sandbox when it works, --no-sandbox only when it can't, strips the desktop marker", { skip: process.platform === "win32" && "Linux packaging: a POSIX sh script" }, () => {
   const dir = mkdtempSync(join(tmpdir(), "vcli-launcher-"));
   copyFileSync(join(RES, "bin", "visioncli-launcher.sh"), join(dir, "visioncli"));
   execFileSync("chmod", ["755", join(dir, "visioncli")]);
@@ -154,7 +154,7 @@ test("visioncli-mcp: runs the app as Node with a bootstrap that finds resources/
   if (!existsSync("/opt/VisionCLI/visioncli")) assert.match(none.stderr, /isn't installed/);
 });
 
-test("setup-user.sh: stable AppImage link, menu entry, icons and the MCP wrapper (no root)", () => {
+test("setup-user.sh: stable AppImage link, menu entry, icons and the MCP wrapper (no root)", { skip: process.platform === "win32" && "Linux packaging: a POSIX sh script" }, () => {
   const home = mkdtempSync(join(tmpdir(), "vcli-home-"));
   const appimage = join(home, "Downloads", "VisionCLI-1.2.3-linux-x86_64.AppImage");
   execFileSync("mkdir", ["-p", dirname(appimage)]);

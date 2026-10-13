@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, win32 } from "node:path";
+import { basename as fileName, dirname, join, win32 } from "node:path";
 import type { Assistant } from "../settings";
 import { basename } from "./procs";
 
@@ -127,7 +127,7 @@ function geminiHeader(file: string): Record<string, unknown> | null {
 export function newestSession(cli: Cli, cwd: string): string | undefined {
   if (cli === "claude") {
     const files = jsonl(claudeDir(cwd)).sort((a, b) => mtime(b) - mtime(a));
-    return files[0] ? basename(files[0]).replace(/\.jsonl$/, "") : undefined;
+    return files[0] ? fileName(files[0], ".jsonl") : undefined; // node:path's basename: these are local paths (\ on Windows)
   }
   if (cli === "gemini") {
     const hash = sha256(cwd);

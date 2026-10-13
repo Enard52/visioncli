@@ -458,7 +458,9 @@ export function createControlServer(deps: ControlDeps): ControlServer {
           try {
             mkdirSync(dirname(infoFile), { recursive: true });
             writeFileSync(infoFile, JSON.stringify({ port, token, pid: process.pid }), { mode: 0o600 });
-            chmodSync(infoFile, 0o600); // the file may have existed with other permissions
+            // The file may have existed with other permissions. Windows has no POSIX modes (chmod only toggles
+            // read-only): there the file is private through %APPDATA%'s inherited ACL (the user, SYSTEM, Administrators).
+            chmodSync(infoFile, 0o600);
           } catch (e) {
             log(`control: can't write ${infoFile}: ${e}`);
           }
