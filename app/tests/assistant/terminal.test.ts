@@ -196,7 +196,8 @@ test("terminal: Gemini and agy transcripts", async () => {
   assert.equal(settings.getStore(`terminalSession:antigravity:${join(TEST_HOME, "proj-agy")}`), "conv-agy-1");
 });
 
-test("terminal: launch script, prompt detection, stable names", () => {
+// Windows writes a .cmd launch script instead (tested in win-features/terminal.test.ts)
+test("terminal: launch script", { skip: process.platform === "win32" && "the POSIX sh launch script" }, () => {
   settings.set("effort", "high");
   settings.set("model", "opus");
   const project = join(TEST_HOME, "it's a project");
@@ -214,6 +215,9 @@ test("terminal: launch script, prompt detection, stable names", () => {
   assert.equal(id, stableHash(project));
   settings.set("effort", null);
   settings.set("model", "default");
+});
+
+test("terminal: stable names, prompt detection", () => {
   // Same as Swift's `project.utf8.reduce(5381) { $0 &* 33 &+ $1 }` (UInt64, wrapping).
   assert.equal(stableHash("/home/me/proj"), "1257409565501412264");
   assert.ok(TerminalSession.promptReady("╭───╮\n│ > \n? for shortcuts"));

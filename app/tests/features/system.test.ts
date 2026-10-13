@@ -75,7 +75,7 @@ describe("Updater", () => {
     assert.ok(parsePublicKey(k.pub));
   });
 
-  test("check → notify once; install replaces $APPIMAGE only with a valid signature", async () => {
+  test("check → notify once; install replaces $APPIMAGE only with a valid signature", { skip: process.platform === "win32" && "AppImage updates are Linux-only (exec bit, relaunch through /bin/sh)" }, async () => {
     const dir = tmp("vcli-upd-");
     const appImage = join(dir, "VisionCLI.AppImage");
     writeFileSync(appImage, "old");
