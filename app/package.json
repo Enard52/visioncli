@@ -1,7 +1,7 @@
 {
   "name": "visioncli-linux",
   "private": true,
-  "version": "0.10.3",
+  "version": "0.10.4",
   "description": "VisionCLI for Linux: the voice overlay app (Electron), feature-for-feature with the macOS app.",
   "main": "build/main.js",
   "type": "commonjs",
