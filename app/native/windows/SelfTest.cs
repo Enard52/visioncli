@@ -41,7 +41,9 @@ namespace VcliWin
         }
 
         static void Assert(bool ok, string what) { if (!ok) throw new Exception("expected " + what); }
-        static object Call(string method, params object[] kv) => Program.Handle(method, new Args(Json.O(kv)));
+        // Params go through JSON like the protocol's (numbers arrive as doubles), not as boxed ints.
+        static object Call(string method, params object[] kv) =>
+            Program.Handle(method, new Args((Dictionary<string, object>)Json.Parse(Json.Write(Json.O(kv)))));
         static Dictionary<string, object> Obj(object o) => (Dictionary<string, object>)o;
         static List<object> Arr(object o) => (List<object>)o;
         static string J(object o) { var s = Json.Write(o); return s.Length > 160 ? s.Substring(0, 160) + "…" : s; }
