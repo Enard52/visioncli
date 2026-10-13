@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:net";
-import { describe, it } from "node:test";
+import { describe, it, test } from "node:test";
+import { kokoroUvArgs } from "../../src/main/tts/kokoro";
 import { sherpaRequest, sherpaText } from "../../src/main/stt/parakeet";
 import { termParts, applyVocabulary } from "../../src/main/stt/vocab";
 import { whisperPrompt, whisperText } from "../../src/main/stt/whisper";
@@ -124,4 +125,11 @@ describe("speaker", () => {
     const esp = "Pty Language       Age/Gender VoiceName          File                 Other Languages\n 5  af              --/M      Afrikaans          gmw/af               \n";
     assert.deepEqual(parseEspeakVoices(esp), [{ name: "Afrikaans", lang: "af" }]);
   });
+});
+
+test("Kokoro runs on x64 Python on Windows on Arm (no win_arm64 wheels for onnxruntime/soundfile)", () => {
+  assert.ok(kokoroUvArgs("win32", "arm64").includes("cpython-3.12-windows-x86_64-none"));
+  assert.ok(!kokoroUvArgs("win32", "x64").includes("--python"));
+  assert.ok(!kokoroUvArgs("linux", "arm64").includes("--python"));
+  assert.deepEqual(kokoroUvArgs("darwin", "arm64").slice(-1), ["python"]);
 });

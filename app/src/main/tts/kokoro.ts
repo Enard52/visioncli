@@ -10,6 +10,13 @@ import { VoiceModels } from "../stt/models";
 // KokoroEngine (Voice.swift): kokoro-onnx through `uv`, with overlay/Resources/kokoro_server.py unchanged. JSON lines
 // {"id","text","voice","speed"} in; {"id","path"} or {"id","error"} out; {"ready": true} once the model is loaded.
 
+/** `uv run` arguments for Kokoro's Python. Windows on Arm: onnxruntime and soundfile publish no win_arm64 wheels, so
+ *  Kokoro runs on x64 Python there, which Windows runs through its built-in emulation (uv fetches that Python). */
+export function kokoroUvArgs(platform: string = process.platform, arch: string = process.arch): string[] {
+  const python = platform === "win32" && arch === "arm64" ? ["--python", "cpython-3.12-windows-x86_64-none"] : [];
+  return ["run", "--quiet", ...python, "--with", "kokoro-onnx", "--with", "soundfile", "python"];
+}
+
 /** kokoro_server.py: next to the bundle (build/assets), in the packaged app, or in the repo (dev, tests). */
 export function kokoroScript(): string | null {
   const resources = (process as { resourcesPath?: string }).resourcesPath;
@@ -42,7 +49,7 @@ export class KokoroEngine {
     const outDir = join(TMP, "visioncli-tts");
     mkdirSync(outDir, { recursive: true });
     const env = { ...process.env, PATH: [process.env.PATH, join(homedir(), ".local/bin"), join(homedir(), ".cargo/bin")].filter(Boolean).join(delimiter) };
-    const p = VoiceModels.spawnHelper(uv, ["run", "--quiet", "--with", "kokoro-onnx", "--with", "soundfile", "python", script, model, voices, outDir],
+    const p = VoiceModels.spawnHelper(uv, [...kokoroUvArgs(), script, model, voices, outDir],
       { stdio: ["pipe", "pipe", "pipe"], env });
     this.proc = p;
     const lines = new LineSplitter();

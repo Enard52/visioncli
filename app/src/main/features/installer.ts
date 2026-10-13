@@ -1,3 +1,4 @@
+import { kokoroUvArgs } from "../tts/kokoro";
 import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -176,7 +177,7 @@ export class ModelInstaller {
       // Fetch the Python packages once now, so the first spoken answer doesn't wait for them.
       this.setStatus("Preparing Kokoro…");
       const uv = this.findUv();
-      if (uv) await this.runner(uv, ["run", "--quiet", "--with", "kokoro-onnx", "--with", "soundfile", "python", "-c", "import kokoro_onnx"],
+      if (uv) await this.runner(uv, [...kokoroUvArgs(), "-c", "import kokoro_onnx"],
         { env: withPath(userPath()), timeout: 600_000 });
     }
     this.done();

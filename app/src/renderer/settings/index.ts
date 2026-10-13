@@ -158,7 +158,7 @@ const PAGES: Record<SettingsSection, (s: SettingsSnapshot) => Child> = {
       ]),
       card("Voice", "Choosing a voice plays a sample.", [
         ...s.kokoroVoices.map((v) => voiceRow(v.id, `Kokoro · ${v.name}`)),
-        voiceRow(null, "System voice (speech-dispatcher)"),
+        voiceRow(null, s.platform === "win32" ? "Windows voice" : "System voice (speech-dispatcher)"),
         !s.kokoroInstalled && (s.installStatus ? installProgress(s.installStatus)
           : row("Natural voices", "Seven natural-sounding voices (US and UK) that run on your computer. About 350 MB.", button("Download…", () => act("installKokoro")))),
       ]),
