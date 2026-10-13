@@ -35,7 +35,7 @@ New-Item -ItemType Directory -Force $vc | Out-Null
 if ($machine -eq $Arch) {
   foreach ($f in "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") { Copy-Item (Join-Path $env:WINDIR "System32\$f") $vc -ErrorAction Stop }
 } else {
-  Write-Warning "Building $Arch on $machine: no app-local VC++ runtime (Whisper then needs Microsoft's redistributable)."
+  Write-Warning "Building ${Arch} on ${machine}: no app-local VC++ runtime (Whisper then needs Microsoft's redistributable)."
 }
 
 Set-Location app

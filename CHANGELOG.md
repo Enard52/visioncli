@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.1
+
+- **Windows installers published:** the 0.10.0 release build stopped on a PowerShell parsing slip in the Windows packaging script, so its Windows installers were missing (macOS and Linux were fine). 0.10.1 is the same app with the Windows preview installers (`VisionCLI-0.10.1-windows-x64.exe`, `-arm64.exe`). CI now parse-checks that script on every push.
+
 ## 0.10.0
 
 - **VisionCLI for Windows (preview):** the same app on Windows 10 and 11 (x64 and Arm), installed per user with no admin rights: hold **Alt** to ask (**Alt + Win** with a screenshot), Visi, the answer bubble with Mermaid and on-screen markers, terminal mode (Windows Terminal, WezTerm, Claude in WSL) and bubble mode with Claude Code and Gemini, computer control through UI Automation with approvals, Autopilot, crash watching (Windows Error Reporting), history, usage, Settings, the setup wizard, start at login, Whisper/Parakeet/Kokoro voices and browser control for Chrome, Brave and Edge. A small built-in helper (`vcli-win.exe`, .NET Framework 4.8, part of every Windows) does what Windows only allows native code to do. Download `VisionCLI-<version>-windows-x64.exe` (or `-arm64`) from the release. The installer isn't code-signed yet, so Windows SmartScreen asks once: *More info → Run anyway*.

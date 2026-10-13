@@ -113,6 +113,7 @@ jobs:
   # (Without the arm64 runner, build arm64 on windows-latest instead: the script cross-builds with -Arch arm64.)
   windows:
     strategy:
+      fail-fast: false # one arch failing shouldn't cancel the other
       matrix:
         include:
           - runner: windows-latest

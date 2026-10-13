@@ -88,6 +88,12 @@ jobs:
       - name: App tests (per-test timeout, live output, so a hang shows which test)
         timeout-minutes: 15
         run: cd app && npm ci && node build.mjs --tests && node --test --test-timeout=60000 --test-reporter=spec $(find build/tests -name '*.test.js')
+      - name: Release script parses (it only runs on tags otherwise)
+        shell: pwsh
+        run: |
+          $e = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/app/scripts/package-release-win.ps1", [ref]$null, [ref]$e) | Out-Null
+          if ($e) { $e | ForEach-Object { Write-Error "$($_.Message) at line $($_.Extent.StartLineNumber)" }; exit 1 }
       - name: Build the helper (vcli-win.exe, .NET Framework 4.8)
         run: |
           if [ -f app/native/windows/build.sh ]; then
