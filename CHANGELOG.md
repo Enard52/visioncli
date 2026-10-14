@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.5
+
+- **New look:** a new logo (an aperture around a pupil) on every app icon, the macOS menu bar and the Linux/Windows tray, and a new website at **https://visioncli.thethirdsourcers.com** with downloads for every platform.
+- **Easier, verified installs:**
+  - Linux: a signed apt repository on the website (`sudo apt install visioncli-linux`) and new `.rpm` packages with a signed dnf repository (`sudo dnf install visioncli-linux`).
+  - macOS: Homebrew (`brew install --cask thethirdsourcers/tap/visioncli`), updated automatically with each release.
+  - Windows: winget (`winget install TheThirdSourcers.VisionCLI`) once Microsoft accepts the package.
+  - Every download carries a build provenance attestation (`gh attestation verify <file> -R thethirdsourcers/visioncli`).
+- **macOS:** restarting VisionCLI no longer re-registers its background item, so the "App Background Activity" notice doesn't come back on every start.
+- **Linux:** runs inside Flatpak (host tools through `flatpak-spawn --host`); the GNOME extension's id is now `visioncli@thethirdsourcers.com` (the old one is switched off and removed on update).
+- Publisher name: Third Sourcers.
+
 ## 0.10.4
 
 - **Windows on Arm, Kokoro voices:** every voice sample played the Windows voice, because Kokoro's Python libraries (onnxruntime, soundfile) have no Windows-on-Arm builds and Kokoro couldn't start. It now runs on x64 Python there, through Windows' built-in emulation. The system voice is labelled "Windows voice" on Windows.
