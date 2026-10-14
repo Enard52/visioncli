@@ -63,7 +63,7 @@ linux:
   description: >-
     AI co-assistant for developers that sees your screen and uses your computer: ask about what you're
     looking at or have it do the task, by typing or voice, with Claude Code or Gemini.
-  maintainer: The Third Sourcers <hello@visioncli.dev>
+  maintainer: The Third Sourcers <hello@thethirdsourcers.com>
   vendor: The Third Sourcers
   target:
     - AppImage

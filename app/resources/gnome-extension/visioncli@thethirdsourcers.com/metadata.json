@@ -1,5 +1,5 @@
 {
-  "uuid": "visioncli@visioncli.dev",
+  "uuid": "visioncli@thethirdsourcers.com",
   "name": "VisionCLI",
   "description": "Lets the VisionCLI voice assistant see which windows are open, where the mouse is, and take screenshots of them. Exports dev.visioncli.Shell on the session bus; nothing leaves your computer.",
   "url": "https://github.com/thethirdsourcers/visioncli",

@@ -3,7 +3,7 @@
 // enabled (a one-time install, then log out and back in), this backend works like the generic Wayland one:
 // whole-screen and region capture through the Screenshot portal.
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +13,9 @@ import { type Encoder, type Tools, cropFor, defaultEncoder, keepWindow, ownPids,
 import { busCall, nameHasOwner, portalScreenshot, sessionBus } from "./portal";
 import { type DisplaySource, type PngSource, electronDisplays } from "./wayland";
 
-export const GNOME_UUID = "visioncli@visioncli.dev";
+export const GNOME_UUID = "visioncli@thethirdsourcers.com";
+/** Earlier ids of the same extension (before it used the company's domain): removed and turned off on install. */
+export const OLD_GNOME_UUIDS = ["visioncli@visioncli.dev"];
 export const GNOME_BUS = "dev.visioncli.Shell";
 const PATH = "/dev/visioncli/Shell";
 const VERSION = "1";
@@ -72,6 +74,11 @@ export async function installGnomeExtension(tools: Tools = realTools): Promise<{
   await writeFile(join(dest, "extension.js"), version < 45 ? toLegacyExtension(esm) : esm);
   await writeFile(join(dest, "metadata.json"), await readFile(join(src, "metadata.json"), "utf8"));
   log(`desktop: installed GNOME extension for shell ${version} at ${dest}`);
+  // The same extension under its old id would export the same D-Bus service: switch it off and remove it.
+  for (const old of OLD_GNOME_UUIDS) {
+    await tools.text("gnome-extensions", ["disable", old]).catch(() => "");
+    await rm(join(dest, "..", old), { recursive: true, force: true }).catch(() => {});
+  }
 
   let enabled = false;
   try {
@@ -81,7 +88,7 @@ export async function installGnomeExtension(tools: Tools = realTools): Promise<{
     // The running shell hasn't seen it yet (Wayland): add it to the list it reads at login.
     try {
       const cur = await tools.text("gsettings", ["get", "org.gnome.shell", "enabled-extensions"]);
-      const list = [...cur.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+      const list = [...cur.matchAll(/'([^']+)'/g)].map((m) => m[1]).filter((u) => !OLD_GNOME_UUIDS.includes(u));
       if (!list.includes(GNOME_UUID)) list.push(GNOME_UUID);
       await tools.text("gsettings", ["set", "org.gnome.shell", "enabled-extensions", `[${list.map((u) => `'${u}'`).join(", ")}]`]);
       enabled = true;

@@ -13,7 +13,7 @@ import { resourcesDir } from "../../src/main/desktop/windows/common";
 
 const res = resourcesDir();
 const kwinScript = readFileSync(join(res, "kwin/visioncli-query.js"), "utf8");
-const extension = readFileSync(join(res, "gnome-extension/visioncli@visioncli.dev/extension.js"), "utf8");
+const extension = readFileSync(join(res, "gnome-extension/visioncli@thethirdsourcers.com/extension.js"), "utf8");
 
 function kwinWindow(id: string, cls: string, x: number, extra: object = {}) {
   return { internalId: id, resourceClass: cls, resourceName: cls, desktopFileName: "", caption: cls + " title", pid: 100,

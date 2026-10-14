@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Tools } from "../../src/main/desktop/windows/common";
-import { GNOME_UUID, installGnomeExtension } from "../../src/main/desktop/windows/gnome";
+import { GNOME_UUID, OLD_GNOME_UUIDS, installGnomeExtension } from "../../src/main/desktop/windows/gnome";
 
 function fakeTools(shell: string, enableWorks: boolean) {
   const calls: string[] = [];
@@ -42,4 +42,15 @@ test("installGnomeExtension: GNOME 43 gets the legacy form; falls back to gsetti
   assert.match(js, /^const Gio = imports\.gi\.Gio;$/m);
   assert.match(js, /function init\(\)/);
   assert.ok(calls.includes(`gsettings set org.gnome.shell enabled-extensions ['ding@rastersoft.com', '${GNOME_UUID}']`));
+});
+
+test("installGnomeExtension: the extension under its old id is turned off and removed", async () => {
+  process.env.XDG_DATA_HOME = mkdtempSync(join(tmpdir(), "vcli-gx-"));
+  const old = join(process.env.XDG_DATA_HOME, "gnome-shell/extensions", OLD_GNOME_UUIDS[0]);
+  mkdirSync(old, { recursive: true });
+  writeFileSync(join(old, "metadata.json"), "{}");
+  const { tools, calls } = fakeTools("46.1", true);
+  await installGnomeExtension(tools);
+  assert.equal(existsSync(old), false);
+  assert.ok(calls.some((c) => c === `gnome-extensions disable ${OLD_GNOME_UUIDS[0]}`), calls.join("\n"));
 });
