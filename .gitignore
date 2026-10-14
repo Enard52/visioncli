@@ -15,3 +15,5 @@ app/native/windows/bin/
 app/native/windows/obj/
 app/resources/bin/vcli-win.exe
 app/resources/win32/vcruntime/
+# The package-signing key (scripts/make-packages-key.sh): a secret, never committed
+packages-key/
