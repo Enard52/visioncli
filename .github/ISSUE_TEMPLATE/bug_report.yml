@@ -1,0 +1,44 @@
+name: Bug report
+description: Something doesn't work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [macOS, Windows, Linux (X11), Linux (Wayland), Other]
+    validations:
+      required: true
+  - type: input
+    id: osversion
+    attributes:
+      label: OS version and desktop
+      placeholder: e.g. macOS 26.1, Windows 11 24H2 on Arm, Ubuntu 24.04 GNOME
+  - type: input
+    id: version
+    attributes:
+      label: VisionCLI version
+      description: Settings → General
+      placeholder: e.g. 0.10.5
+    validations:
+      required: true
+  - type: dropdown
+    id: assistant
+    attributes:
+      label: Assistant
+      options: [Claude Code, Gemini (Antigravity), Both, Not relevant]
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: |
+        The last lines of the log (please remove anything private):
+        macOS `~/Library/Logs/visioncli.log` · Linux `~/.local/state/visioncli/visioncli.log` · Windows `%LOCALAPPDATA%\visioncli\logs\visioncli.log`
+      render: text

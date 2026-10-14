@@ -251,6 +251,10 @@ node dist/index.js voice          # start voice mode (under launchd: restarts af
 | Asked for permissions again after updating, though Settings shows VisionCLI as allowed | The switch belongs to an older signature. VisionCLI 0.5.5+ clears it automatically on first launch; otherwise use VisionCLI menu → Settings… → Advanced → **Fix Permissions…** (or remove VisionCLI with − and add it again). Happens once when moving to the permanently signed releases; later updates keep permissions. |
 | It crashed | It restarts automatically; details are in VisionCLI menu → Settings… → Advanced → *Open Crash Log* |
 
+## Contributing
+
+Contributions are welcome: bug reports, fixes, platform support and docs. See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is organised and how to build and test it, and look for issues labelled **good first issue** to get started. Security problems: [SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT](LICENSE) © Third Sourcers
