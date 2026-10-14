@@ -1,0 +1,38 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Architectures: amd64 arm64
+Codename: stable
+Components: main
+Date: Wed, 14 Oct 2026 04:05:46 +0000
+Description: VisionCLI by Third Sourcers
+Label: VisionCLI
+Origin: VisionCLI
+Suite: stable
+MD5Sum:
+ 752b07f2f6c84309067f7cdf2044813f             1258 main/binary-amd64/Packages
+ efe1467ea8a185d8c2faa50440b2d492              809 main/binary-amd64/Packages.gz
+ 63201252784bd9a0dd2de15343e8a782             1258 main/binary-arm64/Packages
+ e4fe79a8f5bc4905b0a1af2a036e35cc              810 main/binary-arm64/Packages.gz
+SHA1:
+ dbf28a15c018d1ed15c938fead41c62395344ea7             1258 main/binary-amd64/Packages
+ ec7d922c7b2817986fe38399373864e83a3c5489              809 main/binary-amd64/Packages.gz
+ ca6be2b554b35ca3f592ae4c0000674980fb077c             1258 main/binary-arm64/Packages
+ 75379d58cc2e4faee671c8652a882a0cd85a2488              810 main/binary-arm64/Packages.gz
+SHA256:
+ 23213790c53a40b0f2362fe31f5c5cef5ef5b688502c03ff9ed71372f9226481             1258 main/binary-amd64/Packages
+ ab8c564eae9aadbebeb3bda2d6422475cf54a22a6520d04ce16faca5518708b5              809 main/binary-amd64/Packages.gz
+ 7677ebb77a7daf3fab39e333d891c002bd9cf15d5b2b65ad704e7462d15259bd             1258 main/binary-arm64/Packages
+ b96965b4534df2a7442dca91f8453a52b9debadee79a8be4ffab2512d12fda21              810 main/binary-arm64/Packages.gz
+SHA512:
+ 740dad5974e2035e123236476d6244d41e6bdf8991b2cb4798c5b06dfb31f9343efed413260700cea8b29ec17d64670eba1b7f4ce2866dd8bf88cb1f93d98ec8             1258 main/binary-amd64/Packages
+ 5889c4fc59105674cf81479b57c3b76ee8618d389e603d89f869fdf2bbffcedf7769f8090a002b34fcf2a9b9d35eada5e666f7d6d14dd3c2627ca9ead0e09f49              809 main/binary-amd64/Packages.gz
+ ef991c36444ab382662569181f799ddce5a6dede38c9fb2d32604df360f7cf1a2425a1251914c1d16a2667b743c913babe3d135726a4e8b5edca9defab16f6b1             1258 main/binary-arm64/Packages
+ f8059d9a59895204f90236824ab0fa0e11fbccf0dfc8e6fa7219e07c5b3d7ce9047ccdcaf3adc6858f84e7870874986f21e91636f44e8c7582b1dc80500d9d20              810 main/binary-arm64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iHUEARYKAB0WIQSWX5oq7ITsjLTmGAKNQ0qjGxxAuwUCas7/mgAKCRCNQ0qjGxxA
+u9sDAP9AuHLdi63JfD8NfoYnwKaEv6I6Ku+ctsMtyB2gnH2CpQEA6iSC177I5ecT
+R/YmWKI9VFbQ/e0RFmQQtn1trMswFw4=
+=PbBA
+-----END PGP SIGNATURE-----
