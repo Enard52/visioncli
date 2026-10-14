@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+# The per-user NSIS installers from the GitHub release (no admin). Fill InstallerSha256 from SHA256SUMS.txt.
+PackageIdentifier: TheThirdSourcers.VisionCLI
+PackageVersion: 0.10.4
+InstallerType: nullsoft
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+InstallerSwitches:
+  Silent: /S
+  SilentWithProgress: /S
+UpgradeBehavior: install
+Protocols:
+  - visioncli
+ReleaseDate: 2026-10-14
+AppsAndFeaturesEntries:
+  - DisplayName: VisionCLI
+    Publisher: Third Sourcers
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/thethirdsourcers/visioncli/releases/download/v0.10.4/VisionCLI-0.10.4-windows-x64.exe
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+  - Architecture: arm64
+    InstallerUrl: https://github.com/thethirdsourcers/visioncli/releases/download/v0.10.4/VisionCLI-0.10.4-windows-arm64.exe
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+ManifestType: installer
+ManifestVersion: 1.6.0

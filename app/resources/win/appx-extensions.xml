@@ -1,0 +1,12 @@
+<!-- Extensions for the Microsoft Store (MSIX) package, added to the manifest by electron-builder (appx.customExtensionsPath).
+     Start at Login: a startup task, off until the user turns it on in VisionCLI (features/autostart.ts) or in
+     Settings > Apps > Startup; a packaged app's Run key would be virtualized. visioncli:// links: the NSIS build
+     registers them in HKCU (resources/win/installer.nsh), the package declares them here. -->
+        <desktop:Extension Category="windows.startupTask" Executable="app\VisionCLI.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="VisionCLIStartup" Enabled="false" DisplayName="VisionCLI" />
+        </desktop:Extension>
+        <uap:Extension Category="windows.protocol">
+          <uap:Protocol Name="visioncli">
+            <uap:DisplayName>VisionCLI</uap:DisplayName>
+          </uap:Protocol>
+        </uap:Extension>

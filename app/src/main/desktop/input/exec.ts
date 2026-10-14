@@ -1,12 +1,14 @@
 import { execFile, spawn } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
+import { hostCommand, hostWhich, inFlatpak } from "../../../../../src/flatpak";
 
-// Child-process helpers shared by input injection and apps.
+// Child-process helpers shared by input injection and apps. Flatpak: the tools are the host's (src/flatpak.ts).
 
 export function run(cmd: string, args: string[], opts: { input?: string; timeout?: number; env?: NodeJS.ProcessEnv } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = execFile(cmd, args, { timeout: opts.timeout ?? 10_000, maxBuffer: 16 << 20, env: opts.env ?? process.env }, (err, stdout, stderr) => {
+    const h = hostCommand(cmd, args, { env: opts.env });
+    const child = execFile(h.file, h.args, { timeout: opts.timeout ?? 10_000, maxBuffer: 16 << 20, env: opts.env ?? process.env }, (err, stdout, stderr) => {
       if (err) reject(new Error(`${cmd}: ${(stderr || err.message).toString().trim()}`));
       else resolve(stdout.toString());
     });
@@ -17,7 +19,8 @@ export function run(cmd: string, args: string[], opts: { input?: string; timeout
 /** Starts a long-lived program detached from VisionCLI (it must outlive us). */
 export function launch(cmd: string, args: string[], cwd?: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { detached: true, stdio: "ignore", cwd });
+    const h = hostCommand(cmd, args);
+    const child = spawn(h.file, h.args, { detached: true, stdio: "ignore", cwd });
     child.once("error", reject);
     child.once("spawn", () => { child.unref(); resolve(); });
   });
@@ -32,6 +35,7 @@ export function which(name: string): string | null {
   for (const dir of (process.env.PATH ?? "/usr/bin:/bin").split(delimiter)) {
     try { accessSync(join(dir, name), constants.X_OK); hit = join(dir, name); break; } catch {}
   }
+  if (!hit && inFlatpak()) hit = hostWhich(name); // the host's /usr isn't visible from the sandbox
   found.set(name, hit);
   return hit;
 }

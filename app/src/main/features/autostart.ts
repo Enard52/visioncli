@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { log } from "../log";
 import { LOGS } from "../paths";
+import { inFlatpak } from "../../../../src/flatpak";
 import { run } from "./run";
 
 // Start at Login (port of LoginItem in overlay/Sources/Support.swift, a launchd agent with KeepAlive on crash).
@@ -12,6 +13,11 @@ import { run } from "./run";
 // Windows: the per-user Run key (HKCU\Software\Microsoft\Windows\CurrentVersion\Run, value "VisionCLI") through
 // reg.exe, which needs no admin rights. Windows has no supervisor that restarts a crashed login item, so the crash
 // reporter relaunches the app itself (crashreporter.ts), with the same loop guard.
+// Microsoft Store (MSIX) build: a packaged app's HKCU writes are virtualized, so a Run key would never be seen by
+// Windows. The package declares a windows.startupTask (resources/win/appx-extensions.xml) instead, and the switch
+// enables/disables it through the WinRT StartupTask API (PowerShell inherits the package identity).
+// Flatpak: the systemd unit / autostart entry live in the host's ~/.config (the launcher keeps XDG_CONFIG_HOME
+// there) and start `flatpak run <app id>`; systemctl runs on the host through run() (src/flatpak.ts).
 
 export const UNIT_NAME = "visioncli.service";
 
@@ -22,10 +28,31 @@ export interface AutostartOptions {
   logs?: string;
   runner?: typeof run;
   platform?: string;
+  /** The Microsoft Store (MSIX) package: Electron's process.windowsStore. */
+  store?: boolean;
 }
 
 export const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 export const RUN_VALUE = "VisionCLI";
+/** The TaskId of the MSIX package's windows.startupTask (resources/win/appx-extensions.xml). */
+export const STARTUP_TASK_ID = "VisionCLIStartup";
+
+/** PowerShell for the package's StartupTask: prints its state after doing `action` (WinRT through AsTask, which
+ *  Windows PowerShell 5.1 can await). Desktop (full-trust) apps are enabled without a prompt, unless the user turned
+ *  the task off in Settings > Apps > Startup: then only the user can turn it back on (state DisabledByUser). */
+export function startupTaskScript(action: "state" | "enable" | "disable"): string {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -AssemblyName System.Runtime.WindowsRuntime",
+    "$null = [Windows.ApplicationModel.StartupTask, Windows.ApplicationModel, ContentType = WindowsRuntime]",
+    "$asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.IsGenericMethod -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1",
+    "function Await($op, [Type]$t) { $task = $asTask.MakeGenericMethod($t).Invoke($null, @($op)); $null = $task.Wait(-1); $task.Result }",
+    `$st = Await ([Windows.ApplicationModel.StartupTask]::GetAsync('${STARTUP_TASK_ID}')) ([Windows.ApplicationModel.StartupTask])`,
+    action === "enable" ? "$null = Await ($st.RequestEnableAsync()) ([Windows.ApplicationModel.StartupTaskState])" : "",
+    action === "disable" ? "$st.Disable()" : "",
+    "[string]$st.State",
+  ].filter(Boolean).join("; ");
+}
 
 /** The Run value's data: the command line Windows starts at login (each part quoted as the C runtime reads it). */
 export const runValue = (exec: string[]) => exec.map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)).join(" ");
@@ -77,6 +104,12 @@ export class Autostart {
   private systemctl(...args: string[]) { return this.runner("systemctl", ["--user", ...args], { timeout: 10_000 }); }
   private get windows() { return (this.opts.platform ?? process.platform) === "win32"; }
   private reg(...args: string[]) { return this.runner("reg.exe", args, { timeout: 10_000 }); }
+  private get store() { return this.windows && (this.opts.store ?? !!(process as { windowsStore?: boolean }).windowsStore); }
+  private async startupTask(action: "state" | "enable" | "disable"): Promise<string> {
+    const r = await this.runner("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", startupTaskScript(action)], { timeout: 20_000 });
+    if (r.code !== 0) throw new Error(`StartupTask ${action} failed: ${(r.err || r.out).trim()}`);
+    return r.out.trim().split(/\r?\n/).pop() ?? "";
+  }
 
   /** A systemd user manager that starts graphical-session.target (GNOME, KDE, and most systemd distros). */
   async systemdUsable(): Promise<boolean> {
@@ -85,6 +118,7 @@ export class Autostart {
   }
 
   async isEnabled(): Promise<boolean> {
+    if (this.store) return /^Enabled/.test(await this.startupTask("state"));
     if (this.windows) {
       const r = await this.reg("query", RUN_KEY, "/v", RUN_VALUE);
       return r.code === 0 && r.out.includes(RUN_VALUE);
@@ -94,7 +128,8 @@ export class Autostart {
   }
 
   /** Turns Start at Login on or off; returns which mechanism is used ("systemd" | "xdg") or throws. */
-  async set(on: boolean): Promise<"systemd" | "xdg" | "registry" | "off"> {
+  async set(on: boolean): Promise<"systemd" | "xdg" | "registry" | "startupTask" | "off"> {
+    if (this.store) return this.setStore(on);
     if (this.windows) return this.setWindows(on);
     if (!on) {
       if (existsSync(this.unitPath)) {
@@ -126,6 +161,17 @@ export class Autostart {
     return "xdg";
   }
 
+  private async setStore(on: boolean): Promise<"startupTask" | "off"> {
+    const state = await this.startupTask(on ? "enable" : "disable");
+    if (on && !/^Enabled/.test(state)) {
+      throw new Error(state === "DisabledByUser"
+        ? "Start at Login was turned off in Windows Settings (Apps > Startup). Turn VisionCLI on there."
+        : `Windows didn't enable the startup task (${state || "no state"}).`);
+    }
+    log(`start at login: ${on} (StartupTask ${state})`);
+    return on ? "startupTask" : "off";
+  }
+
   private async setWindows(on: boolean): Promise<"registry" | "off"> {
     if (!on) {
       const r = await this.reg("delete", RUN_KEY, "/v", RUN_VALUE, "/f");
@@ -142,7 +188,9 @@ export class Autostart {
 }
 
 /** The command that starts this copy: the AppImage, the installed binary, or electron + the app folder. */
-export function launchCommand(appPath?: string): string[] {
+export function launchCommand(appPath?: string, env: NodeJS.ProcessEnv = process.env, flatpak = inFlatpak()): string[] {
+  // Flatpak: the host starts it (the unit runs outside the sandbox).
+  if (flatpak && env.FLATPAK_ID) return ["flatpak", "run", env.FLATPAK_ID];
   if (process.env.APPIMAGE) return [process.env.APPIMAGE];
   // electron-builder's portable .exe unpacks to a temp folder on each run; start the .exe itself.
   if (process.env.PORTABLE_EXECUTABLE_FILE) return [process.env.PORTABLE_EXECUTABLE_FILE];

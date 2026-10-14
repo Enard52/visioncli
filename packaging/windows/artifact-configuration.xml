@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration "app" (packaging/windows/SIGNPATH.md): the packed app before NSIS wraps it, as the
+     GitHub artifact zip of app/dist/win-unpacked (win-arm64-unpacked on Arm). Signs our two executables: VisionCLI.exe
+     (Electron, renamed and stamped with our name and icon) and the native helper resources/bin/vcli-win.exe. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="VisionCLI.exe">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="resources/bin/vcli-win.exe">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

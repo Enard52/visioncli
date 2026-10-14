@@ -58,7 +58,8 @@ if (!app.requestSingleInstanceLock()) {
       app.exit(0); // a clean exit, so systemd stops restarting it
       return;
     }
-    try { app.setAsDefaultProtocolClient("visioncli"); } catch {}
+    // The Store (MSIX) package declares visioncli:// in its manifest; its HKCU writes would be virtualized anyway.
+    if (!process.windowsStore) try { app.setAsDefaultProtocolClient("visioncli"); } catch {}
     // Windows groups taskbar entries and notifications by this id (the installer's shortcut uses the same).
     if (process.platform === "win32") app.setAppUserModelId("dev.visioncli.overlay");
     const { launch, handleLink } = await import("./app");

@@ -1,0 +1,76 @@
+name: Site
+
+# The website and the apt/dnf repositories on GitHub Pages (https://visioncli.thethirdsourcers.com), published to the
+# gh-pages branch. release.yml calls this after each release (a release made with GITHUB_TOKEN doesn't fire
+# `release: published`); the other triggers cover releases published by hand and rebuilds.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (default the latest release)
+        required: false
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: false
+    secrets:
+      PACKAGES_GPG_PRIVATE_KEY:
+        required: false
+      PACKAGES_GPG_PASSPHRASE:
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      # Pages for a private repository needs a paid plan, and the site links public downloads.
+      - name: Public repository?
+        id: public
+        env:
+          PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          if [ "$PRIVATE" = true ]; then echo "::notice::Site not published: the repository is private."
+          else echo "enabled=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/checkout@v4
+        if: steps.public.outputs.enabled == 'true'
+      - name: Tools
+        if: steps.public.outputs.enabled == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils createrepo-c gnupg rpm
+      - name: Build the site
+        if: steps.public.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          PACKAGES_GPG_PRIVATE_KEY: ${{ secrets.PACKAGES_GPG_PRIVATE_KEY }}
+          PACKAGES_GPG_PASSPHRASE: ${{ secrets.PACKAGES_GPG_PASSPHRASE }}
+        run: |
+          [ -n "$TAG" ] || TAG=$(gh release view --json tagName -q .tagName)
+          sh packaging/site/build.sh "$TAG" "$RUNNER_TEMP/site"
+      # One orphan commit each time: the packages are large, and old ones don't need to stay in the history.
+      - name: Publish to gh-pages
+        if: steps.public.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name || 'the latest release' }}
+        run: |
+          cd "$RUNNER_TEMP/site"
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Site for $TAG"
+          git push -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

@@ -5,14 +5,20 @@
 # Any arguments go to the server's CLI, e.g. `visioncli-mcp install` or `visioncli-mcp quick "open github"`.
 #
 # Which app: $VISIONCLI_APP, else ~/.local/bin/VisionCLI.AppImage (a symlink the app refreshes to the current
-# $APPIMAGE, so updates that move the file keep working), else the .deb's /opt/VisionCLI.
+# $APPIMAGE, so updates that move the file keep working), else the .deb's /opt/VisionCLI, the snap,
+# else the Flatpak.
 # The server lives inside the app at resources/server/index.mjs. An AppImage mounts somewhere new each run,
 # so the path is resolved from the running binary itself (process.execPath), not written down here.
 app=$VISIONCLI_APP
 if [ -z "$app" ]; then
-  for c in "$HOME/.local/bin/VisionCLI.AppImage" /opt/VisionCLI/visioncli; do
+  for c in "$HOME/.local/bin/VisionCLI.AppImage" /opt/VisionCLI/visioncli /snap/visioncli/current/opt/VisionCLI/visioncli; do
     if [ -x "$c" ]; then app=$c; break; fi
   done
+fi
+# The Flatpak (Flathub): the server runs inside it, through its own visioncli-mcp (packaging/flatpak/visioncli.sh).
+if [ -z "$app" ] && [ ! -e /.flatpak-info ] && command -v flatpak >/dev/null 2>&1 &&
+  flatpak info com.thethirdsourcers.VisionCLI >/dev/null 2>&1; then
+  exec flatpak run --command=visioncli-mcp com.thethirdsourcers.VisionCLI "$@"
 fi
 if [ -z "$app" ]; then
   echo "visioncli-mcp: VisionCLI isn't installed (no ~/.local/bin/VisionCLI.AppImage or /opt/VisionCLI). Start the app once." >&2

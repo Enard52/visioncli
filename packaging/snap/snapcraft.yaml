@@ -1,0 +1,67 @@
+# Snap Store package (packaging/snap/README.md). Classic confinement: VisionCLI runs the user's own CLIs (claude,
+# agy, gemini, tmux) and desktop tools, reads /dev/input and the whole screen, which strict confinement can't allow.
+# It repackages the release's unpacked app; release.yml sets the version and @VERSION@ for each tag.
+#   snapcraft pack     (in this folder, after setting the version)
+name: visioncli
+title: VisionCLI
+summary: Voice and screen co-assistant for developers
+description: |
+  An AI co-assistant for developers that sees your screen and uses your computer. Ask about the file, error, UI,
+  database table or web page in front of you, or have it do the task for you, by typing or by voice, with the AI
+  command-line tools you already use: Claude Code or Gemini (Antigravity).
+
+  Needs a signed-in Claude Code (claude), Antigravity (agy) or Gemini CLI.
+version: '0.10.4'
+license: MIT
+contact: visioncli@thethirdsourcers.com
+website: https://visioncli.thethirdsourcers.com
+source-code: https://github.com/thethirdsourcers/visioncli
+issues: https://github.com/thethirdsourcers/visioncli/issues
+# docs/logo.png, copied here before building (release.yml; locally: cp ../../docs/logo.png visioncli.png).
+icon: visioncli.png
+base: core24
+grade: stable
+confinement: classic
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  visioncli:
+    command: opt/VisionCLI/visioncli
+    desktop: usr/share/applications/visioncli.desktop
+  mcp:
+    command: opt/VisionCLI/resources/bin/visioncli-mcp
+    environment:
+      VISIONCLI_APP: $SNAP/opt/VisionCLI/visioncli
+
+parts:
+  visioncli:
+    plugin: nil
+    override-pull: |
+      # The tarball's name depends on the architecture, which `source:` can't express.
+      arch=x64; [ "$CRAFT_ARCH_BUILD_FOR" = arm64 ] && arch=arm64
+      url="https://github.com/thethirdsourcers/visioncli/releases/download/v@VERSION@/VisionCLI-@VERSION@-linux-$arch.tar.gz"
+      curl -fsSL "$url" | tar -xz --strip-components=1 -C "$CRAFT_PART_SRC"
+    override-build: |
+      mkdir -p "$CRAFT_PART_INSTALL/opt/VisionCLI" "$CRAFT_PART_INSTALL/usr/share/applications"
+      cp -a "$CRAFT_PART_SRC/." "$CRAFT_PART_INSTALL/opt/VisionCLI/"
+      sed -e 's|^Exec=@EXEC@|Exec=visioncli|' -e 's|^Icon=visioncli$|Icon=${SNAP}/opt/VisionCLI/resources/icons/256x256.png|' \
+        "$CRAFT_PART_SRC/resources/visioncli.desktop" > "$CRAFT_PART_INSTALL/usr/share/applications/visioncli.desktop"
+    build-packages: [curl]
+    # Electron's own libraries from core24's archive, so the app doesn't depend on what the host happens to have.
+    stage-packages:
+      - libgtk-3-0t64
+      - libnotify4
+      - libnss3
+      - libxss1
+      - libxtst6
+      - libatspi2.0-0t64
+      - libuuid1
+      - libgbm1
+      - libasound2t64
+      - libsecret-1-0
+      - libdrm2
+      - libxkbcommon0
+    # Classic snaps link against the host's libraries unless the binaries are pointed at the snap's.
+    build-attributes: [enable-patchelf]

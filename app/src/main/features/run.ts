@@ -2,8 +2,11 @@ import { spawn } from "node:child_process";
 import { accessSync, constants, lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join, posix, win32 } from "node:path";
+import { hostCommand, hostWhich, inFlatpak } from "../../../../src/flatpak";
 
 // The macOS app's `shell(…)`: run a program, collect stdout/stderr, never throw.
+// Everything started through spawnCommand (run, the assistants, the terminal launcher…) runs on the host when the
+// app is a Flatpak (../../../../src/flatpak.ts).
 
 export interface RunResult { code: number; out: string; err: string }
 
@@ -78,12 +81,12 @@ export function pathExts(env: NodeJS.ProcessEnv = process.env): string[] {
 export function which(name: string, path = userPath(), platform: string = process.platform, env: NodeJS.ProcessEnv = process.env,
   exists: (p: string) => boolean = isWin(platform) ? existsWin : isExecutable): string | null {
   if (!isWin(platform)) {
-    if (name.includes("/")) return exists(name) ? name : null;
+    if (name.includes("/")) return exists(name) ? name : hostFallback(name, path, exists);
     for (const dir of path.split(delimiter)) {
       const p = posix.join(dir, name);
       if (dir && exists(p)) return p;
     }
-    return null;
+    return hostFallback(name, path, exists);
   }
   const exts = pathExts(env);
   const hasExt = exts.includes(win32.extname(name).toLowerCase());
@@ -96,6 +99,10 @@ export function which(name: string, path = userPath(), platform: string = proces
   }
   return null;
 }
+
+/** Flatpak: the host's /usr isn't visible from the sandbox, so ask the host (only for the real filesystem check). */
+const hostFallback = (name: string, path: string, exists: (p: string) => boolean) =>
+  exists === isExecutable && inFlatpak() ? hostWhich(name, path) : null;
 
 function isExecutable(p: string) {
   try { accessSync(p, constants.X_OK); return true; } catch { return false; }
@@ -116,7 +123,8 @@ export interface SpawnTarget { file: string; args: string[]; verbatim?: boolean 
 /** How to start `cmd args` without a shell, on this platform. */
 export function spawnCommand(cmd: string, args: string[], env: NodeJS.ProcessEnv = process.env, platform: string = process.platform,
   read: (f: string) => string | null = readText, exists: (p: string) => boolean = existsWin): SpawnTarget {
-  if (!isWin(platform) || !/\.(cmd|bat)$/i.test(cmd)) return { file: cmd, args };
+  if (!isWin(platform)) return hostCommand(cmd, args, { env, flatpak: platform === "linux" && inFlatpak() });
+  if (!/\.(cmd|bat)$/i.test(cmd)) return { file: cmd, args };
   const shim = npmShimTarget(cmd, read, exists);
   if (shim) {
     if (/\.exe$/i.test(shim.target) || !/\.[cm]?js$/i.test(shim.target)) return { file: shim.target, args };

@@ -1,8 +1,14 @@
 import { execFile } from "node:child_process";
 import { stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
+import { hostCommand } from "./flatpak.js";
 
-const run = promisify(execFile);
+const exec = promisify(execFile);
+// Every desktop tool below is the host's: inside the Flatpak it goes through flatpak-spawn (flatpak.ts).
+const run = ((cmd: string, args: string[], opts?: object) => {
+  const h = hostCommand(cmd, args);
+  return exec(h.file, h.args, opts as never);
+}) as typeof exec;
 
 // Linux backends for capture.ts, built on the usual desktop tools (no native code):
 // - X11: wmctrl + xprop list windows front-most first, xdotool reads the pointer, maim/ImageMagick capture.

@@ -38,8 +38,16 @@ by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or
 1. Download **`VisionCLI-<version>-macos.dmg`** from the [latest release](https://github.com/thethirdsourcers/visioncli/releases/latest).
 2. Open it and drag **VisionCLI** into **Applications**.
 3. The app isn't notarized by Apple yet, so the first time:
-   - **Right-click VisionCLI → Open → Open**, or
+   - **Right-click VisionCLI → Open → Open** (on macOS 15 and later: System Settings → Privacy & Security → **Open Anyway**), or
    - run `xattr -dr com.apple.quarantine /Applications/VisionCLI.app` in Terminal.
+
+With Homebrew (*available once published*):
+
+```sh
+brew install --cask thethirdsourcers/tap/visioncli
+```
+
+Every release file can be checked against the workflow that built it: `gh attestation verify <file> -R thethirdsourcers/visioncli`. All install options are on [visioncli.thethirdsourcers.com](https://visioncli.thethirdsourcers.com); [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md) covers each channel.
 
 ### Updates
 
@@ -75,7 +83,22 @@ Models are saved in `~/Library/Application Support/visioncli/models/`. Whisper a
 
 ## Linux
 
-1. Download **`VisionCLI-<version>-linux-x86_64.AppImage`** (or `-arm64`), or the **`.deb`** for Debian/Ubuntu, from the [latest release](https://github.com/thethirdsourcers/visioncli/releases/latest).
+1. Download **`VisionCLI-<version>-linux-x86_64.AppImage`** (or `-arm64`), the **`.deb`** for Debian/Ubuntu or the **`.rpm`** for Fedora/openSUSE, from the [latest release](https://github.com/thethirdsourcers/visioncli/releases/latest). Or install from a repository, so updates come with the system's (*available once published*):
+
+   ```sh
+   # Debian / Ubuntu
+   curl -fsSL https://visioncli.thethirdsourcers.com/public.key | sudo gpg --dearmor -o /usr/share/keyrings/visioncli.gpg
+   echo "deb [signed-by=/usr/share/keyrings/visioncli.gpg] https://visioncli.thethirdsourcers.com stable main" | sudo tee /etc/apt/sources.list.d/visioncli.list
+   sudo apt update && sudo apt install visioncli-linux
+
+   # Fedora / RHEL / openSUSE
+   sudo curl -fsSL -o /etc/yum.repos.d/visioncli.repo https://visioncli.thethirdsourcers.com/visioncli.repo
+   sudo dnf install visioncli-linux
+
+   # Flathub / Snap Store
+   flatpak install flathub com.thethirdsourcers.VisionCLI
+   sudo snap install visioncli --classic
+   ```
 2. Install the desktop tools VisionCLI uses (the script detects apt/dnf/pacman/zypper and your desktop, and asks before installing): `sh app/scripts/install-deps.sh` from the repo, or see [docs/LINUX.md](docs/LINUX.md).
 3. Start VisionCLI. The setup wizard checks each piece and offers fixes:
    - **Hold Alt to talk** reads the keyboard directly, so join the `input` group once (`sudo usermod -aG input $USER`, then log out and in). On X11 it also works without it.
@@ -87,7 +110,7 @@ Keys: ⌥ is **Alt**, ⌘ is **Super**. Everything else matches the macOS app.
 
 ## Windows
 
-Preview. Download **`VisionCLI-<version>-windows-x64.exe`** (or `-arm64`) from the [latest release](https://github.com/thethirdsourcers/visioncli/releases/latest) and run it: it installs for your user only, no admin rights. The installer isn't code-signed yet, so SmartScreen asks once: *More info → Run anyway*.
+Preview. Download **`VisionCLI-<version>-windows-x64.exe`** (or `-arm64`) from the [latest release](https://github.com/thethirdsourcers/visioncli/releases/latest) and run it: it installs for your user only, no admin rights. The installer isn't code-signed yet, so SmartScreen asks once: *More info → Run anyway*. With winget (*available once published*): `winget install TheThirdSourcers.VisionCLI`; a Microsoft Store listing is in preparation.
 
 Keys: ⌥ is **Alt**, ⌘ is the **Win** key (hold Alt to ask, Alt + Win with a screenshot, Alt + Shift + Space to drag a region). Terminal mode types into `claude` in Windows Terminal, WezTerm or any console window, including Claude Code inside WSL. Nothing else to install: keyboard, screen, UI Automation and the microphone work out of the box; the setup wizard downloads the speech models.
 

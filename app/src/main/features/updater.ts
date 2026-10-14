@@ -40,9 +40,14 @@ export type AssetKind = "appimage" | "deb" | "nsis";
 
 /** How this copy was installed: an AppImage (replaceable), a .deb (apt/dpkg owns it), the Windows installer, or a dev
  *  checkout. */
-export type InstallKind = "appimage" | "deb" | "nsis" | "dev";
+export type InstallKind = "appimage" | "deb" | "nsis" | "dev" | "managed";
 
-export function installKind(env = process.env, execPath = process.execPath, platform: string = process.platform): InstallKind {
+/** "managed": the Microsoft Store, Flathub or the Snap Store installed it and updates it; no own update checks. */
+export function installKind(env = process.env, execPath = process.execPath, platform: string = process.platform,
+  store = !!(process as { windowsStore?: boolean }).windowsStore): InstallKind {
+  if (platform === "win32" && store) return "managed";
+  // (The variables alone could be inherited from a terminal that is itself a snap or a Flatpak.)
+  if (platform === "linux" && ((env.FLATPAK_ID && execPath.startsWith("/app/")) || (env.SNAP && execPath.startsWith(env.SNAP + "/")))) return "managed";
   if (platform === "win32") {
     // A dev run is electron.exe; the portable .exe unpacks to a temp folder and can't be replaced in place.
     if (/^electron\.exe$/i.test(basename(execPath.replace(/\\/g, "/"))) || env.PORTABLE_EXECUTABLE_FILE) return "dev";
@@ -173,6 +178,7 @@ export class Updater {
 
   async check(manual: boolean): Promise<Release | null> {
     if (!manual && !settings.get("autoUpdate")) return null;
+    if (this.kind === "managed") return null; // the store updates it
     let found: Release | null = null;
     try {
       const res = await this.fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {

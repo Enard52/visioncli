@@ -1,0 +1,78 @@
+# Flathub manifest for VisionCLI (packaging/flatpak/README.md). It repackages the release's unpacked Linux app
+# (VisionCLI-<version>-linux-{x64,arm64}.tar.gz); a new version only changes the two archive URLs and sha256s.
+#   flatpak-builder --user --install --force-clean build-dir com.thethirdsourcers.VisionCLI.yml
+id: com.thethirdsourcers.VisionCLI
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: '24.08'
+command: visioncli
+separate-locales: false
+finish-args:
+  - --share=ipc
+  # Downloads (speech models, updates check), and the local whisper/kokoro servers on 127.0.0.1.
+  - --share=network
+  - --socket=x11
+  - --socket=wayland
+  # The microphone (pw-record / parecord) and spoken answers.
+  - --socket=pulseaudio
+  # Hold-to-talk reads the keyboard from /dev/input; computer control on Wayland writes /dev/uinput.
+  - --device=all
+  # Your projects: screenshots of the file you're looking at are matched to the real file, and the CLIs work there.
+  - --filesystem=home
+  - --talk-name=org.freedesktop.portal.*
+  # The accessibility tree (buttons and fields of other apps, for computer control).
+  - --talk-name=org.a11y.Bus
+  # KDE: window list and pointer through a KWin script.
+  - --talk-name=org.kde.KWin
+  # The GNOME Shell extension and the KWin script call back into the app on these names.
+  - --own-name=dev.visioncli.*
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # claude, agy, gemini, tmux, xdotool, wmctrl, maim, pactl… are the host's: they run through flatpak-spawn --host
+  # (src/flatpak.ts).
+  - --talk-name=org.freedesktop.Flatpak
+modules:
+  - name: visioncli
+    buildsystem: simple
+    sources:
+      - type: archive
+        only-arches: [x86_64]
+        url: https://github.com/thethirdsourcers/visioncli/releases/download/v0.10.4/VisionCLI-0.10.4-linux-x64.tar.gz
+        sha256: 0000000000000000000000000000000000000000000000000000000000000000 # sha256sum from SHA256SUMS.txt
+        dest: VisionCLI
+        x-checker-data:
+          type: json
+          url: https://api.github.com/repos/thethirdsourcers/visioncli/releases/latest
+          version-query: .tag_name | sub("^v"; "")
+          url-query: .assets[] | select(.name | endswith("-linux-x64.tar.gz")) | .browser_download_url
+      - type: archive
+        only-arches: [aarch64]
+        url: https://github.com/thethirdsourcers/visioncli/releases/download/v0.10.4/VisionCLI-0.10.4-linux-arm64.tar.gz
+        sha256: 0000000000000000000000000000000000000000000000000000000000000000
+        dest: VisionCLI
+        x-checker-data:
+          type: json
+          url: https://api.github.com/repos/thethirdsourcers/visioncli/releases/latest
+          version-query: .tag_name | sub("^v"; "")
+          url-query: .assets[] | select(.name | endswith("-linux-arm64.tar.gz")) | .browser_download_url
+      - type: file
+        path: visioncli.sh
+      - type: file
+        path: com.thethirdsourcers.VisionCLI.metainfo.xml
+    build-commands:
+      - cp -a VisionCLI /app/VisionCLI
+      # zypak replaces the setuid sandbox helper, which can't work inside Flatpak.
+      - rm -f /app/VisionCLI/chrome-sandbox
+      - install -Dm755 visioncli.sh /app/bin/visioncli
+      - ln -s visioncli /app/bin/visioncli-mcp
+      - install -Dm644 com.thethirdsourcers.VisionCLI.metainfo.xml /app/share/metainfo/com.thethirdsourcers.VisionCLI.metainfo.xml
+      - |
+        for s in 16 24 32 48 64 128 256; do
+          install -Dm644 "VisionCLI/resources/icons/${s}x${s}.png" "/app/share/icons/hicolor/${s}x${s}/apps/com.thethirdsourcers.VisionCLI.png"
+        done
+      - |
+        sed -e 's|^Exec=@EXEC@|Exec=visioncli|' -e 's|^Icon=visioncli$|Icon=com.thethirdsourcers.VisionCLI|' \
+          VisionCLI/resources/visioncli.desktop > com.thethirdsourcers.VisionCLI.desktop
+        install -Dm644 com.thethirdsourcers.VisionCLI.desktop /app/share/applications/com.thethirdsourcers.VisionCLI.desktop

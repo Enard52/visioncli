@@ -38,9 +38,9 @@ test("identity, targets and arches", () => {
   assert.equal(cfg.productName, "VisionCLI");
   assert.equal(cfg.linux.category, "Development");
   assert.equal(cfg.linux.executableName, "visioncli");
-  assert.deepEqual(cfg.linux.target, ["AppImage", "deb"]);
+  assert.deepEqual(cfg.linux.target, ["AppImage", "deb", "rpm"]);
   assert.match(cfg.linux.maintainer, /<.+@.+>/); // fpm needs an email for the .deb
-  for (const t of [cfg.appImage, cfg.deb]) assert.equal(t.artifactName, "${productName}-${version}-linux-${arch}.${ext}");
+  for (const t of [cfg.appImage, cfg.deb, cfg.rpm]) assert.equal(t.artifactName, "${productName}-${version}-linux-${arch}.${ext}");
   assert.notEqual(cfg.directories.buildResources, "build", "build/ is the app itself");
 });
 

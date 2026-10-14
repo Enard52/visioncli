@@ -2,6 +2,7 @@ import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:chi
 import { accessSync, constants, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import { hostCommand } from "../../../../src/flatpak";
 import { log } from "../log";
 import { DATA, MODELS, SUP } from "../paths";
 
@@ -109,7 +110,9 @@ export const VoiceModels = {
   spawnHelper(cmd: string, args: string[], opts: SpawnOptions = {}): ChildProcess {
     VoiceModels.killStrays(); // first helper of this run: the pid file still lists the previous run's
     // windowsHide: a detached console program would otherwise open a console window on Windows.
-    const p = spawn(cmd, args, { stdio: "ignore", windowsHide: true, ...opts, detached: true });
+    // Flatpak: host tools (uv, a downloaded whisper-server) run on the host and stop with the app (--watch-bus).
+    const h = hostCommand(cmd, args, { env: opts.env, watch: true });
+    const p = spawn(h.file, h.args, { stdio: "ignore", windowsHide: true, ...opts, detached: true });
     VoiceModels.remember(p.pid);
     return p;
   },

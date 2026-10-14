@@ -1,11 +1,12 @@
-# electron-builder config for the desktop app. Linux: AppImage + .deb; Windows: a per-user NSIS installer. x64 and arm64.
-#   npm run dist                                   (Linux, both formats, host arch)
-#   npx electron-builder --linux AppImage deb --x64 --arm64
+# electron-builder config for the desktop app. Linux: AppImage + .deb + .rpm; Windows: a per-user NSIS installer (and
+# an MSIX for the Microsoft Store, only when its identity is given). x64 and arm64.
+#   npm run dist                                   (Linux, every format, host arch)
+#   npx electron-builder --linux AppImage deb rpm --x64 --arm64
 #   npx electron-builder --win nsis --x64          (one arch per run: several at once would make one combined installer)
 # Run `node build.mjs` first (npm run dist does). beforePack stages the MCP server's DB drivers next to it.
 appId: dev.visioncli.overlay
 productName: VisionCLI
-copyright: Copyright © The Third Sourcers
+copyright: Copyright © Third Sourcers
 directories:
   output: dist
   # Not "build": that's where build.mjs writes the app, and electron-builder never packs its buildResources dir.
@@ -63,11 +64,12 @@ linux:
   description: >-
     AI co-assistant for developers that sees your screen and uses your computer: ask about what you're
     looking at or have it do the task, by typing or voice, with Claude Code or Gemini.
-  maintainer: The Third Sourcers <visioncli@thethirdsourcers.com>
-  vendor: The Third Sourcers
+  maintainer: Third Sourcers <visioncli@thethirdsourcers.com>
+  vendor: Third Sourcers
   target:
     - AppImage
     - deb
+    - rpm
   desktop:
     StartupWMClass: VisionCLI
     Keywords: voice;assistant;claude;screen;ai;
@@ -116,6 +118,51 @@ deb:
     - gir1.2-atspi-2.0
     - espeak-ng
 
+# Fedora / openSUSE (and the dnf repository on the site): the .deb's dependencies under their rpm names; rich
+# dependencies "(a or b)" cover both families. The .deb's scripts work here too (they check what the system has).
+rpm:
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
+  afterInstall: resources/deb/postinst
+  afterRemove: resources/deb/postrm
+  depends:
+    - gtk3
+    - libnotify
+    - nss
+    - libXScrnSaver
+    - (libXtst or libXtst6)
+    - xdg-utils
+    - at-spi2-core
+    - (libuuid or libuuid1)
+    - (mesa-libgbm or libgbm1)
+    - (alsa-lib or libasound2)
+    - (libsecret or libsecret-1-0)
+    - tmux
+    - (pipewire-utils or pulseaudio-utils)
+  # fpm has no --rpm-recommends: weak dependencies go in as raw spec tags (the .deb's recommends).
+  fpm:
+    - --rpm-tag
+    - "Recommends: xdotool"
+    - --rpm-tag
+    - "Recommends: xinput"
+    - --rpm-tag
+    - "Recommends: wmctrl"
+    - --rpm-tag
+    - "Recommends: xprop"
+    - --rpm-tag
+    - "Recommends: (maim or ImageMagick)"
+    - --rpm-tag
+    - "Recommends: xclip"
+    - --rpm-tag
+    - "Recommends: grim"
+    - --rpm-tag
+    - "Recommends: slurp"
+    - --rpm-tag
+    - "Recommends: wl-clipboard"
+    - --rpm-tag
+    - "Recommends: (python3-gobject or python3-gobject-base)"
+    - --rpm-tag
+    - "Recommends: espeak-ng"
+
 # Windows: VisionCLI.exe with the C# helper next to it; installs per user to %LOCALAPPDATA%\Programs\VisionCLI (no admin).
 win:
   icon: resources/win/icon.ico
@@ -151,3 +198,18 @@ nsis:
   deleteAppDataOnUninstall: false
   # visioncli:// protocol and the MCP wrapper copy (HKCU / %LOCALAPPDATA% only).
   include: resources/win/installer.nsh
+
+# Microsoft Store (MSIX). Built only when the Partner Center identity is set: package-release-win.ps1 -Store passes
+# MS_STORE_IDENTITY_NAME / MS_STORE_PUBLISHER / MS_STORE_PUBLISHER_DISPLAY_NAME as -c.appx.* (the Store re-signs it).
+appx:
+  artifactName: ${productName}-${version}-windows-${arch}.msix
+  applicationId: VisionCLI
+  displayName: VisionCLI
+  backgroundColor: transparent
+  languages: [en-US]
+  # 1809: the startup task, the protocol and arm64 all work from there.
+  minVersion: 10.0.17763.0
+  maxVersionTested: 10.0.26100.0
+  # Our own startup task (off until the user turns it on) and visioncli://, not electron-builder's built-in one.
+  addAutoLaunchExtension: false
+  customExtensionsPath: resources/win/appx-extensions.xml

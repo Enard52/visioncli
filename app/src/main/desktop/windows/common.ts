@@ -4,6 +4,7 @@
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { hostCommand } from "../../../../../src/flatpak";
 import type { DesktopWindow, Jpeg, Point, Rect } from "../../contracts";
 
 export const MAX_IMAGE_DIM = 1568; // Claude downsamples anything bigger anyway (maxImageDim)
@@ -12,7 +13,8 @@ export const JPEG_QUALITY = 85;
 /** Runs a tool; resolves stdout. `input` is piped to stdin. Rejects on a non-zero exit or a missing tool. */
 export function runBytes(cmd: string, args: string[], input?: Buffer, timeout = 20_000): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const h = hostCommand(cmd, args); // Flatpak: the host's tools (src/flatpak.ts)
+    const child = spawn(h.file, h.args, { stdio: ["pipe", "pipe", "pipe"] });
     const out: Buffer[] = [], err: Buffer[] = [];
     const timer = setTimeout(() => child.kill("SIGKILL"), timeout);
     child.stdout.on("data", (d: Buffer) => out.push(d));
@@ -30,7 +32,8 @@ export function runBytes(cmd: string, args: string[], input?: Buffer, timeout = 
 
 export function run(cmd: string, args: string[], timeout = 10_000): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout, maxBuffer: 32 * 1024 * 1024 }, (e, stdout) => (e ? reject(e) : resolve(stdout)));
+    const h = hostCommand(cmd, args);
+    execFile(h.file, h.args, { timeout, maxBuffer: 32 * 1024 * 1024 }, (e, stdout) => (e ? reject(e) : resolve(stdout)));
   });
 }
 
