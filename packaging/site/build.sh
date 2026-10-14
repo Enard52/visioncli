@@ -36,7 +36,8 @@ if [ -n "${PACKAGES_GPG_PRIVATE_KEY:-}" ]; then
 
   mkdir -p "$OUT/pool/main" "$OUT/rpm"
   gh release download "$TAG" -p '*.deb' -D "$OUT/pool/main"
-  gh release download "$TAG" -p '*.rpm' -D "$OUT/rpm"
+  # Releases before 0.10.5 have no .rpm files: then only the apt repository is built.
+  gh release download "$TAG" -p '*.rpm' -D "$OUT/rpm" 2>/dev/null || echo "::notice::$TAG has no .rpm files: dnf repository skipped."
   # A git push rejects files over 100 MB, and gh-pages is a git branch.
   big=$(find "$OUT/pool" "$OUT/rpm" -type f -size +95M)
   if [ -n "$big" ]; then
@@ -67,7 +68,9 @@ if [ -n "${PACKAGES_GPG_PRIVATE_KEY:-}" ]; then
     )
     # dnf/zypper: repodata with a detached signature on repomd.xml (repo_gpgcheck), packages checked by gpgcheck
     # against the same key, so each .rpm is signed too.
-    if command -v rpmsign >/dev/null 2>&1; then
+    if ! ls "$OUT"/rpm/*.rpm >/dev/null 2>&1; then
+      rm -rf "$OUT/rpm"
+    elif command -v rpmsign >/dev/null 2>&1; then
       for f in "$OUT"/rpm/*.rpm; do
         rpmsign --addsign --define "__gpg $(command -v gpg)" --define "_gpg_name $KEYID" --define "_gpg_sign_cmd_extra_args --batch --pinentry-mode loopback --passphrase-file $GNUPGHOME/passphrase" "$f" >/dev/null
       done
@@ -76,6 +79,7 @@ if [ -n "${PACKAGES_GPG_PRIVATE_KEY:-}" ]; then
       echo "::warning::rpmsign isn't installed: the .rpm files themselves are unsigned (gpgcheck=0); repomd.xml is signed."
       pkgcheck=0
     fi
+    if [ -d "$OUT/rpm" ]; then
     createrepo_c --quiet "$OUT/rpm"
     sign --detach-sign --armor -o "$OUT/rpm/repodata/repomd.xml.asc" "$OUT/rpm/repodata/repomd.xml"
     cat > "$OUT/visioncli.repo" <<EOF
@@ -88,6 +92,7 @@ repo_gpgcheck=1
 gpgkey=https://$DOMAIN/public.key
 metadata_expire=6h
 EOF
+    fi
     repos=yes
   fi
 else
