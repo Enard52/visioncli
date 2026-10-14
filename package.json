@@ -57,7 +57,7 @@
   "engines": {
     "node": ">=18"
   },
-  "author": "The Third Sourcers",
+  "author": "Third Sourcers",
   "homepage": "https://github.com/thethirdsourcers/visioncli#readme",
   "repository": {
     "type": "git",

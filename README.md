@@ -227,4 +227,4 @@ node dist/index.js voice          # start voice mode (under launchd: restarts af
 
 ## License
 
-[MIT](LICENSE) © The Third Sourcers
+[MIT](LICENSE) © Third Sourcers

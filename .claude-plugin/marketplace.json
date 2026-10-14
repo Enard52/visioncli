@@ -1,6 +1,6 @@
 {
   "name": "visioncli",
-  "owner": { "name": "The Third Sourcers" },
+  "owner": { "name": "Third Sourcers" },
   "plugins": [
     { "name": "visioncli", "source": "./", "description": "Let Claude see your screen." }
   ]
