@@ -1,6 +1,9 @@
-<p align="center"><img src="docs/logo.png" width="128" alt="VisionCLI logo"></p>
-
-<h1 align="center">VisionCLI</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/wordmark-dark.png">
+    <img src="docs/brand/wordmark-light.png" width="360" alt="VisionCLI">
+  </picture>
+</p>
 
 <p align="center">
 <b>An AI co-assistant for developers that sees your screen and uses your Mac.</b><br>

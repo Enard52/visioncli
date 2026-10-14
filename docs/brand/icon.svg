@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- App icon: the mark on a deep indigo rounded square. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1E2560"/><stop offset="1" stop-color="#07081A"/></linearGradient>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#A9C3FF"/><stop offset="1" stop-color="#5468F0"/></linearGradient>
+    <radialGradient id="glow" cx=".5" cy=".42" r=".55"><stop offset="0" stop-color="#5468F0" stop-opacity=".35"/><stop offset="1" stop-color="#5468F0" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" rx="230" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1024" height="1024" rx="230" fill="url(#glow)"/>
+  <g transform="translate(512 512) scale(5.6) translate(-60 -60)">
+    <circle cx="60" cy="60" r="40" fill="none" stroke="url(#g)" stroke-width="15" stroke-linecap="round" stroke-dasharray="22.5 19.4" transform="rotate(-70 60 60)"/>
+    <circle cx="60" cy="60" r="14" fill="url(#g)"/>
+  </g>
+</svg>

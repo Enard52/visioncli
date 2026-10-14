@@ -20,6 +20,7 @@ mkdir -p "$OUT"
 echo "$DOMAIN" > "$OUT/CNAME"
 touch "$OUT/.nojekyll" # plain files: no Jekyll processing (it would hide dists/ entries starting with _ or .)
 cp "$here/../../docs/logo.png" "$OUT/logo.png"
+cp "$here/../../docs/brand/mark.svg" "$OUT/mark.svg"
 
 repos=no
 if [ -n "${PACKAGES_GPG_PRIVATE_KEY:-}" ]; then
