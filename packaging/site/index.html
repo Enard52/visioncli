@@ -35,7 +35,9 @@
   body { overflow-x: hidden; margin: 0; font: 300 17px/1.6 Outfit, system-ui, sans-serif; color: var(--text); background: radial-gradient(1200px 600px at 75% -10%, rgba(76, 95, 224, .10), transparent 60%), var(--page); }
   a { color: var(--ink); }
   .wrap { max-width: 1240px; margin: 0 auto; padding: 32px 24px 64px; }
-  .card { background: var(--card); border-radius: 36px; box-shadow: var(--shadow); padding: 40px clamp(22px, 6vw, 96px) 44px; }
+  .card { background: var(--card); box-shadow: var(--shadow); min-height: 100vh; min-height: 100svh; display: flex; }
+  .card .inner { width: 100%; max-width: 1240px; margin: 0 auto; padding: 36px clamp(22px, 6vw, 96px) 44px; display: flex; flex-direction: column; }
+  .card .hero { flex: 1; }
 
   nav { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; }
   .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font: 300 22px Outfit; color: var(--ink); letter-spacing: -.2px; }
@@ -96,13 +98,12 @@
     .grid, .strip { grid-template-columns: minmax(0, 1fr); }
     nav .links { margin-left: 0; width: 100%; gap: 18px; flex-wrap: wrap; }
     nav .links a { font-size: 12px; letter-spacing: .1em; }
-    .card { border-radius: 26px; }
+    .card { min-height: 0; }
   }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="card">
+<div class="card"><div class="inner">
     <nav>
       <a class="brand" href="#"><img src="mark.svg" alt=""><span>Vision<b>CLI</b></span></a>
       <div class="links">
@@ -131,7 +132,8 @@
       <div><div class="k">Works with</div><div class="v">Claude Code · Gemini (Antigravity)</div></div>
       <div><div class="k">Runs on</div><div class="v">macOS · Windows · Linux</div></div>
     </div>
-  </div>
+</div></div>
+<div class="wrap">
 
   <section id="features">
     <h2>Your screen, <b>understood.</b></h2>

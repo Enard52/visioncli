@@ -299,32 +299,20 @@ enum Opener {
 
 /// The logo as a monochrome template image: an eye whose pupil is a mouse pointer.
 enum MenuIcon {
+    /// The VisionCLI mark (docs/brand/mark.svg) as a menu-bar template: six aperture segments around a pupil.
     static func make() -> NSImage {
-        let img = NSImage(size: NSSize(width: 20, height: 18), flipped: true) { r in
+        let img = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in
             NSColor.black.set()
-            // Almond eye outline.
-            let eye = NSBezierPath()
-            eye.move(to: NSPoint(x: 2.3, y: 9))
-            eye.curve(to: NSPoint(x: 17.7, y: 9), controlPoint1: NSPoint(x: 6, y: 2.4), controlPoint2: NSPoint(x: 14, y: 2.4))
-            eye.curve(to: NSPoint(x: 2.3, y: 9), controlPoint1: NSPoint(x: 14, y: 15.6), controlPoint2: NSPoint(x: 6, y: 15.6))
-            eye.lineWidth = 1.5
-            eye.lineJoinStyle = .round
-            eye.stroke()
-            // Iris ring.
-            let iris = NSBezierPath(ovalIn: NSRect(x: 6.25, y: 4.75, width: 8.5, height: 8.5))
-            iris.lineWidth = 1.3
-            iris.stroke()
-            // Pointer arrow as the pupil.
-            let arrow = NSBezierPath()
-            arrow.move(to: NSPoint(x: 9.1, y: 5.9))
-            arrow.line(to: NSPoint(x: 9.1, y: 11.6))
-            arrow.line(to: NSPoint(x: 10.5, y: 10.3))
-            arrow.line(to: NSPoint(x: 11.6, y: 12.4))
-            arrow.line(to: NSPoint(x: 12.4, y: 12.0))
-            arrow.line(to: NSPoint(x: 11.3, y: 9.9))
-            arrow.line(to: NSPoint(x: 13.1, y: 9.8))
-            arrow.close()
-            arrow.fill()
+            let c = NSPoint(x: 9, y: 9), r: CGFloat = 6.1
+            let ring = NSBezierPath()
+            ring.appendArc(withCenter: c, radius: r, startAngle: -70, endAngle: 290)
+            ring.lineWidth = 2.3
+            ring.lineCapStyle = .round
+            // Six segments with visible gaps at 18 pt (the round caps eat into the gaps).
+            let seg = 2 * .pi * r / 6
+            ring.setLineDash([seg * 0.42, seg * 0.58], count: 2, phase: 0)
+            ring.stroke()
+            NSBezierPath(ovalIn: NSRect(x: c.x - 2.3, y: c.y - 2.3, width: 4.6, height: 4.6)).fill()
             return true
         }
         img.isTemplate = true

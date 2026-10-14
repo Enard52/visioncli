@@ -1,6 +1,6 @@
-import { bezier, Painter, type RGBA } from "./painter";
+import { Painter, type RGBA } from "./painter";
 
-// The tray icon (MenuIcon: an eye with a pointer for a pupil) and the usage rings (UsageArt.ring), as PNG buffers.
+// The tray icon (MenuIcon: the aperture mark) and the usage rings (UsageArt.ring), as PNG buffers.
 // macOS draws the rings as text attachments next to the icon; a StatusNotifier icon is a square with no text, so the
 // session ring goes around the eye and the week ring just inside it. The numbers are in the tooltip and the menu.
 
@@ -15,16 +15,14 @@ export function usageColor(percent: number): RGBA {
 
 const clamp = (p: number) => Math.min(Math.max(p, 0), 100);
 
-/** MenuIcon's eye (20×18 points), drawn at (ox, oy) scaled by k. */
-function eye(p: Painter, ox: number, oy: number, k: number, color: RGBA) {
-  const t = (x: number, y: number): [number, number] => [ox + x * k, oy + y * k];
-  const outline = [
-    ...bezier(t(2.3, 9), t(6, 2.4), t(14, 2.4), t(17.7, 9), 20),
-    ...bezier(t(17.7, 9), t(14, 15.6), t(6, 15.6), t(2.3, 9), 20).slice(1),
-  ];
-  p.polyline(outline, 1.5 * k, color, true);
-  p.ring(ox + 10.5 * k, oy + 9 * k, 4.25 * k, 1.3 * k, color);
-  p.polygon([t(9.1, 5.9), t(9.1, 11.6), t(10.5, 10.3), t(11.6, 12.4), t(12.4, 12.0), t(11.3, 9.9), t(13.1, 9.8)], color);
+/** The VisionCLI mark (docs/brand/mark.svg, macOS MenuIcon): six aperture segments around a pupil, `size` points
+ *  across, centred on (cx, cy). */
+function mark(p: Painter, cx: number, cy: number, size: number, color: RGBA) {
+  const r = size * 0.335, width = size * 0.125;
+  // Segments start where the SVG's dash pattern does (rotated −70° from 3 o'clock = 20° on the clock); the round caps
+  // eat into each gap, so the arcs are a little shorter than the dash.
+  for (let i = 0; i < 6; i++) p.arc(cx, cy, r, width, 20 + i * 60, 20 + i * 60 + 24, color);
+  p.disc(cx, cy, size * 0.12, color);
 }
 
 /** A progress ring: faint track, colored arc from 12 o'clock clockwise (UsageArt.ring). */
@@ -36,7 +34,7 @@ function meter(p: Painter, cx: number, cy: number, r: number, width: number, per
 
 /**
  * The tray icon, 22×22 points at `scale`. `light` = a light glyph for dark panels (GNOME's top bar, dark themes).
- * `rings`: the session (and optionally the week) usage to draw around the eye.
+ * `rings`: the session (and optionally the week) usage to draw around the mark.
  */
 export function trayIcon(opts: { light: boolean; rings?: { session: number; week: number | null } | null; scale?: number }): Buffer {
   const S = 22;
@@ -45,16 +43,14 @@ export function trayIcon(opts: { light: boolean; rings?: { session: number; week
   const track: RGBA = [glyph[0], glyph[1], glyph[2], 64];
   const r = opts.rings;
   if (!r) {
-    eye(p, 1, 2, 1, glyph);
+    mark(p, 11, 11, 20, glyph);
   } else if (r.week === null) {
     meter(p, 11, 11, 9.9, 2.2, r.session, track);
-    const k = 0.78;
-    eye(p, 11 - 10 * k, 11 - 9 * k, k, glyph);
+    mark(p, 11, 11, 13.5, glyph);
   } else {
     meter(p, 11, 11, 9.9, 2.2, r.session, track);
     meter(p, 11, 11, 6.9, 2.0, r.week, track);
-    const k = 0.5;
-    eye(p, 11 - 10 * k, 11 - 9 * k, k, glyph);
+    mark(p, 11, 11, 9, glyph);
   }
   return p.png();
 }

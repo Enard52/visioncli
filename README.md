@@ -6,13 +6,13 @@
 </p>
 
 <p align="center">
-<b>An AI co-assistant for developers that sees your screen and uses your Mac.</b><br>
+<b>An AI co-assistant for developers that sees your screen and uses your computer.</b><br>
 Ask about the file, error, UI, database table or web page in front of you, or have it do the task for you:
 by typing or <b>by voice</b>, with the AI you already use: <b>Claude Code</b> or <b>Gemini</b> (Antigravity).
 </p>
 
 <p align="center">
-<a href="https://github.com/thethirdsourcers/visioncli/releases/latest"><b>Download VisionCLI for macOS, Linux or Windows</b></a>
+<a href="https://visioncli.thethirdsourcers.com"><b>visioncli.thethirdsourcers.com</b></a> · <a href="https://github.com/thethirdsourcers/visioncli/releases/latest"><b>Download for macOS, Windows or Linux</b></a>
 </p>
 
 ---
