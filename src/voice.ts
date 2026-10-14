@@ -17,16 +17,15 @@ const SUPPORT = CONFIG_DIR;
 
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** launchd agent: restarts VisionCLI after a crash (not after a normal quit); RunAtLoad = start at login. */
-function writeAgent(exe: string) {
-  let runAtLoad = false;
-  try {
-    runAtLoad = /<key>RunAtLoad<\/key>\s*<true\/>/.test(readFileSync(AGENT, "utf8"));
-  } catch {}
+/** launchd agent: restarts VisionCLI after a crash (not after a normal quit); RunAtLoad = start at login.
+ *  Written only when its contents change (returns true then): macOS shows "App Background Activity" every time it
+ *  sees a background item added or modified. */
+function writeAgent(exe: string): boolean {
+  let old = "";
+  try { old = readFileSync(AGENT, "utf8"); } catch {}
+  const runAtLoad = /<key>RunAtLoad<\/key>\s*<true\/>/.test(old);
   mkdirSync(join(homedir(), "Library", "LaunchAgents"), { recursive: true });
-  writeFileSync(
-    AGENT,
-    `<?xml version="1.0" encoding="UTF-8"?>
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -40,8 +39,10 @@ function writeAgent(exe: string) {
   <key>StandardErrorPath</key><string>${xml(join(homedir(), "Library", "Logs", "visioncli-stderr.log"))}</string>
 </dict>
 </plist>
-`,
-  );
+`;
+  if (plist === old) return false;
+  writeFileSync(AGENT, plist);
+  return true;
 }
 
 async function which(cmd: string) {
@@ -105,15 +106,20 @@ export async function startVoice(cwd: string): Promise<string> {
   // Stop any running instance (launchd-managed or not), then start it under launchd so a crash gets
   // an automatic restart. Launched this way the app is still its own process for macOS permissions.
   const domain = `gui/${process.getuid?.() ?? 501}`;
-  await run("/bin/launchctl", ["bootout", `${domain}/${LABEL}`]).catch(() => {});
-  await run("/usr/bin/pkill", ["-x", "VisionCLI"]).catch(() => {});
-  await new Promise((r) => setTimeout(r, 600));
-  writeAgent(join(APP, "Contents", "MacOS", "VisionCLI"));
-  await run("/bin/launchctl", ["bootstrap", domain, AGENT]).catch(() => {});
+  const changed = writeAgent(join(APP, "Contents", "MacOS", "VisionCLI"));
+  const loaded = await run("/bin/launchctl", ["print", `${domain}/${LABEL}`]).then(() => true, () => false);
+  if (changed || !loaded) {
+    // A new or changed agent has to be (re)registered: macOS notes it as background activity, once.
+    await run("/bin/launchctl", ["bootout", `${domain}/${LABEL}`]).catch(() => {});
+    await run("/usr/bin/pkill", ["-x", "VisionCLI"]).catch(() => {});
+    await new Promise((r) => setTimeout(r, 600));
+    await run("/bin/launchctl", ["bootstrap", domain, AGENT]).catch(() => {});
+  }
+  // Same agent already registered: just restart the app inside it (no new background item, no alert).
   await run("/bin/launchctl", ["kickstart", "-k", `${domain}/${LABEL}`]);
 
   return (
-    `Voice mode is on (default project ${resolve(cwd)}; it follows the project of the window under your pointer). Hold Option+Space, ask your question, then let go. ` +
+    `Voice mode is on (default project ${resolve(cwd)}; it follows the project of the window under your pointer). Hold Option, ask your question, then let go (Option+Command to include a screenshot). ` +
     `The answer appears above your mouse pointer (Esc dismisses it). The eye icon in the menu bar has Quit. ` +
     `The first time, macOS asks for Microphone and Speech Recognition access. VisionCLI also needs ` +
     `Screen Recording permission (System Settings → Privacy & Security).`

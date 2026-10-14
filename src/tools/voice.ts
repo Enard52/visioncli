@@ -9,7 +9,7 @@ export function register(server: McpServer) {
     {
       title: "Start voice mode",
       description:
-        "Launch the voice overlay for this project: the user holds Option+Space, asks a question out loud, " +
+        "Launch the voice overlay for this project: the user holds Option (Option+Command with a screenshot), asks a question out loud, " +
         "and the answer appears in a bubble above their mouse pointer.",
       inputSchema: {},
     },
